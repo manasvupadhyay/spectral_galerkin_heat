@@ -85,35 +85,33 @@ def make_modes(M:int, N:int, P:int) -> List[Tuple[int,int,int]]:
 # -------------------------
 # Fast DCT
 # -------------------------
-def dct2_heatflux_scipy(q : np.ndarray, params: Params) -> np.ndarray:
+def dct2_heatflux_scipy(q : np.ndarray, params: Params, num_params : NumericalParams) -> np.ndarray:
     """
     Fast SciPy DCT-II-based routine.
     Returns a flattened vector of length M*N*P (ordered p, n, m) matching make_modes().
     """
-    # q shape: (Mx, Ny) where Mx = nx, Ny = ny
+    # q shape: (Nx, Ny) where Nx = nx, Ny = ny
     Nx, Ny = q.shape
-    prefactor = 2*params.P/(np.pi*params.r_b**2)*np.sqrt((params.Lx*params.Ly)/(Nx*Ny))
+    prefactor = 2*params.P/(np.pi*params.r_b**2)*np.sqrt((params.Lx*params.Ly)) #/ np.sqrt(Nx*Ny)
 
     # 2D DCT-II (type=2) orthonormal
-    q_dct = dctn(q, type=2, norm='ortho')   # shape (Mx, Ny); axis 0 -> m, axis 1 -> n
-    # allocate S in shape (P, N, M) so that flatten(C-order) yields iterate p,n,m (m fastest)
-    S_pnm = np.empty((params.nz, Ny, Nx), dtype=np.float64)
-    for p in range(params.nz):
+    q_dct = dctn(q, type=2, norm='ortho')   # shape (Nx, Ny); axis 0 -> m, axis 1 -> n
+    print("DCT shape:", q_dct.shape)
+    # allocate S in shape (P, N, M) so that flatten(C-order) yields iterate p,n,m
+    S_pnm = np.empty((num_params.nz, Ny, Nx), dtype=np.float64)
+    for p in range(num_params.nz):
         phi_p0 = phi_p_at_zero(p, params.Lz)
         # all m,n modes share same q_dct; multiply by phi_p(0) and prefactor
         S_mn = phi_p0 * prefactor * q_dct
-        # special-case for (m,n)=(0,0): factor 2P/(pi r_b^2) instead of 4P... => multiply by 0.5
-        S_mn0 = S_mn.copy()
-        S_mn0[0,0] *= 0.5
         # store transposed into S_pnm[p, n, m] (so p,n,m ordering)
-        S_pnm[p, :, :] = S_mn0.T  # S_mn shape (Mx, Ny) -> transpose to (Ny, Mx)
+        S_pnm[p, :, :] = S_mn.T  # S_mn shape (Nx, Ny) -> transpose to (Ny, Nx)
     # flatten in C-order to get vector consistent with make_modes
     return S_pnm.ravel(order='C')  # length Mx*Ny*P_modes
 
 # -------------------------
 # Reconstruction
 # -------------------------
-def reconstruct_temperature_field(a: np.ndarray, modes: List[Tuple[int,int,int]], params: Params, Xg: np.ndarray, Yg: np.ndarray, num_params: NumericalParams, t:float)->np.ndarray:
+def reconstruct_temperature_field(a: np.ndarray, modes: List[Tuple[int,int,int]], params: Params, Xg: np.ndarray, Yg: np.ndarray)->np.ndarray:
     T = np.zeros_like(Xg)
     for ai, (m,n,p) in zip(a, modes):
         T += ai * phi_1d(m,Xg.flatten(),params.Lx).reshape(Xg.shape)*phi_1d(n,Yg.flatten(),params.Ly).reshape(Yg.shape)*phi_p_at_zero(p,params.Lz)
@@ -121,30 +119,41 @@ def reconstruct_temperature_field(a: np.ndarray, modes: List[Tuple[int,int,int]]
 
 # evaluate q_laser - q_evap at z=0 plane
 def evaluate_heat_source(a: np.ndarray, modes: List[Tuple[int,int,int]], params: Params, Xg: np.ndarray, Yg: np.ndarray, num_params: NumericalParams, t:float)->np.ndarray:
-    T_field = reconstruct_temperature_field(a,modes,params,Xg,Yg,num_params,t)
+    T_field = reconstruct_temperature_field(a,modes,params,Xg,Yg)
+    # save intermediate image of T
+    plt.imsave(f"temperature_field_t{t:.2f}.png", T_field, cmap='hot')
+    plt.close()
+    # evaluate heat sources + save images for debugging
     q_laser = q_laser_field(Xg,Yg,t,params)
+    plt.imsave(f"q_laser_field_t{t:.2f}.png", q_laser, cmap='hot')
+    plt.close()
     q_evap = q_evap_point(T_field,params)
-    return q_laser - q_evap 
-
-
-
+    plt.imsave(f"q_evap_field_t{t:.2f}.png", q_evap, cmap='hot')
+    plt.close()
+    return q_laser - q_evap
 
 #update function for time stepping
 def update_coefficients(a: np.ndarray, modes: List[Tuple[int,int,int]], params: Params, num_params: NumericalParams, Xg: np.ndarray, Yg: np.ndarray, 
                         dt: float, t: float) -> np.ndarray:
     q_field = evaluate_heat_source(a,modes,params,Xg,Yg,num_params,t)
-    q_dct = dct2_heatflux_scipy(q_field,params)
+    print("Heat source field shape:", q_field.shape)
+    q_dct = dct2_heatflux_scipy(q_field.T,params, num_params)
     a_new = np.zeros_like(a)
-    a_new = a * num_params.K + num_params.KK * q_dct.flatten()
+    a_new = a * num_params.K + num_params.KK * q_dct
     return a_new
 
-
-# simulation function 
+# -------------------------
+# Main simulation runner
+# -------------------------
 def run_simulation(params: Params, num_params: NumericalParams):
     nx, ny, nz = num_params.nx, num_params.ny, num_params.nz
+    # quick test to remove 
+    q = np.ones((nx,ny))
+    Q = dctn(q, norm='ortho')
+    print(Q[0,0])
     modes = make_modes(num_params.nx, num_params.ny, num_params.nz)
     a = np.zeros(len(modes)) # a contains the expansion coefficients
-    a[0]=300.0 # initial temperature 300K everywhere
+    a[0]=300.0/(np.sqrt(params.Lx*params.Ly*params.Lz)) # initial temperature 300K everywhere
     # time stepping parameters
     dt = num_params.dt
     t_final = num_params.t_final
@@ -159,7 +168,8 @@ def run_simulation(params: Params, num_params: NumericalParams):
                       (n*np.pi/params.Ly)**2 + 
                       (p*np.pi/params.Lz)**2 )
         if lambda_mnp == 0.0:
-            # avoid division by zero for the (0,0,0) mode: in many physical problems this mode is handled differently
+            # avoid division by zero for the (0,0,0) mode 
+            # This will be handled later, for now the mean of T remains constant
             K[idx] = 1.0
             KK[idx] = 0.0
         else:
@@ -186,16 +196,18 @@ def run_simulation(params: Params, num_params: NumericalParams):
 # Example parameters & run
 # -------------------------
 
-params = Params(Lx =0.001, Ly=0.001, Lz=0.001,
+params = Params(Lx =0.002, Ly=0.001, Lz=0.001,
                 rho=7800, Ceff=500, k=50,
-                P=50.0, r_b=0.00006, x0=0.0005, y0=0.0005, vx=0.0001)
+                P=50.0, r_b=0.00006, x0=0.0001, y0=0.0005, vx=1.5)
 
-num_params = NumericalParams(dt=0.05, t_final=0.20, nx=128, ny=128, nz=8)
+num_params = NumericalParams(dt=0.00005, t_final=0.001, nx=64, ny=32, nz=8)
 
 a_final, modes, Xg, Yg = run_simulation(params, num_params)
 
 # reconstruct final temperature field at z=0
-T_final = reconstruct_temperature_field(a_final, modes, params, Xg, Yg, num_params, t=num_params.t_final)   
+T_final = reconstruct_temperature_field(a_final, modes, params, Xg, Yg)   
+# Store T_final to file
+np.savetxt("T_final.txt", T_final)
 # plot final temperature field
 plt.figure(figsize=(6,5))
 plt.contourf(Xg*1e3, Yg*1e3, T_final, levels=50, cmap='hot')
@@ -204,4 +216,7 @@ plt.xlabel('x (mm)')
 plt.ylabel('y (mm)')
 plt.title('Final Temperature Field at z=0')
 plt.show()  
+
+
+
 
