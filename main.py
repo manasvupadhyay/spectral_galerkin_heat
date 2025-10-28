@@ -9,7 +9,7 @@ This script implements:
 """
 import numpy as np
 import matplotlib.pyplot as plt
-import pyfftw
+from scipy.fft import dctn
 from typing import List, Tuple
 
 class Params:
@@ -47,7 +47,9 @@ class NumericalParams:
         self.nx = nx; self.ny = ny; self.nz = nz
         self.K = K; self.KK = KK
 
-# define eigenfunctions
+# -------------------------
+# Eigenfunctions
+# -------------------------
 def phi_1d(m: int, x: np.ndarray, L: float) -> np.ndarray:
     """Normalized 1D Neumann cosine eigenfunction on [0,L].
     m=0 -> constant 1/sqrt(L). For m>=1 -> sqrt(2/L)*cos(m*pi*x/L).
@@ -57,24 +59,60 @@ def phi_1d(m: int, x: np.ndarray, L: float) -> np.ndarray:
     return np.sqrt(2.0 / L) * np.cos(m * np.pi * x / L)
 
 def phi_p_at_zero(p: int, Lz: float) -> float:   #will be used often at z=0
-    """Value of normalized 1D Neumann cosine eigenfunction at z=0."""
+    """Value of normalized Neumann eigenfunction at z=0."""
     return 1.0 / np.sqrt(Lz) if p == 0 else np.sqrt(2.0 / Lz)
 
-# heat source functions
-
+# -------------------------
+# Heat source
+# -------------------------
 def q_laser_field(x: np.ndarray, y: np.ndarray, t: float, params: Params) -> np.ndarray:
     P, rb = params.P, params.r_b
     x0t = params.x0 + params.vx * t
     y0 = params.y0
     return (2 * P / (np.pi * rb ** 2)) * np.exp(-2 * ((x - x0t) ** 2 + (y - y0) ** 2) / rb ** 2)
 
-
 def q_evap_point(T: np.ndarray, params: Params) -> np.ndarray:
     A = 0.005 / np.sqrt(2.0 * np.pi * params.R_v)
     exponent = (params.DeltaH_LV / (params.R_v * params.T_boil)) * (1.0 - params.T_boil / T)
     return A * np.exp(exponent)
 
-# function for reconstruction of temperature field on z=0 plane
+# -------------------------
+# Modes enumerator
+# -------------------------
+def make_modes(M:int, N:int, P:int) -> List[Tuple[int,int,int]]:
+    return [(m,n,p) for p in range(P) for n in range(N) for m in range(M)]
+
+# -------------------------
+# Fast DCT
+# -------------------------
+def dct2_heatflux_scipy(q : np.ndarray, params: Params) -> np.ndarray:
+    """
+    Fast SciPy DCT-II-based routine.
+    Returns a flattened vector of length M*N*P (ordered p, n, m) matching make_modes().
+    """
+    # q shape: (Mx, Ny) where Mx = nx, Ny = ny
+    Nx, Ny = q.shape
+    prefactor = 2*params.P/(np.pi*params.r_b**2)*np.sqrt((params.Lx*params.Ly)/(Nx*Ny))
+
+    # 2D DCT-II (type=2) orthonormal
+    q_dct = dctn(q, type=2, norm='ortho')   # shape (Mx, Ny); axis 0 -> m, axis 1 -> n
+    # allocate S in shape (P, N, M) so that flatten(C-order) yields iterate p,n,m (m fastest)
+    S_pnm = np.empty((params.nz, Ny, Nx), dtype=np.float64)
+    for p in range(params.nz):
+        phi_p0 = phi_p_at_zero(p, params.Lz)
+        # all m,n modes share same q_dct; multiply by phi_p(0) and prefactor
+        S_mn = phi_p0 * prefactor * q_dct
+        # special-case for (m,n)=(0,0): factor 2P/(pi r_b^2) instead of 4P... => multiply by 0.5
+        S_mn0 = S_mn.copy()
+        S_mn0[0,0] *= 0.5
+        # store transposed into S_pnm[p, n, m] (so p,n,m ordering)
+        S_pnm[p, :, :] = S_mn0.T  # S_mn shape (Mx, Ny) -> transpose to (Ny, Mx)
+    # flatten in C-order to get vector consistent with make_modes
+    return S_pnm.ravel(order='C')  # length Mx*Ny*P_modes
+
+# -------------------------
+# Reconstruction
+# -------------------------
 def reconstruct_temperature_field(a: np.ndarray, modes: List[Tuple[int,int,int]], params: Params, Xg: np.ndarray, Yg: np.ndarray, num_params: NumericalParams, t:float)->np.ndarray:
     T = np.zeros_like(Xg)
     for ai, (m,n,p) in zip(a, modes):
@@ -89,49 +127,17 @@ def evaluate_heat_source(a: np.ndarray, modes: List[Tuple[int,int,int]], params:
     return q_laser - q_evap 
 
 
-def dct2_heatflux_fftw(q : np.ndarray, params: Params) -> np.ndarray:
-    Nx, Ny = q.shape
-    # prefactor for the field
-    prefactor = 2*params.P/(np.pi*params.r_b**2)*np.sqrt((params.Lx*params.Ly)/(Nx*Ny))
-    # perform DCT-II using pyfftw
-    input = pyfftw.empty_aligned((Nx, Ny), dtype='float64') # create aligned array for pyfftw
-    out = pyfftw.empty_aligned((Nx, Ny), dtype='float64')
-    input[:] = q
-    fft_object = pyfftw.builders.dctn(input, type=2, norm='ortho', threads=-1) # define FFTW DCT-II object
-    out[:] = fft_object() # execute DCT-II
-    return prefactor * out
 
-def make_modes(M:int,N:int, P:int)->List[Tuple[int,int,int]]:
-    return [(m,n,p) for p in range(P) for n in range(N) for m in range(M)]
 
 #update function for time stepping
 def update_coefficients(a: np.ndarray, modes: List[Tuple[int,int,int]], params: Params, num_params: NumericalParams, Xg: np.ndarray, Yg: np.ndarray, 
                         dt: float, t: float) -> np.ndarray:
     q_field = evaluate_heat_source(a,modes,params,Xg,Yg,num_params,t)
-    q_dct = dct2_heatflux_fftw(q_field,params)
+    q_dct = dct2_heatflux_scipy(q_field,params)
     a_new = np.zeros_like(a)
     a_new = a * num_params.K + num_params.KK * q_dct.flatten()
     return a_new
 
-# solving
-
-params = Params(Lx =0.001,
-                Ly=0.001,
-                Lz=0.001,
-                rho=7800,
-                Ceff=500,
-                k=50,
-                P=50.0,
-                r_b=0.00006,# 0.06mm
-                x0=0.0005,
-                y0=0.0005,
-                vx=0.0001)
-
-num_params = NumericalParams(dt=0.05,
-                            t_final=0.20,
-                            nx=128, # spatial grid points in x, corresponds to number of DCT modes
-                            ny=128,
-                            nz=8)
 
 # simulation function 
 def run_simulation(params: Params, num_params: NumericalParams):
@@ -142,16 +148,23 @@ def run_simulation(params: Params, num_params: NumericalParams):
     # time stepping parameters
     dt = num_params.dt
     t_final = num_params.t_final
-    t=0.0
+
     # prepare vectors for time update of coefficients
     # Kmnp = exp(-k/(rho*Ceff)*lambda_mnp*dt)
     # Kkmnp = (1 - Kmnp)/(rho*Ceff*lambda_mnp)
     K = np.zeros(len(modes))
     KK = np.zeros(len(modes))
     for idx, (m,n,p) in enumerate(modes):
-        lambda_mnp = ( (m*np.pi/params.Lx)**2 + (n*np.pi/params.Ly)**2 + (p*np.pi/params.Lz)**2 )
-        K[idx] = np.exp(-params.k/(params.rho*params.Ceff)*lambda_mnp*dt)
-        KK[idx] = (1 - np.exp(-params.k/(params.rho*params.Ceff)*lambda_mnp*dt))/(params.rho*params.Ceff*lambda_mnp)
+        lambda_mnp = ( (m*np.pi/params.Lx)**2 + 
+                      (n*np.pi/params.Ly)**2 + 
+                      (p*np.pi/params.Lz)**2 )
+        if lambda_mnp == 0.0:
+            # avoid division by zero for the (0,0,0) mode: in many physical problems this mode is handled differently
+            K[idx] = 1.0
+            KK[idx] = 0.0
+        else:
+            K[idx] = np.exp(-params.k/(params.rho*params.Ceff)*lambda_mnp*dt)
+            KK[idx] = (1 - np.exp(-params.k/(params.rho*params.Ceff)*lambda_mnp*dt))/(params.rho*params.Ceff*lambda_mnp)
     # vectorize K and KK
     num_params.K = K
     num_params.KK = KK
@@ -161,15 +174,24 @@ def run_simulation(params: Params, num_params: NumericalParams):
     dy = params.Ly / ny
     x = np.linspace(dx/2,params.Lx - dx/2,nx)
     y = np.linspace(dy/2,params.Ly - dy/2,ny)
-    Xg,Yg = np.meshgrid(x,y) # grid at cell centers,  Xg and Yg are of shape (nx,ny)
-
-    while t < t_final:
+    Xg, Yg = np.meshgrid(x,y) # grid at cell centers,  Xg and Yg are of shape (nx,ny)
+    t = 0.0
+    while t < t_final - 1e-12:
         a = update_coefficients(a, modes, params, num_params, Xg, Yg, dt, t)
         t += dt
 
     return a, modes, Xg, Yg
 
-# run the simulation
+# -------------------------
+# Example parameters & run
+# -------------------------
+
+params = Params(Lx =0.001, Ly=0.001, Lz=0.001,
+                rho=7800, Ceff=500, k=50,
+                P=50.0, r_b=0.00006, x0=0.0005, y0=0.0005, vx=0.0001)
+
+num_params = NumericalParams(dt=0.05, t_final=0.20, nx=128, ny=128, nz=8)
+
 a_final, modes, Xg, Yg = run_simulation(params, num_params)
 
 # reconstruct final temperature field at z=0
