@@ -38,11 +38,14 @@ class NumericalParams:
                 dt: float,
                 t_final: float,
                 # spatial discretization
-                nx: int, ny: int, nz: int
+                nx: int, ny: int, nz: int,
+                K: np.ndarray = None,
+                KK: np.ndarray = None
                 ):
         self.dt = dt
         self.t_final = t_final
         self.nx = nx; self.ny = ny; self.nz = nz
+        self.K = K; self.KK = KK
 
 # define eigenfunctions
 def phi_1d(m: int, x: np.ndarray, L: float) -> np.ndarray:
@@ -107,10 +110,7 @@ def update_coefficients(a: np.ndarray, modes: List[Tuple[int,int,int]], params: 
     q_field = evaluate_heat_source(a,modes,params,Xg,Yg,num_params,t)
     q_dct = dct2_heatflux_fftw(q_field,params)
     a_new = np.zeros_like(a)
-    for i, (m,n,p) in enumerate(modes):
-        lambda_mnp = ( (m*np.pi/params.Lx)**2 + (n*np.pi/params.Ly)**2 + (p*np.pi/params.Lz)**2 )
-        exp_factor = np.exp(-params.k/(params.rho*params.Ceff)*lambda_mnp*dt)
-        a_new[i] = a[i]*exp_factor + (1 - exp_factor)/(params.rho*params.Ceff*lambda_mnp) * q_dct[i]
+    a_new = a * num_params.K + num_params.KK * q_dct.flatten()
     return a_new
 
 # solving
@@ -128,7 +128,7 @@ params = Params(Lx =0.001,
                 vx=0.0001)
 
 num_params = NumericalParams(dt=0.05,
-                            t_final=5.0,
+                            t_final=0.20,
                             nx=128, # spatial grid points in x, corresponds to number of DCT modes
                             ny=128,
                             nz=8)
@@ -136,23 +136,50 @@ num_params = NumericalParams(dt=0.05,
 # simulation function 
 def run_simulation(params: Params, num_params: NumericalParams):
     nx, ny, nz = num_params.nx, num_params.ny, num_params.nz
-    modes = make_modes(num_params.m_max, num_params.n_max, num_params.p_max)
+    modes = make_modes(num_params.nx, num_params.ny, num_params.nz)
     a = np.zeros(len(modes)) # a contains the expansion coefficients
     a[0]=300.0 # initial temperature 300K everywhere
-
+    # time stepping parameters
     dt = num_params.dt
     t_final = num_params.t_final
     t=0.0
+    # prepare vectors for time update of coefficients
+    # Kmnp = exp(-k/(rho*Ceff)*lambda_mnp*dt)
+    # Kkmnp = (1 - Kmnp)/(rho*Ceff*lambda_mnp)
+    K = np.zeros(len(modes))
+    KK = np.zeros(len(modes))
+    for idx, (m,n,p) in enumerate(modes):
+        lambda_mnp = ( (m*np.pi/params.Lx)**2 + (n*np.pi/params.Ly)**2 + (p*np.pi/params.Lz)**2 )
+        K[idx] = np.exp(-params.k/(params.rho*params.Ceff)*lambda_mnp*dt)
+        KK[idx] = (1 - np.exp(-params.k/(params.rho*params.Ceff)*lambda_mnp*dt))/(params.rho*params.Ceff*lambda_mnp)
+    # vectorize K and KK
+    num_params.K = K
+    num_params.KK = KK
 
     # prepare a grid for DCT 2D evaluations
     dx = params.Lx / nx # grid spacing in x
     dy = params.Ly / ny
     x = np.linspace(dx/2,params.Lx - dx/2,nx)
     y = np.linspace(dy/2,params.Ly - dy/2,ny)
-    Xg,Yg = np.meshgrid(x,y)
+    Xg,Yg = np.meshgrid(x,y) # grid at cell centers,  Xg and Yg are of shape (nx,ny)
 
     while t < t_final:
         a = update_coefficients(a, modes, params, num_params, Xg, Yg, dt, t)
         t += dt
 
     return a, modes, Xg, Yg
+
+# run the simulation
+a_final, modes, Xg, Yg = run_simulation(params, num_params)
+
+# reconstruct final temperature field at z=0
+T_final = reconstruct_temperature_field(a_final, modes, params, Xg, Yg, num_params, t=num_params.t_final)   
+# plot final temperature field
+plt.figure(figsize=(6,5))
+plt.contourf(Xg*1e3, Yg*1e3, T_final, levels=50, cmap='hot')
+plt.colorbar(label='Temperature (K)')
+plt.xlabel('x (mm)')
+plt.ylabel('y (mm)')
+plt.title('Final Temperature Field at z=0')
+plt.show()  
+
