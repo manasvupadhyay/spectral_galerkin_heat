@@ -11,6 +11,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.fft import dctn
 from typing import List, Tuple
+# delete previous files
+import os
+for filename in os.listdir('.'):
+    if filename.startswith('temperature_field_t') and filename.endswith('.txt'):
+        os.remove(filename)
+    if filename.startswith('temperature_field_contour_t') and filename.endswith('.png'):
+        os.remove(filename)
+    if filename.startswith('q_laser_field_contour_t') and filename.endswith('.png'):
+        os.remove(filename)
+    if filename.startswith('q_evap_field_contour_t') and filename.endswith('.png'):
+        os.remove(filename)
 
 class Params:
     """Container for physical and geometric parameters."""
@@ -22,9 +33,9 @@ class Params:
                 # laser
                 P: float, r_b: float, x0: float, y0: float, vx: float,
                 # evaporation
-                DeltaH_LV: float = 2.26e6, # J/kg (example for water)
-                R_v: float = 461.5, # J/(kg K) (vapor gas constant)
-                T_boil: float = 373.15 # K
+                DeltaH_LV: float = 6.0e6, # J/kg
+                R_v: float = 150.0, # J/(kg K)
+                T_boil: float = 2800.0 # K
                 ):
         self.Lx = Lx; self.Ly = Ly; self.Lz = Lz
         self.rho = rho; self.Ceff = Ceff; self.k = k
@@ -72,9 +83,19 @@ def q_laser_field(x: np.ndarray, y: np.ndarray, t: float, params: Params) -> np.
     return (2 * P / (np.pi * rb ** 2)) * np.exp(-2 * ((x - x0t) ** 2 + (y - y0) ** 2) / rb ** 2)
 
 def q_evap_point(T: np.ndarray, params: Params) -> np.ndarray:
+    """
+    Evaporation heat flux at temperature T (array).
+    Returns 0 where T < T_boil.
+    """
     A = 0.005 / np.sqrt(2.0 * np.pi * params.R_v)
-    exponent = (params.DeltaH_LV / (params.R_v * params.T_boil)) * (1.0 - params.T_boil / T)
-    return A * np.exp(exponent)
+    # avoid division-by-zero or overflow issues
+    T_safe = np.maximum(T, params.T_boil)
+    exponent = (params.DeltaH_LV / (params.R_v * params.T_boil)) * (1.0 - params.T_boil / T_safe)
+    q_evap = A * np.exp(exponent)
+
+    # zero flux where T < T_boil
+    q_evap[T < params.T_boil] = 0.0
+    return q_evap
 
 # -------------------------
 # Modes enumerator
@@ -92,7 +113,7 @@ def dct2_heatflux_scipy(q : np.ndarray, params: Params, num_params : NumericalPa
     """
     # q shape: (Nx, Ny) where Nx = nx, Ny = ny
     Nx, Ny = q.shape
-    prefactor = 2*params.P/(np.pi*params.r_b**2)*np.sqrt((params.Lx*params.Ly)) #/ np.sqrt(Nx*Ny)
+    prefactor = np.sqrt(params.Lx*params.Ly)/np.sqrt(Nx*Ny)
 
     # 2D DCT-II (type=2) orthonormal
     q_dct = dctn(q, type=2, norm='ortho')   # shape (Nx, Ny); axis 0 -> m, axis 1 -> n
@@ -120,15 +141,34 @@ def reconstruct_temperature_field(a: np.ndarray, modes: List[Tuple[int,int,int]]
 # evaluate q_laser - q_evap at z=0 plane
 def evaluate_heat_source(a: np.ndarray, modes: List[Tuple[int,int,int]], params: Params, Xg: np.ndarray, Yg: np.ndarray, num_params: NumericalParams, t:float)->np.ndarray:
     T_field = reconstruct_temperature_field(a,modes,params,Xg,Yg)
-    # save intermediate image of T
-    plt.imsave(f"temperature_field_t{t:.2f}.png", T_field, cmap='hot')
+    # save intermediate image of T plot and text file for debugging
+    plt.figure(figsize=(6,5))
+    plt.contourf(Xg*1e3, Yg*1e3, T_field, levels=50, cmap='hot')
+    plt.colorbar(label='Temperature (K)')
+    plt.xlabel('x (mm)')
+    plt.ylabel('y (mm)')
+    plt.title(f'Temperature Field at z=0, t={t:.4f} s')
+    plt.savefig(f"temperature_field_contour_t{t:.4f}.png")
     plt.close()
+    np.savetxt(f"temperature_field_t{t:.4f}.txt", T_field)
     # evaluate heat sources + save images for debugging
     q_laser = q_laser_field(Xg,Yg,t,params)
-    plt.imsave(f"q_laser_field_t{t:.2f}.png", q_laser, cmap='hot')
+    plt.figure(figsize=(6,5))
+    plt.contourf(Xg*1e3, Yg*1e3, q_laser, levels=50, cmap='hot')
+    plt.colorbar(label='Laser Heat Flux (W/m²)')
+    plt.xlabel('x (mm)')
+    plt.ylabel('y (mm)')
+    plt.title(f'Laser Heat Flux Field at t={t:.4f} s')
+    plt.savefig(f"q_laser_field_contour_t{t:.4f}.png")
     plt.close()
     q_evap = q_evap_point(T_field,params)
-    plt.imsave(f"q_evap_field_t{t:.2f}.png", q_evap, cmap='hot')
+    plt.figure(figsize=(6,5))
+    plt.contourf(Xg*1e3, Yg*1e3, q_evap, levels=50, cmap='hot')
+    plt.colorbar(label='Evaporation Heat Flux (W/m²)')
+    plt.xlabel('x (mm)')
+    plt.ylabel('y (mm)')
+    plt.title(f'Evaporation Heat Flux Field at t={t:.4f} s')
+    plt.savefig(f"q_evap_field_contour_t{t:.4f}.png")
     plt.close()
     return q_laser - q_evap
 
@@ -146,14 +186,11 @@ def update_coefficients(a: np.ndarray, modes: List[Tuple[int,int,int]], params: 
 # Main simulation runner
 # -------------------------
 def run_simulation(params: Params, num_params: NumericalParams):
-    nx, ny, nz = num_params.nx, num_params.ny, num_params.nz
-    # quick test to remove 
-    q = np.ones((nx,ny))
-    Q = dctn(q, norm='ortho')
-    print(Q[0,0])
+    nx, ny = num_params.nx, num_params.ny
     modes = make_modes(num_params.nx, num_params.ny, num_params.nz)
     a = np.zeros(len(modes)) # a contains the expansion coefficients
-    a[0]=300.0/(np.sqrt(params.Lx*params.Ly*params.Lz)) # initial temperature 300K everywhere
+    # initialize a to get 300 k (initial temperature is zero everywhere)
+    a[0] = 300.0 * np.sqrt(params.Lx*params.Ly*params.Lz) # initial temperature 300K everywhere (normalized !!)
     # time stepping parameters
     dt = num_params.dt
     t_final = num_params.t_final
@@ -171,7 +208,7 @@ def run_simulation(params: Params, num_params: NumericalParams):
             # avoid division by zero for the (0,0,0) mode 
             # This will be handled later, for now the mean of T remains constant
             K[idx] = 1.0
-            KK[idx] = 0.0
+            KK[idx] = dt / (params.rho * params.Ceff)
         else:
             K[idx] = np.exp(-params.k/(params.rho*params.Ceff)*lambda_mnp*dt)
             KK[idx] = (1 - np.exp(-params.k/(params.rho*params.Ceff)*lambda_mnp*dt))/(params.rho*params.Ceff*lambda_mnp)
@@ -196,11 +233,13 @@ def run_simulation(params: Params, num_params: NumericalParams):
 # Example parameters & run
 # -------------------------
 
-params = Params(Lx =0.002, Ly=0.001, Lz=0.001,
-                rho=7800, Ceff=500, k=50,
-                P=50.0, r_b=0.00006, x0=0.0001, y0=0.0005, vx=1.5)
 
-num_params = NumericalParams(dt=0.00005, t_final=0.001, nx=64, ny=32, nz=8)
+
+params = Params(Lx =0.001, Ly=0.001, Lz=0.001,
+                rho=7900, Ceff=500, k=15,
+                P=50.0, r_b=0.00006, x0=0.0001, y0=0.0005, vx=1.0) 
+
+num_params = NumericalParams(dt=0.0001, t_final=0.001, nx=64, ny=32, nz=8)
 
 a_final, modes, Xg, Yg = run_simulation(params, num_params)
 
