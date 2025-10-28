@@ -37,14 +37,11 @@ class NumericalParams:
                 # time stepping
                 dt: float,
                 t_final: float,
-                # eigenfunction truncation limits
-                m_max: int, n_max: int, p_max: int,
                 # spatial discretization
                 nx: int, ny: int, nz: int
                 ):
         self.dt = dt
         self.t_final = t_final
-        self.m_max = m_max; self.n_max = n_max; self.p_max = p_max
         self.nx = nx; self.ny = ny; self.nz = nz
 
 # define eigenfunctions
@@ -81,13 +78,40 @@ def reconstruct_temperature_field(a: np.ndarray, modes: List[Tuple[int,int,int]]
         T += ai * phi_1d(m,Xg.flatten(),params.Lx).reshape(Xg.shape)*phi_1d(n,Yg.flatten(),params.Ly).reshape(Yg.shape)*phi_p_at_zero(p,params.Lz)
     return T
 
-# Projection of heat source onto eigenmodes
+# evaluate q_laser - q_evap at z=0 plane
+def evaluate_heat_source(a: np.ndarray, modes: List[Tuple[int,int,int]], params: Params, Xg: np.ndarray, Yg: np.ndarray, num_params: NumericalParams, t:float)->np.ndarray:
+    T_field = reconstruct_temperature_field(a,modes,params,Xg,Yg,num_params,t)
+    q_laser = q_laser_field(Xg,Yg,t,params)
+    q_evap = q_evap_point(T_field,params)
+    return q_laser - q_evap 
 
 
-# utilities
+def dct2_heatflux_fftw(q : np.ndarray, params: Params) -> np.ndarray:
+    Nx, Ny = q.shape
+    # prefactor for the field
+    prefactor = 2*params.P/(np.pi*params.r_b**2)*np.sqrt((params.Lx*params.Ly)/(Nx*Ny))
+    # perform DCT-II using pyfftw
+    input = pyfftw.empty_aligned((Nx, Ny), dtype='float64') # create aligned array for pyfftw
+    out = pyfftw.empty_aligned((Nx, Ny), dtype='float64')
+    input[:] = q
+    fft_object = pyfftw.builders.dctn(input, type=2, norm='ortho', threads=-1) # define FFTW DCT-II object
+    out[:] = fft_object() # execute DCT-II
+    return prefactor * out
 
-def make_modes(M:int,N:int,P:int)->List[Tuple[int,int,int]]:
+def make_modes(M:int,N:int, P:int)->List[Tuple[int,int,int]]:
     return [(m,n,p) for p in range(P) for n in range(N) for m in range(M)]
+
+#update function for time stepping
+def update_coefficients(a: np.ndarray, modes: List[Tuple[int,int,int]], params: Params, num_params: NumericalParams, Xg: np.ndarray, Yg: np.ndarray, 
+                        dt: float, t: float) -> np.ndarray:
+    q_field = evaluate_heat_source(a,modes,params,Xg,Yg,num_params,t)
+    q_dct = dct2_heatflux_fftw(q_field,params)
+    a_new = np.zeros_like(a)
+    for i, (m,n,p) in enumerate(modes):
+        lambda_mnp = ( (m*np.pi/params.Lx)**2 + (n*np.pi/params.Ly)**2 + (p*np.pi/params.Lz)**2 )
+        exp_factor = np.exp(-params.k/(params.rho*params.Ceff)*lambda_mnp*dt)
+        a_new[i] = a[i]*exp_factor + (1 - exp_factor)/(params.rho*params.Ceff*lambda_mnp) * q_dct[i]
+    return a_new
 
 # solving
 
@@ -102,15 +126,33 @@ params = Params(Lx =0.001,
                 x0=0.0005,
                 y0=0.0005,
                 vx=0.0001)
-M,N,P = 10,10,10
-modes = make_modes(M,N,P)
-a = np.zeros(len(modes))
-a[0]=300.0 # initial temperature 300K everywhere
-nx, ny = 128, 128 # spatial discretization (2**n for FFTW)
-x = np.linspace(0,params.Lx,nx)
-y = np.linspace(0,params.Ly,ny)
-Xg,Yg = np.meshgrid(x,y)
 
+num_params = NumericalParams(dt=0.05,
+                            t_final=5.0,
+                            nx=128, # spatial grid points in x, corresponds to number of DCT modes
+                            ny=128,
+                            nz=8)
 
-dt = 0.05
-t=0.0
+# simulation function 
+def run_simulation(params: Params, num_params: NumericalParams):
+    nx, ny, nz = num_params.nx, num_params.ny, num_params.nz
+    modes = make_modes(num_params.m_max, num_params.n_max, num_params.p_max)
+    a = np.zeros(len(modes)) # a contains the expansion coefficients
+    a[0]=300.0 # initial temperature 300K everywhere
+
+    dt = num_params.dt
+    t_final = num_params.t_final
+    t=0.0
+
+    # prepare a grid for DCT 2D evaluations
+    dx = params.Lx / nx # grid spacing in x
+    dy = params.Ly / ny
+    x = np.linspace(dx/2,params.Lx - dx/2,nx)
+    y = np.linspace(dy/2,params.Ly - dy/2,ny)
+    Xg,Yg = np.meshgrid(x,y)
+
+    while t < t_final:
+        a = update_coefficients(a, modes, params, num_params, Xg, Yg, dt, t)
+        t += dt
+
+    return a, modes, Xg, Yg
