@@ -142,32 +142,39 @@ def reconstruct_temperature_field(a: np.ndarray, modes: List[Tuple[int,int,int]]
 def evaluate_heat_source(a: np.ndarray, modes: List[Tuple[int,int,int]], params: Params, Xg: np.ndarray, Yg: np.ndarray, num_params: NumericalParams, t:float)->np.ndarray:
     T_field = reconstruct_temperature_field(a,modes,params,Xg,Yg)
     # save intermediate image of T plot and text file for debugging
-    plt.figure(figsize=(6,5))
+    aspect_ratio = params.Lx / params.Ly
+    plt.figure(figsize=(10, 20 / aspect_ratio))
     plt.contourf(Xg*1e3, Yg*1e3, T_field, levels=50, cmap='hot')
     plt.colorbar(label='Temperature (K)')
     plt.xlabel('x (mm)')
     plt.ylabel('y (mm)')
     plt.title(f'Temperature Field at z=0, t={t:.4f} s')
+    plt.gca().set_aspect('equal', adjustable='box')
+    plt.tight_layout()
     plt.savefig(f"temperature_field_contour_t{t:.4f}.png")
     plt.close()
     np.savetxt(f"temperature_field_t{t:.4f}.txt", T_field)
     # evaluate heat sources + save images for debugging
     q_laser = q_laser_field(Xg,Yg,t,params)
-    plt.figure(figsize=(6,5))
+    plt.figure(figsize=(10, 20 / aspect_ratio))
     plt.contourf(Xg*1e3, Yg*1e3, q_laser, levels=50, cmap='hot')
     plt.colorbar(label='Laser Heat Flux (W/m²)')
     plt.xlabel('x (mm)')
     plt.ylabel('y (mm)')
     plt.title(f'Laser Heat Flux Field at t={t:.4f} s')
+    plt.gca().set_aspect('equal', adjustable='box')
+    plt.tight_layout()
     plt.savefig(f"q_laser_field_contour_t{t:.4f}.png")
     plt.close()
     q_evap = q_evap_point(T_field,params)
-    plt.figure(figsize=(6,5))
+    plt.figure(figsize=(10, 20 / aspect_ratio))
     plt.contourf(Xg*1e3, Yg*1e3, q_evap, levels=50, cmap='hot')
     plt.colorbar(label='Evaporation Heat Flux (W/m²)')
     plt.xlabel('x (mm)')
     plt.ylabel('y (mm)')
     plt.title(f'Evaporation Heat Flux Field at t={t:.4f} s')
+    plt.gca().set_aspect('equal', adjustable='box')
+    plt.tight_layout()
     plt.savefig(f"q_evap_field_contour_t{t:.4f}.png")
     plt.close()
     return q_laser - q_evap
@@ -235,11 +242,11 @@ def run_simulation(params: Params, num_params: NumericalParams):
 
 
 
-params = Params(Lx =0.001, Ly=0.001, Lz=0.001,
+params = Params(Lx =0.005, Ly=0.001, Lz=0.01,
                 rho=7900, Ceff=500, k=15,
-                P=50.0, r_b=0.00006, x0=0.0001, y0=0.0005, vx=1.0) 
+                P=50.0, r_b=0.00006, x0=0.0005, y0=0.0005, vx=0.004) 
 
-num_params = NumericalParams(dt=0.0001, t_final=0.001, nx=64, ny=32, nz=8)
+num_params = NumericalParams(dt=0.001, t_final=0.01, nx=128, ny=128, nz=8)
 
 a_final, modes, Xg, Yg = run_simulation(params, num_params)
 
@@ -247,13 +254,16 @@ a_final, modes, Xg, Yg = run_simulation(params, num_params)
 T_final = reconstruct_temperature_field(a_final, modes, params, Xg, Yg)   
 # Store T_final to file
 np.savetxt("T_final.txt", T_final)
-# plot final temperature field
-plt.figure(figsize=(6,5))
+# plot final temperature field 
+aspect_ratio = params.Lx / params.Ly
+plt.figure(figsize=(10, 20 / aspect_ratio))
 plt.contourf(Xg*1e3, Yg*1e3, T_final, levels=50, cmap='hot')
 plt.colorbar(label='Temperature (K)')
 plt.xlabel('x (mm)')
 plt.ylabel('y (mm)')
 plt.title('Final Temperature Field at z=0')
+plt.gca().set_aspect('equal', adjustable='box')
+plt.tight_layout()
 plt.show()  
 
 
