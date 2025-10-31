@@ -5,13 +5,13 @@ notes.
 
 
 This script implements:
-- 
+- Uses scipy.fft.dctn for 2D DCT projection of heat flux field
+- Vectorized temperature reconstruction using tensor contractions
 """
+
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.fft import dctn
-from typing import List, Tuple
-# delete previous files
 import os
 # Clean up old files
 for filename in os.listdir('.'):
@@ -25,18 +25,20 @@ class Params:
                 # geometry
                 Lx: float, Ly: float, Lz: float,
                 # material properties
-                rho: float, Ceff: float, k: float,
+                rho: float, Ceff: float, k: float, # thermal conductivity
                 # laser
                 P: float, r_b: float, x0: float, y0: float, vx: float,
                 # evaporation
                 DeltaH_LV: float = 6.0e6, # J/kg
                 R_v: float = 150.0, # J/(kg K)
-                T_boil: float = 2800.0 # K
+                T_boil: float = 2800.0, # K
+                debug: bool = False
                 ):
         self.Lx = Lx; self.Ly = Ly; self.Lz = Lz
         self.rho = rho; self.Ceff = Ceff; self.k = k
         self.P = P; self.r_b = r_b; self.x0 = x0; self.y0 = y0; self.vx = vx
         self.DeltaH_LV = DeltaH_LV; self.R_v = R_v; self.T_boil = T_boil
+        self.debug = debug
 
 class NumericalParams:
     """Container for numerical parameters."""
@@ -57,17 +59,21 @@ class NumericalParams:
 # -------------------------
 # Eigenfunctions
 # -------------------------
-def phi_1d(m: int, x: np.ndarray, L: float) -> np.ndarray:
-    """Normalized 1D Neumann cosine eigenfunction on [0,L].
-    m=0 -> constant 1/sqrt(L). For m>=1 -> sqrt(2/L)*cos(m*pi*x/L).
-    """
-    if m == 0:
-        return np.full_like(x, 1.0 / np.sqrt(L))
-    return np.sqrt(2.0 / L) * np.cos(m * np.pi * x / L)
+def phi_matrix(n, L):
+    """Return matrix of size (nx, nx): phi[m, i] = phi_m(x_i)."""
+    x = np.linspace(L / (2 * n), L - L / (2 * n), n)
+    m = np.arange(n).reshape(-1, 1)
+    pref = np.sqrt(2.0 / L)
+    phi = pref * np.cos(m * np.pi * x / L)
+    phi[0, :] = 1.0 / np.sqrt(L)
+    return x, phi
 
-def phi_p_at_zero(p: int, Lz: float) -> float:   #will be used often at z=0
-    """Value of normalized Neumann eigenfunction at z=0."""
-    return 1.0 / np.sqrt(Lz) if p == 0 else np.sqrt(2.0 / Lz)
+
+def phi_p_zero(nz, Lz):
+    """Vector of phi_p(0) values for all p."""
+    phi0 = np.sqrt(2.0 / Lz) * np.ones(nz)
+    phi0[0] = 1.0 / np.sqrt(Lz)
+    return phi0
 
 # -------------------------
 # Heat source
@@ -93,47 +99,49 @@ def q_evap_point(T: np.ndarray, params: Params) -> np.ndarray:
     q_evap[T < params.T_boil] = 0.0
     return q_evap
 
-# -------------------------
-# Modes enumerator
-# -------------------------
-def make_modes(M:int, N:int, P:int) -> List[Tuple[int,int,int]]:
-    return [(m, n, p) for p in range(P) for n in range(N) for m in range(M)]
 
 # -------------------------
 # Fast DCT
 # -------------------------
-def dct2_heatflux_scipy(q : np.ndarray, params: Params, num_params : NumericalParams) -> np.ndarray:
-    """
-    Fast SciPy DCT-II-based routine.
-    Returns a flattened vector of length M*N*P (ordered p, n, m) matching make_modes().
-    """
+def dct2_heatflux_scipy(q : np.ndarray, params: Params, phi_p0: np.ndarray) -> np.ndarray:
+    """2D DCT-based projection of heat flux q(x,y) at z=0 plane."""
     # q shape: (Nx, Ny) where Nx = nx, Ny = ny
     Nx, Ny = q.shape
-    prefactor = np.sqrt(params.Lx*params.Ly)/np.sqrt(Nx*Ny)
+    pref = np.sqrt(params.Lx*params.Ly)/np.sqrt(Nx*Ny)
 
     # 2D DCT-II (type=2) orthonormal
-    q_dct = dctn(q, type=2, norm='ortho', workers=-1)   # shape (Nx, Ny); axis 0 -> m, axis 1 -> n
+    q_dct = dctn(q, type=2, norm='ortho', workers=-1)  # here q_dct is of shape ny nx # workers=-1 uses all available cores
     print("DCT shape:", q_dct.shape)
-    # allocate S in shape (P, N, M) so that flatten(C-order) yields iterate p,n,m
-    S_pnm = np.empty((num_params.nz, Ny, Nx), dtype=np.float64)
-    for p in range(num_params.nz):
-        S_pnm[p] = phi_p_at_zero(p, params.Lz) * prefactor * q_dct.T
-    return S_pnm.ravel(order='C')
+    S = (phi_p0[:, None, None] * pref * q_dct[None, :, :]).astype(np.float64)
+    print("S shape:", S.shape) # here S shape is (nz, ny, nx)
+    return S.reshape(-1, order='C')
 
 # -------------------------
 # Reconstruction
 # -------------------------
-def reconstruct_temperature_field(a: np.ndarray, modes: List[Tuple[int,int,int]], params: Params, phi_x: List[np.ndarray], phi_y: List[np.ndarray])->np.ndarray:
-    nx, ny = len(phi_x[0]), len(phi_y[0])
-    T = np.zeros((ny, nx))
-    for ai, (m, n, p) in zip(a, modes):
-        T += ai * np.outer(phi_y[n], phi_x[m]) * phi_p_at_zero(p, params.Lz)
+def reconstruct_temperature_field(a: np.ndarray, nx: int, ny: int, nz: int, phi_x: np.ndarray, phi_y: np.ndarray, phi_p0: np.ndarray) -> np.ndarray:
+    """
+    Fully vectorized reconstruction using tensor contraction:
+    T_ij = sum_{m,n,p} a_mnp * phi_y[n,i] * phi_x[m,j] * phi_p0[p]
+    """
+    # reshape coefficient vector a to (nz, ny, nx)
+    A = a.reshape((nz, ny, nx), order='C')
+    # correct contraction
+    B = np.tensordot(phi_p0, A, axes=(0,0))        # shape (ny, nx)
+    T = phi_y.T @ (B @ phi_x)                    # (ny, nx)
     return T
 
 # evaluate q_laser - q_evap at z=0 plane
-def evaluate_heat_source(a: np.ndarray, modes: List[Tuple[int,int,int]], params: Params, Xg: np.ndarray, Yg: np.ndarray, num_params: NumericalParams, t:float)->np.ndarray:
-    T_field = reconstruct_temperature_field(a,modes,params,Xg,Yg)
-    # save intermediate image of T plot and text file for debugging
+def evaluate_heat_source(a: np.ndarray, params: Params, Xg: np.ndarray, Yg: np.ndarray, num_params: NumericalParams, t:float, phi_x: np.ndarray, phi_y: np.ndarray, phi_p0: np.ndarray) -> np.ndarray:
+    T_field = reconstruct_temperature_field(a, num_params.nx, num_params.ny,
+                                            num_params.nz, phi_x, phi_y, phi_p0)
+    q_laser = q_laser_field(Xg,Yg,t,params)
+    q_evap = q_evap_point(T_field,params)
+    if params.debug :
+        save_fields(T_field, q_laser, q_evap, Xg, Yg, t, params)
+    return q_laser - q_evap
+
+def save_fields(T_field, q_laser, q_evap, Xg, Yg, t, params):
     aspect_ratio = params.Lx / params.Ly
     plt.figure(figsize=(10, 20 / aspect_ratio))
     plt.contourf(Xg*1e3, Yg*1e3, T_field, levels=50, cmap='hot')
@@ -143,11 +151,9 @@ def evaluate_heat_source(a: np.ndarray, modes: List[Tuple[int,int,int]], params:
     plt.title(f'Temperature Field at z=0, t={t:.4f} s')
     plt.gca().set_aspect('equal', adjustable='box')
     plt.tight_layout()
-    plt.savefig(f"temperature_field_contour_t{t:.4f}.png")
-    plt.close()
     np.savetxt(f"temperature_field_t{t:.4f}.txt", T_field)
-    # evaluate heat sources + save images for debugging
-    q_laser = q_laser_field(Xg,Yg,t,params)
+    plt.savefig(f"temperature_field_contour_t{t:.4f}.png")
+
     plt.figure(figsize=(10, 20 / aspect_ratio))
     plt.contourf(Xg*1e3, Yg*1e3, q_laser, levels=50, cmap='hot')
     plt.colorbar(label='Laser Heat Flux (W/m²)')
@@ -157,8 +163,7 @@ def evaluate_heat_source(a: np.ndarray, modes: List[Tuple[int,int,int]], params:
     plt.gca().set_aspect('equal', adjustable='box')
     plt.tight_layout()
     plt.savefig(f"q_laser_field_contour_t{t:.4f}.png")
-    plt.close()
-    q_evap = q_evap_point(T_field,params)
+
     plt.figure(figsize=(10, 20 / aspect_ratio))
     plt.contourf(Xg*1e3, Yg*1e3, q_evap, levels=50, cmap='hot')
     plt.colorbar(label='Evaporation Heat Flux (W/m²)')
@@ -168,54 +173,54 @@ def evaluate_heat_source(a: np.ndarray, modes: List[Tuple[int,int,int]], params:
     plt.gca().set_aspect('equal', adjustable='box')
     plt.tight_layout()
     plt.savefig(f"q_evap_field_contour_t{t:.4f}.png")
+
     plt.close()
-    return q_laser - q_evap
 
 #update function for time stepping
-def update_coefficients(a: np.ndarray, modes: List[Tuple[int,int,int]], params: Params, num_params: NumericalParams, Xg: np.ndarray, Yg: np.ndarray, 
-                        t: float) -> np.ndarray:
-    q_field = evaluate_heat_source(a,modes,params,Xg,Yg,num_params,t)
-    print("Heat source field shape:", q_field.shape)
-    q_dct = dct2_heatflux_scipy(q_field.T,params, num_params)
-    a_new = np.zeros_like(a)
-    a_new = a * num_params.K + num_params.KK * q_dct
-    return a_new
+def update_coefficients(a, params, num_params, X, Y, phi_x, phi_y, phi_p0, t):
+    # reconstruct field at z=0
+    q_field = evaluate_heat_source(a, params, X, Y, num_params, t, phi_x, phi_y, phi_p0)
+    q_dct = dct2_heatflux_scipy(q_field, params,  phi_p0)
+    return a * num_params.K + num_params.KK * q_dct
 
 # -------------------------
 # Main simulation runner
 # -------------------------
 def run_simulation(params: Params, num_params: NumericalParams):
-    nx, ny = num_params.nx, num_params.ny
-    modes = make_modes(nx, ny, num_params.nz)
-    a = np.zeros(len(modes))
+    nx, ny, nz = num_params.nx, num_params.ny, num_params.nz
+    a = np.zeros(nx * ny * nz)
     a[0] = 300.0 * np.sqrt(params.Lx * params.Ly * params.Lz)
 
-    # Precompute coefficients
-    K = np.zeros(len(modes))
-    KK = np.zeros(len(modes))
-    for i, (m, n, p) in enumerate(modes):
-        lam = (m * np.pi / params.Lx)**2 + (n * np.pi / params.Ly)**2 + (p * np.pi / params.Lz)**2
-        if lam == 0:
-            K[i] = 1.0
-            KK[i] = num_params.dt / (params.rho * params.Ceff)
-        else:
-            exp_term = np.exp(-params.k / (params.rho * params.Ceff) * lam * num_params.dt)
-            K[i] = exp_term
-            KK[i] = (1 - exp_term) / (params.rho * params.Ceff * lam)
-    num_params.K, num_params.KK = K, KK
+    # precompute mode matrices
+    x, phi_x = phi_matrix(nx, params.Lx)
+    y, phi_y = phi_matrix(ny, params.Ly)
+    phi_p0 = phi_p_zero(nz, params.Lz)
 
-    # Grid + precomputed eigenmodes
-    x = np.linspace(params.Lx / (2 * nx), params.Lx - params.Lx / (2 * nx), nx)
-    y = np.linspace(params.Ly / (2 * ny), params.Ly - params.Ly / (2 * ny), ny)
-    Xg, Yg = np.meshgrid(x, y)
-    phi_x = [phi_1d(m, x, params.Lx) for m in range(nx)]
-    phi_y = [phi_1d(n, y, params.Ly) for n in range(ny)]
+    # compute lambda_mnp grid in vectorized form
+    # create arrays so broadcasting yields shape (nz, ny, nx) directly
+    p = np.arange(nz)[:, None, None]   # (nz,1,1)
+    n = np.arange(ny)[None, :, None]   # (1,ny,1)
+    m = np.arange(nx)[None, None, :]   # (1,1,nx)
+
+    lam = (m * np.pi / params.Lx) ** 2 + (n * np.pi / params.Ly) ** 2 + (p * np.pi / params.Lz) ** 2
+    lam = lam.ravel(order='C')   # now lam shape (nz, ny, nx) flattened to p,n,m order
+
+    K = np.ones_like(lam)
+    KK = np.zeros_like(lam)
+    mask = lam > 0
+    alpha = params.k / (params.rho * params.Ceff)
+    exp_term = np.exp(-alpha * lam[mask] * num_params.dt)
+    K[mask] = exp_term
+    KK[mask] = (1 - exp_term) / (params.rho * params.Ceff * lam[mask])
+    KK[~mask] = num_params.dt / (params.rho * params.Ceff)
+    num_params.K, num_params.KK = K, KK
+    X, Y = np.meshgrid(x, y)
     t = 0.0
     while t < num_params.t_final - 1e-12:
-        a = update_coefficients(a, modes, params, num_params, Xg, Yg, t)
+        a = update_coefficients(a, params, num_params, X, Y, phi_x, phi_y, phi_p0, t)
         t += num_params.dt
 
-    return a, modes, Xg, Yg, phi_x, phi_y
+    return a, X, Y, phi_x, phi_y, phi_p0
 
 # -------------------------
 # Example parameters & run
@@ -225,14 +230,15 @@ def run_simulation(params: Params, num_params: NumericalParams):
 
 params = Params(Lx =0.005, Ly=0.001, Lz=0.01,
                 rho=7900, Ceff=500, k=15,
-                P=50.0, r_b=0.00006, x0=0.0005, y0=0.0005, vx=0.004) 
+                P=40000.0, r_b=0.00006, x0=0.0005, y0=0.0005, vx=0.2) 
 
-num_params = NumericalParams(dt=0.001, t_final=0.01, nx=128, ny=128, nz=8)
+num_params = NumericalParams(dt=0.0001, t_final=0.01, nx=128, ny=128, nz=100)
 
-a_final, modes, Xg, Yg, phi_x, phi_y = run_simulation(params, num_params)
+a_final, Xg, Yg, phi_x, phi_y, phi_p0 = run_simulation(params, num_params)
 
 # reconstruct final temperature field at z=0
-T_final = reconstruct_temperature_field(a_final, modes, params, phi_x, phi_y)
+T_final = reconstruct_temperature_field(a_final, num_params.nx, num_params.ny,
+                                            num_params.nz, phi_x, phi_y, phi_p0)
 # Store T_final to file
 np.savetxt("T_final.txt", T_final)
 # plot final temperature field 
