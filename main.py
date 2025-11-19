@@ -1,12 +1,9 @@
 """main.py
 
-Analytical / semi-analytic solver for the cuboid heat problem described in the provided LaTeX
-notes.
-
-
 This script implements:
 - Uses scipy.fft.dctn for 2D DCT projection of heat flux field
 - Vectorized temperature reconstruction using tensor contractions
+
 """
 # imports
 import numpy as np
@@ -37,7 +34,7 @@ class Params:
                 T_boil: float = 3090.0, # K
                 T_liquidus: float = 1800, 
                 T_solidus: float = 1700,
-                debug: bool = True
+                debug: bool = False
                 ):
         self.Lx = Lx; self.Ly = Ly; self.Lz = Lz
         self.rho = rho; self.Ceff = Ceff; self.k = k; self.T0 = T0
@@ -91,24 +88,6 @@ def q_laser_field(x: np.ndarray, y: np.ndarray, t: float, params: Params) -> np.
     y0 = params.y0
     # Q_laser does not contain any absorbitivity, coul be to match other code 
     return (2 * Absorptivity*  P / (np.pi * rb ** 2)) * np.exp(-2 * ((x - x0t) ** 2 + (y - y0) ** 2) / rb ** 2)
-    """
-def q_evap_point(T: np.ndarray, params: Params) -> np.ndarray:
-    """
-    """
-    Evaporation heat flux at temperature T (array).
-    Returns 0 where T < T_boil.
-    """
-    """
-    A = 0.005 / np.sqrt(2.0 * np.pi * params.R_v)
-    # avoid division-by-zero or overflow issues
-    T_safe = np.maximum(T, params.T_boil)
-    exponent = (params.DeltaH_LV / (params.R_v * params.T_boil)) * (1.0 - params.T_boil / T_safe)
-    q_evap = A * np.exp(exponent)
-
-    # zero flux where T < T_boil
-    q_evap[T < params.T_boil] = 0.0
-    return q_evap
-    """
 
 def q_evap_point(T: np.ndarray, params: Params) -> np.ndarray:
 
@@ -136,8 +115,6 @@ def dct2_heatflux_scipy(q : np.ndarray, params: Params, phi_p0_tile: np.ndarray)
     return S.reshape(-1, order='C')
     
 
-
-
 # -------------------------
 # Reconstruction
 # -------------------------
@@ -155,18 +132,6 @@ def reconstruct_temperature_field(a: np.ndarray, nx: int, ny: int, nz: int,
     T = phi_y.T @ (B @ phi_x)                    # (ny, nx)
     return T
 
-# evaluate q_laser - q_evap at z=0 plane
-def evaluate_heat_source(a: np.ndarray, params: Params, Xg: np.ndarray, Yg: np.ndarray,
-                         num_params: NumericalParams, t:float, phi_x: np.ndarray,
-                         phi_y: np.ndarray, phi_p0: np.ndarray, phi_p0_tile: np.ndarray) -> np.ndarray:
-    T_field = reconstruct_temperature_field(a, num_params.nx, num_params.ny,
-                                            num_params.nz, phi_x, phi_y, phi_p0, phi_p0_tile)
-    q_laser = q_laser_field(Xg,Yg,t,params)
-    q_evap = q_evap_point(T_field,params)
-
-    if params.debug :
-        save_fields(T_field, q_laser, q_evap, Xg, Yg, t, params)
-    return q_laser - q_evap
 
 def save_fields(T_field, q_laser, q_evap, Xg, Yg, t, params):
     aspect_ratio = params.Lx / params.Ly
@@ -205,138 +170,86 @@ def save_fields(T_field, q_laser, q_evap, Xg, Yg, t, params):
 
 
 
-def plot_melt_pool_with_padding(T, X, Y, x_center, y_center, params,
-                                padding_frac=0.4, cmap='inferno', levels=80):
+def meltpool(T, X, Y, params,
+             padding_frac=0.4, display=True, cmap='inferno', levels=80):
 
-    Tliq = params.T_liquidus
-    melt_mask = (T >= Tliq)
-
+    melt_mask = T >= params.T_liquidus
     if not np.any(melt_mask):
         print("No meltpool found (T < T_liquidus everywhere)")
         return
-    # get coordinates of meltpool points
-    melt_x = X[melt_mask]
-    melt_y = Y[melt_mask]
-    # bounding box in meters
-    x_min0 = float(melt_x.min())
-    x_max0 = float(melt_x.max())
-    y_min0 = float(melt_y.min())
-    y_max0 = float(melt_y.max())
 
-    width = x_max0 - x_min0    # in meters
-    length = y_max0 - y_min0   # in meters
-    eps = 1e-9
-    if width <= eps:
-        width = max(eps, 0.01 * params.Lx)  # fallback small width
-        x_min0 = max(0.0, x_center - width/2)
-        x_max0 = min(params.Lx, x_center + width/2)
-    if length <= eps:
-        length = max(eps, 0.01 * params.Ly)
-        y_min0 = max(0.0, y_center - length/2)
-        y_max0 = min(params.Ly, y_center + length/2)
+    melt_x = X[melt_mask]; melt_y = Y[melt_mask]
+    x_min0, x_max0 = melt_x.min(), melt_x.max()
+    y_min0, y_max0 = melt_y.min(), melt_y.max()
 
-    # padding: add padding_frac * width/length on each side in total (split equally left/right)
-    pad_x = padding_frac * width
-    pad_y = padding_frac * length
+    width  = y_max0 - y_min0
+    length = x_max0 - x_min0
 
-    x_min = x_min0 - pad_x/2.0
-    x_max = x_max0 + pad_x/2.0
-    y_min = y_min0 - pad_y/2.0
-    y_max = y_max0 + pad_y/2.0
+    x_min = max(0.0, x_min0 - padding_frac * length/2)
+    x_max = min(params.Lx, x_max0 + padding_frac * length/2)
+    y_min = max(0.0, y_min0 - padding_frac * width/2)
+    y_max = min(params.Ly, y_max0 + padding_frac * width/2)
 
-    x_min = max(0.0, x_min)
-    y_min = max(0.0, y_min)
-    x_max = min(params.Lx, x_max)
-    y_max = min(params.Ly, y_max)
+    if not display:
+        return  width, length# Skip plotting entirely
 
-    # convert to mm for display
-    x_min_mm, x_max_mm = x_min*1e3, x_max*1e3
-    y_min_mm, y_max_mm = y_min*1e3, y_max*1e3
-
-    # Print meltpool metrics
+    # --- Plot ---
     print(f"Melt-pool width  = {width*1e3:.3f} mm")
     print(f"Melt-pool length = {length*1e3:.3f} mm")
-    print(f"Plot window x: {x_min_mm:.3f} .. {x_max_mm:.3f} mm")
-    print(f"Plot window y: {y_min_mm:.3f} .. {y_max_mm:.3f} mm")
-
-    # Plot
     fig, ax = plt.subplots(figsize=(8, 6))
     pcm = ax.contourf(X*1e3, Y*1e3, T, levels=levels, cmap=cmap)
-    cbar = plt.colorbar(pcm, ax=ax, label='Temperature (K)')
-
-    # meltpool boundary as black contour
-    contour = ax.contour(X*1e3, Y*1e3, T, levels=[Tliq], colors='k', linewidths=2)
-    # if no contour segments (rare since mask found True), warn
-    if len(contour.allsegs[0]) == 0:
-        print("Contour generation found no continuous segments for T_liquidus.")
-
-    ax.set_xlim(x_min_mm, x_max_mm)
-    ax.set_ylim(y_min_mm, y_max_mm)
+    plt.colorbar(pcm, ax=ax, label='Temperature (K)')
+    ax.contour(X*1e3, Y*1e3, T, levels=[params.T_liquidus], colors='k', linewidths=2)
+    ax.set_xlim(x_min*1e3, x_max*1e3)
+    ax.set_ylim(y_min*1e3, y_max*1e3)
     ax.set_xlabel('x (mm)')
     ax.set_ylabel('y (mm)')
     ax.set_title('Melt-pool shape (top view)')
-    ax.set_aspect('equal', adjustable='box')
-    plt.gca().set_aspect('equal', adjustable='box')
+    ax.set_aspect('equal')
     plt.tight_layout()
     plt.show()
+    return width, length
+
 # ------------------------
 # Update, Time Depedency
 #--------------------------
 
 #update function for time stepping
-"""
-def update_coefficients(a, params, num_params, X, Y, phi_x, phi_y, phi_p0, phi_p0_tile, t):
-    # reconstruct field at z=0
-    q_field = evaluate_heat_source(a, params, X, Y, num_params, t, phi_x, phi_y, phi_p0, phi_p0_tile)
-    q_dct = dct2_heatflux_scipy(q_field, params,  phi_p0_tile)
-    return a * num_params.K + num_params.KK * q_dct
-"""
-def update_coefficients(a, params, num_params, X, Y,
-                        phi_x, phi_y, phi_p0, phi_p0_tile, t):
-    """
-    Predictor-corrector:
-      1) Predictor: form forcing from laser only at time t -> temporary coeffs a_temp
-      2) Reconstruct T_temp from a_temp
-      3) Compute q_evap(T_temp)
-      4) Corrector: form net forcing q_laser - q_evap, project, compute actual a_new
-      + Print total evaporation power (W)
-    """
 
-    # --- 1) Laser flux at time t ---
+
+def update_coefficients_iterative(
+    a, params, num_params, X, Y,
+    phi_x, phi_y, phi_p0, phi_p0_tile, t,
+    epsilon=1e-10
+):
+    n_iter_max = 20
     q_laser = q_laser_field(X, Y, t, params)
+    q_dct = dct2_heatflux_scipy(q_laser, params, phi_p0_tile)
+    a_temp = a.copy()
+    aK = a* num_params.K
 
-    # --- 2) Project laser-only flux to modal forcing ---
-    q_laser_dct = dct2_heatflux_scipy(q_laser, params, phi_p0_tile)
+    for k in range(n_iter_max):
+        a_old = a_temp.copy()
+        a_temp = aK + num_params.KK * (q_dct)
+        T_temp = reconstruct_temperature_field(
+            a_temp, num_params.nx, num_params.ny, num_params.nz,
+            phi_x, phi_y, phi_p0, phi_p0_tile
+        )
+        q_evap = q_evap_point(T_temp, params)
+        if params.debug:
+            dx = params.Lx/num_params.nx; dy = params.Ly/num_params.ny
+            print(f"iter {k:02d}: P_evap={np.sum(q_evap)*dx*dy:.6f} W")
+        q_dct = dct2_heatflux_scipy(q_laser - q_evap, params, phi_p0_tile)
+        if params.debug:
+            print(f"  err={np.max(np.abs(a_temp-a_old)):.3e}")
 
-    # --- 3) Predictor coeffs: using laser-only forcing ---
-    a_temp = a * num_params.K + num_params.KK * q_laser_dct
+        if np.max(np.abs(a_temp - a_old)) < epsilon:
+            if params.debug: print(f"✓ Converged in {k+1} iter\n")
+            return a_temp
 
-    # --- 4) Reconstruct temperature from predictor coeffs ---
-    T_temp = reconstruct_temperature_field(
-        a_temp,
-        num_params.nx, num_params.ny, num_params.nz,
-        phi_x, phi_y, phi_p0, phi_p0_tile
-    )
-
-    # --- 5) Compute evaporation flux using predictor temperature ---
-    q_evap_temp = q_evap_point(T_temp, params)
-    if params.debug : 
-        dx = params.Lx / num_params.nx
-        dy = params.Ly / num_params.ny
-        P_evap = np.sum(q_evap_temp) * dx * dy
-        print(f"[t={t:.4f} s] Evaporation Power = {P_evap:.6f} W")
-    # ==========================================
-
-    # --- 6) Net heat flux ---
-    q_net = q_laser - q_evap_temp
-
-    # --- 7) Project net flux ---
-    q_net_dct = dct2_heatflux_scipy(q_net, params, phi_p0_tile)
-
-    # --- 8) Compute final updated modal coefficients ---
-    a_new = a * num_params.K + num_params.KK * q_net_dct
-
-    return a_new
+    if params.debug:
+        print(f"No convergence after {n_iter_max} iter\n")
+    return a_temp
 
 
 # -------------------------
@@ -382,7 +295,7 @@ def run_simulation(params: Params, num_params: NumericalParams):
     t = 0.0
 
     while t < num_params.t_final - 1e-12:
-        a = update_coefficients(a, params, num_params, X, Y, phi_x, phi_y, phi_p0, phi_p0_tile, t)
+        a = update_coefficients_iterative(a, params, num_params, X, Y, phi_x, phi_y, phi_p0, phi_p0_tile, t)
         t += num_params.dt
 
     return a, X, Y, phi_x, phi_y, phi_p0
@@ -446,23 +359,21 @@ params = Params(Lx =0.01, Ly=0.005, Lz=0.01,
                 rho=7900, Ceff=500, k=14, T0 = 300.0,
                 P=70.0, Absorptivity = 0.30, r_b=0.00006, x0=0.001, y0=0.0025, vx=0.1)
 
-num_params = NumericalParams(dt=0.001, t_final=0.02, nx=512, ny=512, nz=100)
-
+num_params = NumericalParams(dt=0.0001, t_final=0.001, nx=512, ny=512, nz=100)
+"""
 a_final, Xg, Yg, phi_x, phi_y, phi_p0 = run_simulation(params, num_params)
-phi_p0_tile = num_params.phi_p0_tile
 
 # reconstruct final temperature field at z=0
 T_final = reconstruct_temperature_field(a_final, num_params.nx, num_params.ny,
-                                            num_params.nz, phi_x, phi_y, phi_p0, phi_p0_tile)
+                                            num_params.nz, phi_x, phi_y, phi_p0, num_params.phi_p0_tile)
+width, length = meltpool(T_final , Xg, Yg, params)#, display = False)
 
-plot_melt_pool_with_padding(T_final, Xg, Yg, params.x0 + params.vx*num_params.t_final, params.y0, params,
-                            padding_frac=0.4, cmap='inferno', levels=80)
 energy_check(a_final, params, num_params,
                              phi_x, phi_y, phi_p0)
 # Store T_final to file
 #np.savetxt("T_final.txt", T_final)
 # plot final temperature field 
-
+"""
 """
 aspect_ratio = params.Lx / params.Ly
 plt.figure(figsize=(10, 20 / aspect_ratio))
@@ -476,3 +387,47 @@ plt.tight_layout()
 plt.show()  
 save_fields(T_final, np.zeros_like(T_final), np.zeros_like(T_final), Xg, Yg, num_params.t_final, params)
 """
+
+import pandas as pd
+import itertools
+
+
+nz_values = [80, 90, 100, 110, 120]
+nx_values = [400, 480, 512, 540, 600]
+dt_values = [0.5e-4, 0.75e-4, 1e-4, 1.25e-4, 1.5e-4]
+
+results = []
+
+for nz, nx, dt in itertools.product(nz_values, nx_values, dt_values):
+    num_params = NumericalParams(dt=dt, t_final=0.001, nx=nx, ny=nx, nz=nz)
+    # Run simulation
+    a_final, Xg, Yg, phi_x, phi_y, phi_p0 = run_simulation(params, num_params)
+    T_final = reconstruct_temperature_field(a_final, nx, nx, nz, phi_x, phi_y, phi_p0, num_params.phi_p0_tile)
+    
+    # Meltpool metrics
+    Tliq = params.T_liquidus
+    melt_mask = T_final >= Tliq
+    if np.any(melt_mask):
+        melt_x = Xg[melt_mask]
+        melt_y = Yg[melt_mask]
+        width = (melt_y.max() - melt_y.min())*1e3  # mm
+        length = (melt_x.max() - melt_x.min())*1e3 # mm
+    else:
+        width = 0.0
+        length = 0.0
+    Tmax = T_final.max()
+
+    results.append({
+        "nz": nz,
+        "nx": nx,
+        "dt": dt,
+        "Tmax": Tmax,
+        "width_mm": width,
+        "length_mm": length
+    })
+
+# Save to CSV
+df = pd.DataFrame(results)
+df.to_csv("sensitivity_results.csv", index=False)
+print("Sensitivity analysis complete. Results saved to 'sensitivity_results.csv'")
+
