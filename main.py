@@ -11,7 +11,7 @@ This script implements:
 # imports
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.fft import dctn
+from scipy.fft import dctn, fftshift
 import os
 # Clean up old files
 for filename in os.listdir('.'):
@@ -30,17 +30,19 @@ class Params:
                 k: float, # W/(m K)
                 T0: float, # thermal conductivity
                 # laser
-                P: float, r_b: float, x0: float, y0: float, vx: float,
+                P: float, Absorptivity: float, r_b: float, x0: float, y0: float, vx: float,
                 # evaporation
-                DeltaH_LV: float = 6.0e6, # J/kg
+                DeltaH_LV: float = 7.41e6, # J/kg Latent heat evaporation
                 R_v: float = 150.0, # J/(kg K)
-                T_boil: float = 2800.0, # K
-                debug: bool = False
+                T_boil: float = 3090.0, # K
+                T_liquidus: float = 1800, 
+                T_solidus: float = 1700,
+                debug: bool = True
                 ):
         self.Lx = Lx; self.Ly = Ly; self.Lz = Lz
         self.rho = rho; self.Ceff = Ceff; self.k = k; self.T0 = T0
-        self.P = P; self.r_b = r_b; self.x0 = x0; self.y0 = y0; self.vx = vx
-        self.DeltaH_LV = DeltaH_LV; self.R_v = R_v; self.T_boil = T_boil
+        self.P = P; self.Absorptivity = Absorptivity; self.r_b = r_b; self.x0 = x0; self.y0 = y0; self.vx = vx
+        self.DeltaH_LV = DeltaH_LV; self.R_v = R_v; self.T_boil = T_boil; self.T_liquidus = T_liquidus; self.T_solidus = T_solidus
         self.debug = debug
 
 class NumericalParams:
@@ -52,12 +54,14 @@ class NumericalParams:
                 # spatial discretization
                 nx: int, ny: int, nz: int,
                 K: np.ndarray = None,
-                KK: np.ndarray = None
+                KK: np.ndarray = None,
+                phi_p0_tile: np.ndarray = None
                 ):
         self.dt = dt
         self.t_final = t_final
         self.nx = nx; self.ny = ny; self.nz = nz
         self.K = K; self.KK = KK
+        self.phi_p0_tile = phi_p0_tile
 
 # -------------------------
 # Eigenfunctions
@@ -82,15 +86,18 @@ def phi_p_zero(nz, Lz):
 # Heat source
 # -------------------------
 def q_laser_field(x: np.ndarray, y: np.ndarray, t: float, params: Params) -> np.ndarray:
-    P, rb = params.P, params.r_b
+    P, Absorptivity, rb = params.P, params.Absorptivity, params.r_b
     x0t = params.x0 + params.vx * t
     y0 = params.y0
-    return (2 * P / (np.pi * rb ** 2)) * np.exp(-2 * ((x - x0t) ** 2 + (y - y0) ** 2) / rb ** 2)
-
+    # Q_laser does not contain any absorbitivity, coul be to match other code 
+    return (2 * Absorptivity*  P / (np.pi * rb ** 2)) * np.exp(-2 * ((x - x0t) ** 2 + (y - y0) ** 2) / rb ** 2)
+    """
 def q_evap_point(T: np.ndarray, params: Params) -> np.ndarray:
+    """
     """
     Evaporation heat flux at temperature T (array).
     Returns 0 where T < T_boil.
+    """
     """
     A = 0.005 / np.sqrt(2.0 * np.pi * params.R_v)
     # avoid division-by-zero or overflow issues
@@ -101,59 +108,59 @@ def q_evap_point(T: np.ndarray, params: Params) -> np.ndarray:
     # zero flux where T < T_boil
     q_evap[T < params.T_boil] = 0.0
     return q_evap
+    """
 
+def q_evap_point(T: np.ndarray, params: Params) -> np.ndarray:
 
+    # Extract required parameters
+    Lv = params.DeltaH_LV      # J/kg
+    Rv = params.R_v                   # J/(kg·K)
+    Tb = params.T_boil                         # K
+    T_safe = np.maximum(T, 1.0)
+
+    q = 0.82 * Lv / np.sqrt(2*np.pi*Rv*T_safe) * np.exp((Lv / (Rv * Tb)) * (1.0 - Tb / T_safe))
+    q[T < Tb] = 0.0
+
+    return q
 # -------------------------
 # Fast DCT
 # -------------------------
 
-"""
-def dct2_heatflux_scipy(q : np.ndarray, params: Params, phi_p0: np.ndarray) -> np.ndarray:
-    """#2D DCT-based projection of heat flux q(x,y) at z=0 plane.
-"""
-    # q shape: (Nx, Ny) where Nx = nx, Ny = ny
-    Nx, Ny = q.shape
-    pref = np.sqrt(params.Lx*params.Ly)/np.sqrt(Nx*Ny)
-
-    # 2D DCT-II (type=2) orthonormal
-    q_dct = dctn(q, type=2, norm='ortho', workers=-1)  # here q_dct is of shape ny nx # workers=-1 uses all available cores
-    print("DCT shape:", q_dct.shape)
-    S = (phi_p0[:, None, None] * pref * q_dct[None, :, :]).astype(np.float64)
-    print("S shape:", S.shape) # here S shape is (nz, ny, nx)
-    return S.reshape(-1, order='C')
-"""
-def dct2_heatflux_scipy(q : np.ndarray, params: Params, phi_p0: np.ndarray) -> np.ndarray:
+def dct2_heatflux_scipy(q : np.ndarray, params: Params, phi_p0_tile: np.ndarray) -> np.ndarray:
     ny, nx = q.shape   # explicit ordering: q is (ny, nx)
     pref = np.sqrt(params.Lx*params.Ly)/np.sqrt(nx*ny)
 
     q_dct = dctn(q, type=2, norm='ortho', workers=-1)   # shape (ny, nx)
-    # Build S only for p=0: S shape will be (nz, ny, nx) but nonzero only at p=0
-    nz = phi_p0.size
-    S = np.zeros((nz, ny, nx), dtype=np.float64)
-    S[0, :, :] = (phi_p0[0] * pref * q_dct).astype(np.float64)
+    # old: S = (phi_p0[:, None, None] * pref * q_dct[None, :, :]).astype(np.float64)
+    S = (phi_p0_tile * pref * q_dct[None, :, :]).astype(np.float64)
     return S.reshape(-1, order='C')
+    
 
 
 
 # -------------------------
 # Reconstruction
 # -------------------------
-def reconstruct_temperature_field(a: np.ndarray, nx: int, ny: int, nz: int, phi_x: np.ndarray, phi_y: np.ndarray, phi_p0: np.ndarray) -> np.ndarray:
+def reconstruct_temperature_field(a: np.ndarray, nx: int, ny: int, nz: int,
+                                   phi_x: np.ndarray, phi_y: np.ndarray,
+                                   phi_p0: np.ndarray, phi_p0_tile: np.ndarray) -> np.ndarray:
     """
     Fully vectorized reconstruction using tensor contraction:
     T_ij = sum_{m,n,p} a_mnp * phi_y[n,i] * phi_x[m,j] * phi_p0[p]
     """
     # reshape coefficient vector a to (nz, ny, nx)
     A = a.reshape((nz, ny, nx), order='C')
-    # correct contraction
-    B = np.tensordot(phi_p0, A, axes=(0,0))        # shape (ny, nx)
+    # old: B = np.tensordot(phi_p0, A, axes=(0,0))
+    B = np.sum(phi_p0_tile * A, axis=0)        # shape (ny, nx)
     T = phi_y.T @ (B @ phi_x)                    # (ny, nx)
     return T
 
 # evaluate q_laser - q_evap at z=0 plane
-def evaluate_heat_source(a: np.ndarray, params: Params, Xg: np.ndarray, Yg: np.ndarray, num_params: NumericalParams, t:float, phi_x: np.ndarray, phi_y: np.ndarray, phi_p0: np.ndarray) -> np.ndarray:
+def evaluate_heat_source(a: np.ndarray, params: Params, Xg: np.ndarray, Yg: np.ndarray,
+                         num_params: NumericalParams, t:float, phi_x: np.ndarray,
+                         phi_y: np.ndarray, phi_p0: np.ndarray, phi_p0_tile: np.ndarray) -> np.ndarray:
     T_field = reconstruct_temperature_field(a, num_params.nx, num_params.ny,
-                                            num_params.nz, phi_x, phi_y, phi_p0)
+                                            num_params.nz, phi_x, phi_y, phi_p0, phi_p0_tile)
     q_laser = q_laser_field(Xg,Yg,t,params)
     q_evap = q_evap_point(T_field,params)
 
@@ -173,7 +180,7 @@ def save_fields(T_field, q_laser, q_evap, Xg, Yg, t, params):
     plt.tight_layout()
     np.savetxt(f"temperature_field_t{t:.4f}.txt", T_field)
     plt.savefig(f"temperature_field_contour_t{t:.4f}.png")
-
+    
     plt.figure(figsize=(10, 20 / aspect_ratio))
     plt.contourf(Xg*1e3, Yg*1e3, q_laser, levels=50, cmap='hot')
     plt.colorbar(label='Laser Heat Flux (W/m²)')
@@ -183,7 +190,7 @@ def save_fields(T_field, q_laser, q_evap, Xg, Yg, t, params):
     plt.gca().set_aspect('equal', adjustable='box')
     plt.tight_layout()
     plt.savefig(f"q_laser_field_contour_t{t:.4f}.png")
-
+    
     plt.figure(figsize=(10, 20 / aspect_ratio))
     plt.contourf(Xg*1e3, Yg*1e3, q_evap, levels=50, cmap='hot')
     plt.colorbar(label='Evaporation Heat Flux (W/m²)')
@@ -196,12 +203,141 @@ def save_fields(T_field, q_laser, q_evap, Xg, Yg, t, params):
 
     plt.close()
 
+
+
+def plot_melt_pool_with_padding(T, X, Y, x_center, y_center, params,
+                                padding_frac=0.4, cmap='inferno', levels=80):
+
+    Tliq = params.T_liquidus
+    melt_mask = (T >= Tliq)
+
+    if not np.any(melt_mask):
+        print("No meltpool found (T < T_liquidus everywhere)")
+        return
+    # get coordinates of meltpool points
+    melt_x = X[melt_mask]
+    melt_y = Y[melt_mask]
+    # bounding box in meters
+    x_min0 = float(melt_x.min())
+    x_max0 = float(melt_x.max())
+    y_min0 = float(melt_y.min())
+    y_max0 = float(melt_y.max())
+
+    width = x_max0 - x_min0    # in meters
+    length = y_max0 - y_min0   # in meters
+    eps = 1e-9
+    if width <= eps:
+        width = max(eps, 0.01 * params.Lx)  # fallback small width
+        x_min0 = max(0.0, x_center - width/2)
+        x_max0 = min(params.Lx, x_center + width/2)
+    if length <= eps:
+        length = max(eps, 0.01 * params.Ly)
+        y_min0 = max(0.0, y_center - length/2)
+        y_max0 = min(params.Ly, y_center + length/2)
+
+    # padding: add padding_frac * width/length on each side in total (split equally left/right)
+    pad_x = padding_frac * width
+    pad_y = padding_frac * length
+
+    x_min = x_min0 - pad_x/2.0
+    x_max = x_max0 + pad_x/2.0
+    y_min = y_min0 - pad_y/2.0
+    y_max = y_max0 + pad_y/2.0
+
+    x_min = max(0.0, x_min)
+    y_min = max(0.0, y_min)
+    x_max = min(params.Lx, x_max)
+    y_max = min(params.Ly, y_max)
+
+    # convert to mm for display
+    x_min_mm, x_max_mm = x_min*1e3, x_max*1e3
+    y_min_mm, y_max_mm = y_min*1e3, y_max*1e3
+
+    # Print meltpool metrics
+    print(f"Melt-pool width  = {width*1e3:.3f} mm")
+    print(f"Melt-pool length = {length*1e3:.3f} mm")
+    print(f"Plot window x: {x_min_mm:.3f} .. {x_max_mm:.3f} mm")
+    print(f"Plot window y: {y_min_mm:.3f} .. {y_max_mm:.3f} mm")
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(8, 6))
+    pcm = ax.contourf(X*1e3, Y*1e3, T, levels=levels, cmap=cmap)
+    cbar = plt.colorbar(pcm, ax=ax, label='Temperature (K)')
+
+    # meltpool boundary as black contour
+    contour = ax.contour(X*1e3, Y*1e3, T, levels=[Tliq], colors='k', linewidths=2)
+    # if no contour segments (rare since mask found True), warn
+    if len(contour.allsegs[0]) == 0:
+        print("Contour generation found no continuous segments for T_liquidus.")
+
+    ax.set_xlim(x_min_mm, x_max_mm)
+    ax.set_ylim(y_min_mm, y_max_mm)
+    ax.set_xlabel('x (mm)')
+    ax.set_ylabel('y (mm)')
+    ax.set_title('Melt-pool shape (top view)')
+    ax.set_aspect('equal', adjustable='box')
+    plt.gca().set_aspect('equal', adjustable='box')
+    plt.tight_layout()
+    plt.show()
+# ------------------------
+# Update, Time Depedency
+#--------------------------
+
 #update function for time stepping
-def update_coefficients(a, params, num_params, X, Y, phi_x, phi_y, phi_p0, t):
+"""
+def update_coefficients(a, params, num_params, X, Y, phi_x, phi_y, phi_p0, phi_p0_tile, t):
     # reconstruct field at z=0
-    q_field = evaluate_heat_source(a, params, X, Y, num_params, t, phi_x, phi_y, phi_p0)
-    q_dct = dct2_heatflux_scipy(q_field, params,  phi_p0)
+    q_field = evaluate_heat_source(a, params, X, Y, num_params, t, phi_x, phi_y, phi_p0, phi_p0_tile)
+    q_dct = dct2_heatflux_scipy(q_field, params,  phi_p0_tile)
     return a * num_params.K + num_params.KK * q_dct
+"""
+def update_coefficients(a, params, num_params, X, Y,
+                        phi_x, phi_y, phi_p0, phi_p0_tile, t):
+    """
+    Predictor-corrector:
+      1) Predictor: form forcing from laser only at time t -> temporary coeffs a_temp
+      2) Reconstruct T_temp from a_temp
+      3) Compute q_evap(T_temp)
+      4) Corrector: form net forcing q_laser - q_evap, project, compute actual a_new
+      + Print total evaporation power (W)
+    """
+
+    # --- 1) Laser flux at time t ---
+    q_laser = q_laser_field(X, Y, t, params)
+
+    # --- 2) Project laser-only flux to modal forcing ---
+    q_laser_dct = dct2_heatflux_scipy(q_laser, params, phi_p0_tile)
+
+    # --- 3) Predictor coeffs: using laser-only forcing ---
+    a_temp = a * num_params.K + num_params.KK * q_laser_dct
+
+    # --- 4) Reconstruct temperature from predictor coeffs ---
+    T_temp = reconstruct_temperature_field(
+        a_temp,
+        num_params.nx, num_params.ny, num_params.nz,
+        phi_x, phi_y, phi_p0, phi_p0_tile
+    )
+
+    # --- 5) Compute evaporation flux using predictor temperature ---
+    q_evap_temp = q_evap_point(T_temp, params)
+    if params.debug : 
+        dx = params.Lx / num_params.nx
+        dy = params.Ly / num_params.ny
+        P_evap = np.sum(q_evap_temp) * dx * dy
+        print(f"[t={t:.4f} s] Evaporation Power = {P_evap:.6f} W")
+    # ==========================================
+
+    # --- 6) Net heat flux ---
+    q_net = q_laser - q_evap_temp
+
+    # --- 7) Project net flux ---
+    q_net_dct = dct2_heatflux_scipy(q_net, params, phi_p0_tile)
+
+    # --- 8) Compute final updated modal coefficients ---
+    a_new = a * num_params.K + num_params.KK * q_net_dct
+
+    return a_new
+
 
 # -------------------------
 # Main simulation runner
@@ -215,6 +351,8 @@ def run_simulation(params: Params, num_params: NumericalParams):
     x, phi_x = phi_matrix(nx, params.Lx)
     y, phi_y = phi_matrix(ny, params.Ly)
     phi_p0 = phi_p_zero(nz, params.Lz)
+    phi_p0_tile = phi_p0[:, None, None]
+    num_params.phi_p0_tile = phi_p0_tile
 
     # compute lambda_mnp grid in vectorized form
     # create arrays so broadcasting yields shape (nz, ny, nx) directly
@@ -223,9 +361,6 @@ def run_simulation(params: Params, num_params: NumericalParams):
     m = np.arange(nx)[None, None, :]   # (1,1,nx)
 
     lam = (m * np.pi / params.Lx) ** 2 + (n * np.pi / params.Ly) ** 2 + (p * np.pi / params.Lz) ** 2
-    # check if no floating point issues in lam
-    if np.any(lam < 0):
-        raise ValueError("Negative eigenvalue encountered in lambda computation.")
     lam = lam.ravel(order='C')   # now lam shape (nz, ny, nx) flattened to p,n,m order
     # compute K and KK robustly
     K = np.ones_like(lam, dtype=np.float64)
@@ -236,21 +371,18 @@ def run_simulation(params: Params, num_params: NumericalParams):
     K[mask] = np.exp(-temp)[mask]
     # add security on 1 -exp term to avoid numerical issues
     expm1_neg = np.expm1(-temp) # 1 - exp(-x)
-    KK[mask] = -expm1_neg[mask] / (params.rho * params.Ceff * lam[mask])
-    # check for any NaN or Inf in KK (should not happen, modes would vanish numerically)
-    if np.any(np.isnan(KK)) or np.any(np.isinf(KK)):
-        raise ValueError("Numerical issue encountered in KK computation.")
+    KK[mask] = -expm1_neg[mask] / (params.rho * params.Ceff * alpha * lam[mask])
+    #    KK[mask] = -expm1_neg[mask] / (params.rho * params.Ceff * lam[mask]) previously, forgot alpha leading to very low forcing of non zero modes
+    
     KK[~mask] = num_params.dt / (params.rho * params.Ceff)
     
     num_params.K, num_params.KK = K, KK
     X, Y = np.meshgrid(x, y)
-    print(f"exp(-alpha*lambda_max*dt) = {np.exp(-alpha*np.max(lam)*num_params.dt):.2e}")
-    print(f"Prefactor in DCT: {np.sqrt(params.Lx*params.Ly)/np.sqrt(num_params.nx*num_params.ny):.3e}")
-    print(f"Max laser flux: {2*params.P/(np.pi*params.r_b**2):.3e} W/m²")
+    print(f"[DEBUG] Max laser flux: {2*params.P/(np.pi*params.r_b**2):.3e} W/m²")
     t = 0.0
 
     while t < num_params.t_final - 1e-12:
-        a = update_coefficients(a, params, num_params, X, Y, phi_x, phi_y, phi_p0, t)
+        a = update_coefficients(a, params, num_params, X, Y, phi_x, phi_y, phi_p0, phi_p0_tile, t)
         t += num_params.dt
 
     return a, X, Y, phi_x, phi_y, phi_p0
@@ -305,29 +437,33 @@ def energy_check(a_final, params: Params, num_params: NumericalParams,
 
     return E_in, ΔE
 
-
 # -------------------------
 # Example parameters & run
 # -------------------------
 
 
-params = Params(Lx =0.01, Ly=0.005, Lz=0.2,
-                rho=7900, Ceff=500, k=25, T0 = 300.0,
-                P=50.0, r_b=0.00006, x0=0.005, y0=0.0025, vx=0.0004)
+params = Params(Lx =0.01, Ly=0.005, Lz=0.01,
+                rho=7900, Ceff=500, k=14, T0 = 300.0,
+                P=70.0, Absorptivity = 0.30, r_b=0.00006, x0=0.001, y0=0.0025, vx=0.1)
 
-num_params = NumericalParams(dt=0.1, t_final=10, nx=512, ny=512, nz=8)
+num_params = NumericalParams(dt=0.001, t_final=0.02, nx=512, ny=512, nz=100)
 
 a_final, Xg, Yg, phi_x, phi_y, phi_p0 = run_simulation(params, num_params)
+phi_p0_tile = num_params.phi_p0_tile
 
 # reconstruct final temperature field at z=0
 T_final = reconstruct_temperature_field(a_final, num_params.nx, num_params.ny,
-                                            num_params.nz, phi_x, phi_y, phi_p0)
+                                            num_params.nz, phi_x, phi_y, phi_p0, phi_p0_tile)
 
+plot_melt_pool_with_padding(T_final, Xg, Yg, params.x0 + params.vx*num_params.t_final, params.y0, params,
+                            padding_frac=0.4, cmap='inferno', levels=80)
 energy_check(a_final, params, num_params,
                              phi_x, phi_y, phi_p0)
 # Store T_final to file
-np.savetxt("T_final.txt", T_final)
+#np.savetxt("T_final.txt", T_final)
 # plot final temperature field 
+
+"""
 aspect_ratio = params.Lx / params.Ly
 plt.figure(figsize=(10, 20 / aspect_ratio))
 plt.contourf(Xg*1e3, Yg*1e3, T_final, levels=50, cmap='hot')
@@ -338,7 +474,5 @@ plt.title('Final Temperature Field at z=0')
 plt.gca().set_aspect('equal', adjustable='box')
 plt.tight_layout()
 plt.show()  
-
-
-
-
+save_fields(T_final, np.zeros_like(T_final), np.zeros_like(T_final), Xg, Yg, num_params.t_final, params)
+"""
