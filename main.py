@@ -87,7 +87,7 @@ def q_laser_field(x: np.ndarray, y: np.ndarray, t: float, params: Params) -> np.
     x0t = params.x0 + params.vx * t
     y0 = params.y0
     # Q_laser does not contain any absorbitivity, coul be to match other code 
-    return (2 * Absorptivity*  P / (np.pi * rb ** 2)) * np.exp(-2 * ((x - x0t) ** 2 + (y - y0) ** 2) / rb ** 2)
+    return ( Absorptivity*  P / (np.pi * rb ** 2)) * np.exp(-2 * ((x - x0t) ** 2 + (y - y0) ** 2) / rb ** 2)
 
 def q_evap_point(T: np.ndarray, params: Params) -> np.ndarray:
 
@@ -220,7 +220,7 @@ def meltpool(T, X, Y, params,
 def update_coefficients_iterative(
     a, params, num_params, X, Y,
     phi_x, phi_y, phi_p0, phi_p0_tile, t,
-    epsilon=1e-10
+    epsilon=1e-12
 ):
     n_iter_max = 20
     q_laser = q_laser_field(X, Y, t, params)
@@ -244,12 +244,14 @@ def update_coefficients_iterative(
             print(f"  err={np.max(np.abs(a_temp-a_old)):.3e}")
 
         if np.max(np.abs(a_temp - a_old)) < epsilon:
+            save_fields(T_temp, q_laser, q_evap, X, Y, t, params)
             if params.debug: print(f"✓ Converged in {k+1} iter\n")
             return a_temp
-
+    
     if params.debug:
         print(f"No convergence after {n_iter_max} iter\n")
     return a_temp
+
 
 
 # -------------------------
@@ -355,12 +357,12 @@ def energy_check(a_final, params: Params, num_params: NumericalParams,
 # -------------------------
 
 
-params = Params(Lx =0.01, Ly=0.005, Lz=0.01,
+params = Params(Lx =0.01, Ly=0.005, Lz=0.005,
                 rho=7900, Ceff=500, k=14, T0 = 300.0,
-                P=70.0, Absorptivity = 0.30, r_b=0.00006, x0=0.001, y0=0.0025, vx=0.1)
+                P=200.0, Absorptivity = 0.30, r_b=0.00006, x0=0.001, y0=0.0025, vx=0.5, debug = True)
 
-num_params = NumericalParams(dt=0.0001, t_final=0.001, nx=512, ny=512, nz=100)
-"""
+num_params = NumericalParams(dt=0.00002, t_final=0.0002, nx=1024, ny=1024, nz=200)
+
 a_final, Xg, Yg, phi_x, phi_y, phi_p0 = run_simulation(params, num_params)
 
 # reconstruct final temperature field at z=0
@@ -386,8 +388,8 @@ plt.gca().set_aspect('equal', adjustable='box')
 plt.tight_layout()
 plt.show()  
 save_fields(T_final, np.zeros_like(T_final), np.zeros_like(T_final), Xg, Yg, num_params.t_final, params)
-"""
 
+"""
 import pandas as pd
 import itertools
 
@@ -431,3 +433,4 @@ df = pd.DataFrame(results)
 df.to_csv("sensitivity_results.csv", index=False)
 print("Sensitivity analysis complete. Results saved to 'sensitivity_results.csv'")
 
+"""
