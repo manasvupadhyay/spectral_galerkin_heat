@@ -1,202 +1,372 @@
-"""
-minimal_heat_solver.py
-
-Minimal script for 3D heat diffusion using a spectral method (modal expansion).
-Focuses on core time-stepping with a fixed, constant heat flux (no evaporation).
-"""
-
 import numpy as np
 from scipy.fft import dctn
+import cupy as cp
+import matplotlib.pyplot as plt
 
-# -------------------------
-# Parameter Classes
-# -------------------------
-class Params:
-    """Container for essential physical and material parameters."""
-    def __init__(self, Lx: float, Ly: float, Lz: float,
-                 rho: float, Ceff: float, k: float, T0: float,
-                 P: float, Absorptivity: float, r_b: float):
-        self.Lx, self.Ly, self.Lz = Lx, Ly, Lz
-        self.rho, self.Ceff, self.k, self.T0 = rho, Ceff, k, T0
-        # Laser parameters used only for the fixed source term
-        self.P, self.Absorptivity, self.r_b = P, Absorptivity, r_b
+# ============================================================
+#  GEOMETRY PARAMETERS (GPU only for 2D fields)
+# ============================================================
+
+class GeomParams:
+    def __init__(self, Lx, Ly, Lz, params):
+        self.Lx = Lx
+        self.Ly = Ly
+        self.Lz = Lz
+
+        # GPU 2D grid (ny, nx)
+        x = cp.linspace(0, Lx, params.nx, endpoint=False)
+        y = cp.linspace(0, Ly, params.ny, endpoint=False)
+        self.X, self.Y = cp.meshgrid(x, y, indexing="xy")
+
+
+# ============================================================
+#   MATERIAL & LASER PARAMETERS
+# ============================================================
+
+class PhysParams:
+    def __init__(self, rho, Ceff, k,
+                 P, Absorptivity, r_b, x0, y0, vx,
+                 DeltaH_LV=7.41e6, R_v=150.0, T0=300.0,
+                 T_boil=3090.0, T_liquidus=1800.0, T_solidus=1700.0):
+
+        self.rho = rho
+        self.Ceff = Ceff
+        self.k = k
+
+        self.P = P
+        self.Absorptivity = Absorptivity
+        self.r_b = r_b
+        self.x0 = x0
+        self.y0 = y0
+        self.vx = vx
+
+        self.DeltaH_LV = DeltaH_LV
+        self.R_v = R_v
+        self.T0 = T0
+        self.T_boil = T_boil
+        self.T_liquidus = T_liquidus
+        self.T_solidus = T_solidus
+
+
+# ============================================================
+#   NUMERICAL PARAMETERS
+# ============================================================
 
 class NumericalParams:
-    """Container for numerical and modal parameters."""
-    def __init__(self, dt: float, t_final: float, nx: int, ny: int, nz: int):
-        self.dt, self.t_final = dt, t_final
-        self.nx, self.ny, self.nz = nx, ny, nz
-        # K and KK will be set later in run_simulation
-        self.K = None
+    def __init__(self, dt, t_final, nx, ny, nz, debug=False):
+        self.dt = dt
+        self.t_final = t_final
+        self.nx = nx
+        self.ny = ny
+        self.nz = nz
+        self.debug = debug
+
+        self.K = None   # CPU arrays (nz, ny, nx)
         self.KK = None
-        self.phi_p0_tile = None
 
-# -------------------------
-# Eigenfunctions
-# -------------------------
-def phi_matrix(n, L):
-    """Return grid points and cosine basis matrix."""
-    x = np.linspace(L/(2*n), L-L/(2*n), n)
-    m = np.arange(n).reshape(-1,1)
-    # The normalization constant is implicitly handled here
-    pref = np.sqrt(2.0 / L)
-    phi = pref * np.cos(m * np.pi * x / L)
-    phi[0, :] = 1.0 / np.sqrt(L) # Correct normalization for m=0
-    return x, phi
 
-def phi_p_zero(nz, Lz):
-    """Phi_p(0) for z=0 plane (The value of the eigenfunction at z=0)."""
-    phi0 = np.sqrt(2.0 / Lz) * np.ones(nz)
-    phi0[0] = 1.0 / np.sqrt(Lz)
-    return phi0
+# ============================================================
+#   COSINE NORMALIZATION COEFFICIENTS
+# ============================================================
 
-# -------------------------
-# Heat fluxes (Fixed Source)
-# -------------------------
-def q_laser_field(x, y, t, params: Params):
-    """Gaussian laser flux at top surface (W/m²). For minimal case, let's fix it at t=0."""
-    x0t = 0.0 # Fixed laser position for simplicity
-    return (2 * params.Absorptivity * params.P / (np.pi * params.r_b ** 2) *
-            np.exp(-2 * (x**2 + y**2) / params.r_b**2))
+def C_coef(N, L):
+    C = np.sqrt(2.0 / L) * np.ones(N)
+    C[0] = np.sqrt(1.0 / L)
+    return C
 
-def dct_projection(q, params: Params, phi_p0_tile: np.ndarray):
-    """2D DCT projection of fixed heat flux onto modal basis."""
-    
-    # 1. 2D DCT of the spatial surface flux (q has shape (ny, nx))
-    q_dct = dctn(q, type=2, norm='backward', workers=-1)
-    
-    # 2. Normalization factor from the spatial integral/discretization
-    nx, ny = q.shape[1], q.shape[0]
-    # For DCT-II with norm='backward', the total scaling includes L_x*L_y and sqrt(N_x*N_y)
-    # The DCT library choice handles some scaling; we add the physical Lx*Ly factor.
-    # The original script had: pref = np.sqrt(params.Lx * params.Ly) / np.sqrt(nx * ny) 
-    # Let's simplify this by applying the geometric factor needed to match the basis normalization.
-    pref = np.sqrt(params.Lx * params.Ly) / (nx * ny) # Simplification for normalization consistency
 
-    # 3. Project onto the z-modes by multiplying by Phi_p(0)
-    # S has shape (nz, ny, nx)
-    S = (phi_p0_tile * pref * q_dct[None, :, :]).astype(np.float64)
-    
-    return S.ravel(order='C')
+# ============================================================
+#   HEAT FLUX (GPU)
+# ============================================================
 
-# -------------------------
-# Temperature reconstruction
-# -------------------------
-def reconstruct_temperature_field(a, nx, ny, nz, phi_x, phi_y, phi_p0_tile):
-    """Vectorized reconstruction T(x,y) at z=0 from modal coefficients."""
-    A = a.reshape((nz, ny, nx), order='C')
-    # Use the pre-tiled phi_p0_tile for the sum over z-modes
-    B = np.sum(phi_p0_tile * A, axis=0)
-    T = phi_y.T @ (B @ phi_x)
+def q_laser(X, Y, t, phys):
+    x0t = phys.x0 + phys.vx * t
+    rb = phys.r_b
+    return (phys.Absorptivity * 2 * phys.P / (np.pi * rb**2)) \
+            * cp.exp(-2 * ((X - x0t)**2 + (Y - phys.y0)**2) / rb**2)
+
+
+def q_evap_point(T: np.ndarray, phys: PhysParams) -> np.ndarray:
+    Lv, Rv, Tb = phys.DeltaH_LV, phys.R_v, phys.T_boil
+    #T_safe = np.maximum(T, 1.0)
+    q = 0.82 * Lv / np.sqrt(2 * np.pi * Rv * T) * np.exp((Lv / (Rv * Tb)) * (1.0 - Tb / T))
+    q[T < Tb] = 0.0
+    return q
+
+# ============================================================
+#   DCT-II 2D (CPU)
+# ============================================================
+
+def DCT_II(q):
+    q_cpu = cp.asnumpy(q)             # shape (ny, nx)
+    return dctn(q_cpu, type=2, norm='backward', workers=-1)
+
+
+# ============================================================
+#   PRECOMPUTE 3D K / KK (CPU)
+# ============================================================
+
+def precompute_K_KK(phys, num, geom):
+    nx, ny, nz = num.nx, num.ny, num.nz
+    Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
+    dt = num.dt
+
+    m = np.arange(nx)[None, None, :]
+    n = np.arange(ny)[None, :, None]
+    p = np.arange(nz)[:, None, None]
+
+    mu = (m * np.pi / Lx)**2 + (n * np.pi / Ly)**2 + (p * np.pi / Lz)**2
+    lambda_j = (phys.k / (phys.rho * phys.Ceff)) * mu
+
+    K = np.exp(-lambda_j * dt)
+    K[0, 0, 0] = 1.0
+
+    KK = np.zeros_like(K)
+    mask = lambda_j > 0
+    KK[mask] = (1 - K[mask]) / (phys.rho * phys.Ceff * lambda_j[mask])
+    KK[~mask] = dt / (phys.rho * phys.Ceff)
+
+    return K, KK
+
+
+# ============================================================
+#   BUILD 3D SOURCE TERM S (CPU)
+# ============================================================
+
+def forcing_S(q, phys, num, geom):
+    nx, ny, nz = num.nx, num.ny, num.nz
+    dx, dy = geom.Lx / nx, geom.Ly / ny
+
+    q_dct = DCT_II(q)    # shape (ny, nx)
+
+    Cm = C_coef(nx, geom.Lx)
+    Cn = C_coef(ny, geom.Ly)
+    Cp = C_coef(nz, geom.Lz)
+
+    # Broadcast to shape (nz, ny, nx)
+    S = Cp[:, None, None] * Cn[None, :, None] * Cm[None, None, :]
+    S *= (dx * dy / 16) * q_dct[None, :, :]
+
+    return S
+
+
+# ============================================================
+#   TIME STEP (CPU)
+# ============================================================
+
+def time_step(a, t, phys, num, geom):
+    q = q_laser(geom.X, geom.Y, t, phys)  # GPU array (ny, nx)
+    S = forcing_S(q, phys, num, geom)     # CPU array (nz, ny, nx)
+    return num.K * a + num.KK * S          # CPU operation
+
+def time_step(a, t, phys, num, geom, epsilon=1e-2):
+    n_iter_max = 20
+    # GPU laser field
+    q_las = q_laser(geom.X, geom.Y, t, phys)         # (ny, nx)
+    # Initial modal source term (DCT)
+    S = forcing_S(q_las, phys, num, geom)        # CPU array (nz, ny, nx)
+    aK = a * num.K
+    a_temp = aK + num.KK * S  # first shot with laser   
+    T_temp = reconstruct_temperature(a_temp, num, geom).get() 
+    print("Iterating")
+    for k in range(n_iter_max):
+        q_evap = q_evap_point(T_temp, phys)          # CPU (ny, nx)
+        # Update DCT source term with evaporation
+        S = forcing_S(cp.asarray(q_las.get() - q_evap), phys, num, geom)
+        # Reconstruct 2D temperature on top
+        a_temp = aK + num.KK * S 
+        T_temp_old = T_temp
+        T_temp = reconstruct_temperature(a_temp, num, geom).get() 
+        # Convergence check
+        # temp debug
+        print("iteration : ", k)
+        print("Tmax = ",np.max(np.abs(T_temp)))
+        if np.max(np.abs(T_temp - T_temp_old)) < epsilon:
+            break
+        T_temp_old = T_temp
+        
+    return a_temp
+
+
+# ============================================================
+#   RUN SIMULATION
+# ============================================================
+
+def run_simulation(phys, num, geom):
+    print("Precomputing K, KK ...")
+    K, KK = precompute_K_KK(phys, num, geom)
+    num.K = K
+    num.KK = KK
+
+    print("Allocating modal field a (CPU)...")
+    a = np.zeros((num.nz, num.ny, num.nx), dtype=np.float64)  # (nz, ny, nx)
+    a[0,0,0] = phys.T0 * np.sqrt(geom.Lx * geom.Ly * geom.Lz)
+
+    t = 0.0
+    nsteps = int(np.ceil(num.t_final / num.dt))
+    for step in range(nsteps):
+        if num.debug:
+            print(f"t = {t:.6f}")
+        a = time_step(a, t, phys, num, geom)
+        t += num.dt
+
+    return a
+
+
+# ============================================================
+#   RECONSTRUCT TEMPERATURE FIELD (GPU)
+# ============================================================
+
+def reconstruct_temperature(a, num, geom):
+    a_gpu = cp.asarray(a)  # Send modal coefficients to GPU
+
+    nx, ny, nz = num.nx, num.ny, num.nz
+
+    # --- Z sum ---
+    Cp = cp.asarray(C_coef(nz, geom.Lz))           # shape (nz,)
+    a2d = cp.tensordot(Cp, a_gpu, axes=(0, 0))     # shape (ny, nx)
+
+    # --- X,Y normalization ---
+    Cm = cp.asarray(C_coef(nx, geom.Lx))           # shape (nx,)
+    Cn = cp.asarray(C_coef(ny, geom.Ly))           # shape (ny,)
+
+    x_vals = geom.X[0, :]
+    y_vals = geom.Y[:, 0]
+
+    Bx = cp.cos(cp.pi * cp.arange(nx)[:, None] * x_vals[None, :] / geom.Lx)  # (nx, nx)
+    By = cp.cos(cp.pi * cp.arange(ny)[:, None] * y_vals[None, :] / geom.Ly)  # (ny, ny)
+
+    A = (Cn[:, None] * a2d) * Cm[None, :]
+    T = By.T.dot(A).dot(Bx)
     return T
 
-# -------------------------
-# Main simulation runner
-# -------------------------
-def run_simulation(params: Params, num_params: NumericalParams):
-    """Run time-stepping simulation with fixed source and return final coefficients."""
-    nx, ny, nz = num_params.nx, num_params.ny, num_params.nz
-    
-    # Initial state: a[0] = T0 * sqrt(Lx*Ly*Lz) (Constant T0 modal coefficient)
-    a = np.zeros(nx*ny*nz, dtype=np.float64)
-    a[0] = params.T0 * np.sqrt(params.Lx*params.Ly*params.Lz)
 
-    # 1. Precompute mode matrices
-    x, phi_x = phi_matrix(nx, params.Lx)
-    y, phi_y = phi_matrix(ny, params.Ly)
-    phi_p0 = phi_p_zero(nz, params.Lz)
-    phi_p0_tile = phi_p0[:, None, None]
-    num_params.phi_p0_tile = phi_p0_tile
-    X, Y = np.meshgrid(x, y, indexing='xy')
-    
-    # 2. Precompute K and KK (Normalization calculated in ONE PLACE)
-    p = np.arange(nz)[:, None, None]
-    n = np.arange(ny)[None, :, None]
-    m = np.arange(nx)[None, None, :]
-    
-    alpha = params.k / (params.rho * params.Ceff)
-    lam = (m * np.pi / params.Lx) ** 2 + (n * np.pi / params.Ly) ** 2 + (p * np.pi / params.Lz) ** 2
-    lam_flat = lam.ravel(order='C')
+# ============================================================
+#   SENSITIVITY ANALYSIS OVER nz
+# ============================================================
+"""
+phys = PhysParams(rho=7900, Ceff=500, k=14, T0=300.0,
+                  P=200.0, Absorptivity=0.30, r_b=0.00006,
+                  x0=0.001, y0=0.0025, vx=0.5)
 
-    # K (Homogeneous Decay Factor)
-    K = np.ones_like(lam_flat, dtype=np.float64)
-    mask_nonzero_lam = lam_flat > 0
-    K[mask_nonzero_lam] = np.exp(-alpha * lam_flat * num_params.dt)[mask_nonzero_lam]
+nz_values = [50, 100, 200, 400, 800, 1200, 2000]  # choose feasible values
+results_Tmax = []
+results_width = []
+results_length = []
 
-    # C Factors (Normalization)
-    delta_m0 = (m == 0).astype(np.float64)
-    delta_n0 = (n == 0).astype(np.float64)
-    delta_p0 = (p == 0).astype(np.float64)
+def meltpool_metrics(T, phys, geom):
+    mask = T > phys.T_liquidus
+    if not np.any(mask):
+        return np.max(T), 0.0, 0.0
 
-    Cm_sqrt = np.sqrt(2.0 - delta_m0) / np.sqrt(params.Lx)
-    Cn_sqrt = np.sqrt(2.0 - delta_n0) / np.sqrt(params.Ly)
-    Cp_sqrt = np.sqrt(2.0 - delta_p0) / np.sqrt(params.Lz)
-    
-    # S_factor_3D is the product C_m * C_n * C_p (The full normalization constant)
-    S_factor_3D = Cm_sqrt * Cn_sqrt * Cp_sqrt
-    S_factor = S_factor_3D.ravel(order='C')
-    
-    # KK (Fixed Source Forcing Factor)
-    KK = np.zeros_like(lam_flat, dtype=np.float64)
-    mask_singularity = lam_flat == 0
+    # width along y
+    y_mask = np.any(mask, axis=1)
+    y_coords = geom.Y.get()[:, 0]
+    width = y_coords[y_mask].max() - y_coords[y_mask].min()
 
-    # Non-singular case (lambda > 0)
-    KK[mask_nonzero_lam] = S_factor[mask_nonzero_lam] * (1.0 - K[mask_nonzero_lam]) / (lam_flat[mask_nonzero_lam] * params.k)
-    # Singular case (lambda = 0)
-    KK[mask_singularity] = S_factor[mask_singularity] * num_params.dt / (params.rho * params.Ceff)
-    
-    num_params.K = K
-    num_params.KK = KK
+    # length along x
+    x_mask = np.any(mask, axis=0)
+    x_coords = geom.X.get()[0, :]
+    length = x_coords[x_mask].max() - x_coords[x_mask].min()
 
-    # 3. Precompute the constant source term projection
-    q_surface = q_laser_field(X, Y, t=0.0, params=params)
-    q_dct_flat = dct_projection(q_surface, params, phi_p0_tile)
+    return np.max(T), width, length
 
-    # 4. Time Stepping Loop (Simple explicit update)
-    t = 0.0
-    while t < num_params.t_final - 1e-12:
-        # Time step: a(t+dt) = a(t) * K + KK * Q_source
-        a = a * num_params.K + num_params.KK * q_dct_flat
-        t += num_params.dt
 
-    # 5. Final Reconstruction
-    T_final = reconstruct_temperature_field(a, nx, ny, nz, phi_x, phi_y, phi_p0_tile)
-    
-    return a, T_final
+for nz in nz_values:
+    print(f"\n=== Running simulation for nz = {nz} ===")
+    num = NumericalParams(dt=0.0002, t_final=0.002, nx=512, ny=256, nz=nz, debug=True)
+    geom = GeomParams(Lx=0.01, Ly=0.005, Lz=0.005, params=num)
 
-# -------------------------
-# Example Execution
-# -------------------------
-if __name__ == '__main__':
-    # Define parameters (example values)
-    params = Params(Lx=0.01, Ly=0.005, Lz=0.01, rho=7900, Ceff=500, k=14, T0=300.0,
-                    P=200.0, Absorptivity=0.30, r_b=0.00006)
+    a_final = run_simulation(phys, num, geom)
+    T_final = reconstruct_temperature(a_final, num, geom).get()  # (ny, nx)
 
-    num_params = NumericalParams(
-        dt=0.0001,
-        t_final=0.001,
-        nx=512, # Reduced size for fast minimal run
-        ny=512,
-        nz=16
-    )
+    Tmax, W, L = meltpool_metrics(T_final, phys, geom)
+    results_Tmax.append(Tmax)
+    results_width.append(W * 1e3)   # mm
+    results_length.append(L * 1e3)
 
-    print(f"Running minimal simulation with T0={params.T0} K, dt={num_params.dt} s, t_final={num_params.t_final} s.")
+    print(f"Tmax = {Tmax:.1f} K, Width = {W*1e3:.3f} mm, Length = {L*1e3:.3f} mm")
 
-    a_final, T_final = run_simulation(params, num_params)
-    
-    print(f"\nSimulation finished.")
-    print(f"Final max temperature Tmax = {T_final.max():.2f} K")
 
-    # Optional visualization
-    # import matplotlib.pyplot as plt
-    # x, _ = phi_matrix(num_params.nx, params.Lx)
-    # y, _ = phi_matrix(num_params.ny, params.Ly)
-    # X, Y = np.meshgrid(x * 1e3, y * 1e3) # Convert to mm
-    # plt.figure()
-    # plt.contourf(X, Y, T_final, levels=50, cmap='inferno')
-    # plt.colorbar(label='Temperature (K)')
-    # plt.xlabel('x (mm)')
-    # plt.ylabel('y (mm)')
-    # plt.title('Minimal Final Temperature Field (z=0)')
-    # plt.gca().set_aspect('equal')
-    # plt.show()
+# ----------- PLOTS ---------------
+plt.figure(figsize=(12, 4))
+plt.subplot(1, 3, 1)
+plt.plot(nz_values, results_Tmax, "o-")
+plt.xlabel("nz")
+plt.ylabel("Max temperature (K)")
+plt.title("Tmax vs nz")
+
+plt.subplot(1, 3, 2)
+plt.plot(nz_values, results_width, "o-")
+plt.xlabel("nz")
+plt.ylabel("Melt pool width (mm)")
+plt.title("Width vs nz")
+
+plt.subplot(1, 3, 3)
+plt.plot(nz_values, results_length, "o-")
+plt.xlabel("nz")
+plt.ylabel("Melt pool length (mm)")
+plt.title("Length vs nz")
+
+plt.tight_layout()
+plt.show()
+"""
+
+
+# ============================================================
+#   MAIN SCRIPT
+# ============================================================
+
+phys = PhysParams(rho=7900, Ceff=500, k=14, T0=300.0,
+                  P=200.0, Absorptivity=0.30, r_b=0.00006,
+                  x0=0.001, y0=0.0025, vx=0.5)
+
+num = NumericalParams(dt=0.0002, t_final=0.002,
+                      nx=512, ny=256, nz=1000)
+
+geom = GeomParams(Lx=0.01, Ly=0.005, Lz=0.005, params=num)
+
+a_final = run_simulation(phys, num, geom)
+T_final = reconstruct_temperature(a_final, num, geom)
+
+# CPU for plotting
+X = geom.X.get()
+Y = geom.Y.get()
+T = T_final.get()
+
+# Compute q_laser and q_evap for final time
+q_las = q_laser(geom.X, geom.Y, num.t_final, phys).get()  # CPU array
+q_eva = q_evap_point(T, phys)                             # CPU array
+
+fig = plt.figure(figsize=(14, 10))
+gs = fig.add_gridspec(2, 2, height_ratios=[1, 1])  # 2 rows, 2 cols, top bigger
+
+# --- Temperature (top, spanning both columns) ---
+ax0 = fig.add_subplot(gs[0, :])
+im0 = ax0.contourf(X*1e3, Y*1e3, T, levels=50, cmap='hot')
+fig.colorbar(im0, ax=ax0, label='Temperature (K)')
+ax0.set_title("Final Temperature Field")
+ax0.set_xlabel("x (mm)")
+ax0.set_ylabel("y (mm)")
+ax0.set_aspect('equal')
+
+# --- Laser flux (bottom left) ---
+ax1 = fig.add_subplot(gs[1, 0])
+im1 = ax1.contourf(X*1e3, Y*1e3, q_las, levels=50, cmap='inferno')
+fig.colorbar(im1, ax=ax1, label='q_laser (W/m²)')
+ax1.set_title("Laser Heat Flux")
+ax1.set_xlabel("x (mm)")
+ax1.set_ylabel("y (mm)")
+ax1.set_aspect('equal')
+
+# --- Evaporative flux (bottom right) ---
+ax2 = fig.add_subplot(gs[1, 1])
+im2 = ax2.contourf(X*1e3, Y*1e3, q_eva, levels=50, cmap='inferno')
+fig.colorbar(im2, ax=ax2, label='q_evap (W/m²)')
+ax2.set_title("Evaporative Flux")
+ax2.set_xlabel("x (mm)")
+ax2.set_ylabel("y (mm)")
+ax2.set_aspect('equal')
+
+plt.tight_layout()
+plt.show()
