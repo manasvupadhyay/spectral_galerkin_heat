@@ -1,7 +1,28 @@
 import numpy as np
 from scipy.fft import dctn
-import cupy as cp
 import matplotlib.pyplot as plt
+
+# Try to use CuPy (GPU). If unavailable, fall back to NumPy (CPU).
+try:
+    import cupy as cp
+    USE_CUPY = True
+except Exception:
+    import numpy as cp
+    USE_CUPY = False
+
+# Compatibility helpers: convert device arrays to CPU numpy arrays.
+if USE_CUPY:
+    asnumpy = cp.asnumpy
+    def to_cpu(x):
+        try:
+            return x.get()
+        except Exception:
+            return cp.asnumpy(x)
+else:
+    def asnumpy(x):
+        return x
+    def to_cpu(x):
+        return x
 
 # ============================================================
 #  GEOMETRY PARAMETERS (GPU only for 2D fields)
@@ -98,7 +119,7 @@ def q_evap_point(T: np.ndarray, phys: PhysParams) -> np.ndarray:
 # ============================================================
 
 def DCT_II(q):
-    q_cpu = cp.asnumpy(q)             # shape (ny, nx)
+    q_cpu = asnumpy(q)             # shape (ny, nx)
     return dctn(q_cpu, type=2, norm='backward', workers=-1)
 
 
@@ -159,7 +180,7 @@ def time_step(a, t, phys, num, geom):
     S = forcing_S(q, phys, num, geom)     # CPU array (nz, ny, nx)
     return num.K * a + num.KK * S          # CPU operation
 
-def time_step(a, t, phys, num, geom, epsilon=1e-2):
+def time_step(a, t, phys, num, geom, epsilon=1e-2, debug=False):
     n_iter_max = 20
     # GPU laser field
     q_las = q_laser(geom.X, geom.Y, t, phys)         # (ny, nx)
@@ -167,25 +188,26 @@ def time_step(a, t, phys, num, geom, epsilon=1e-2):
     S = forcing_S(q_las, phys, num, geom)        # CPU array (nz, ny, nx)
     aK = a * num.K
     a_temp = aK + num.KK * S  # first shot with laser   
-    T_temp = reconstruct_temperature(a_temp, num, geom).get() 
-    print("Iterating")
+    T_temp = to_cpu(reconstruct_temperature(a_temp, num, geom))
+    if debug:
+        print("Iterating")
     for k in range(n_iter_max):
         q_evap = q_evap_point(T_temp, phys)          # CPU (ny, nx)
         # Update DCT source term with evaporation
-        S = forcing_S(cp.asarray(q_las.get() - q_evap), phys, num, geom)
+        q_diff = to_cpu(q_las) - q_evap
+        S = forcing_S(cp.asarray(q_diff), phys, num, geom)
         # Reconstruct 2D temperature on top
         a_temp = aK + num.KK * S 
         T_temp_old = T_temp
-        T_temp = reconstruct_temperature(a_temp, num, geom).get() 
-        # Convergence check
-        # temp debug
-        print("iteration : ", k)
-        print("Tmax = ",np.max(np.abs(T_temp)))
+        T_temp = to_cpu(reconstruct_temperature(a_temp, num, geom))
+        if debug:
+            print("iteration : ", k)
+            print("Tmax = ",np.max(np.abs(T_temp)))
         if np.max(np.abs(T_temp - T_temp_old)) < epsilon:
             break
         T_temp_old = T_temp
         
-    return a_temp
+    return a_temp, T_temp
 
 
 # ============================================================
@@ -197,6 +219,7 @@ def run_simulation(phys, num, geom):
     K, KK = precompute_K_KK(phys, num, geom)
     num.K = K
     num.KK = KK
+    T_top_history = []
 
     print("Allocating modal field a (CPU)...")
     a = np.zeros((num.nz, num.ny, num.nx), dtype=np.float64)  # (nz, ny, nx)
@@ -205,12 +228,11 @@ def run_simulation(phys, num, geom):
     t = 0.0
     nsteps = int(np.ceil(num.t_final / num.dt))
     for step in range(nsteps):
-        if num.debug:
-            print(f"t = {t:.6f}")
-        a = time_step(a, t, phys, num, geom)
+        print(f"t = {t:.6f}")
+        a, T_top = time_step(a, t, phys, num, geom, debug=num.debug)
         t += num.dt
-
-    return a
+        T_top_history.append(T_top)
+    return a, T_top_history
 
 
 # ============================================================
@@ -319,23 +341,30 @@ plt.show()
 
 phys = PhysParams(rho=7900, Ceff=500, k=14, T0=300.0,
                   P=200.0, Absorptivity=0.30, r_b=0.00006,
-                  x0=0.001, y0=0.0025, vx=0.5)
+                  x0=0.001, y0=0.0025, vx=0.8)
 
-num = NumericalParams(dt=0.0002, t_final=0.002,
+num = NumericalParams(dt=0.00001, t_final=0.005,
                       nx=512, ny=256, nz=1000)
 
-geom = GeomParams(Lx=0.01, Ly=0.005, Lz=0.005, params=num)
+geom = GeomParams(Lx=0.01, Ly=0.005, Lz=0.0025, params=num)
 
-a_final = run_simulation(phys, num, geom)
-T_final = reconstruct_temperature(a_final, num, geom)
+a_final, T_top_history = run_simulation(phys, num, geom)
+T_final = T_top_history[-1]
+# Probing a point on top surface
+# chose x probe so that temperature max is reached on a chosen time step
+x_probe = 20 * phys.vx * num.dt # = 20 * 0.8 * 0.00005 = 0.0008
+y_probe = 0.0025
+ix = int(x_probe / geom.Lx * num.nx)
+iy = int(y_probe / geom.Ly * num.ny)
+T_probe = [T_top[iy, ix] for T_top in T_top_history]
 
 # CPU for plotting
-X = geom.X.get()
-Y = geom.Y.get()
-T = T_final.get()
+X = to_cpu(geom.X)
+Y = to_cpu(geom.Y)
+T = to_cpu(T_final)
 
 # Compute q_laser and q_evap for final time
-q_las = q_laser(geom.X, geom.Y, num.t_final, phys).get()  # CPU array
+q_las = to_cpu(q_laser(geom.X, geom.Y, num.t_final, phys))  # CPU array
 q_eva = q_evap_point(T, phys)                             # CPU array
 
 fig = plt.figure(figsize=(14, 10))
@@ -370,3 +399,15 @@ ax2.set_aspect('equal')
 
 plt.tight_layout()
 plt.show()
+
+# plot temperature at probe point over time
+plt.figure(figsize=(8, 5))
+time_array = np.arange(len(T_probe)) * num.dt
+plt.plot(time_array * 1e3, T_probe, "-o")
+plt.xlabel("Time (ms)")
+plt.ylabel("Temperature at probe point (K)")
+plt.title("Temperature at Probe Point Over Time")
+plt.grid()
+plt.show()
+
+
