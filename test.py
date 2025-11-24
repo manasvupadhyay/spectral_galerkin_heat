@@ -29,16 +29,44 @@ else:
 # ============================================================
 
 class GeomParams:
-    def __init__(self, Lx, Ly, Lz, params):
+    def __init__(self, Lx, Ly, Lz, num, phys):
         self.Lx = Lx
         self.Ly = Ly
         self.Lz = Lz
 
         # GPU 2D grid (ny, nx)
-        x = cp.linspace(0, Lx, params.nx, endpoint=False)
-        y = cp.linspace(0, Ly, params.ny, endpoint=False)
+        x = cp.linspace(0, Lx, num.nx, endpoint=False)
+        y = cp.linspace(0, Ly, num.ny, endpoint=False)
         self.X, self.Y = cp.meshgrid(x, y, indexing="xy")
 
+        # A few numerical checks to ensure convergence
+        # Laser stop should be resolved in x and y 
+        dx = Lx / num.nx
+        dy = Ly / num.ny
+
+        rb = phys.r_b
+        vx = phys.vx
+        k_phys = phys.k
+        rho_phys = phys.rho
+        Ceff_phys = phys.Ceff
+
+        v_res_x = dx / num.dt
+        lambda_max_z = (k_phys / (rho_phys * Ceff_phys)) * (np.pi * num.nz / Lz)**2
+
+        print(
+            f"Numerical checks -> dx={dx:.3e}, dy={dy:.3e}, r_b={rb}, v_res_x={v_res_x:.3e}, "
+            f"phys.vx={vx}, lambda_max_z={lambda_max_z}, lambda_max_dt(wanted >2)={(lambda_max_z * num.dt) if lambda_max_z is not None else None}"
+        )
+
+        # Now assert with safety guards (phys may not be defined during import-time checks)
+        assert dx < rb / 3, "dx too large for laser spot size"
+        assert dy < rb / 3, "dy too large for laser spot size"
+
+        # Check speed resolution
+        assert vx < v_res_x, "Laser speed too high for dx resolution"
+
+        # Check good convergence in z direction (lambda * Delta t < 2)
+        assert lambda_max_z * num.dt > 2.0, "Time step too large for z resolution"
 
 # ============================================================
 #   MATERIAL & LASER PARAMETERS
@@ -188,7 +216,7 @@ def time_step(a, t, phys, num, geom, epsilon=1e-2, debug=False):
     S = forcing_S(q_las, phys, num, geom)        # CPU array (nz, ny, nx)
     aK = a * num.K
     a_temp = aK + num.KK * S  # first shot with laser   
-    T_temp = to_cpu(reconstruct_temperature(a_temp, num, geom))
+    T_temp = to_cpu(reconstruct_temperature_top(a_temp, num, geom))
     if debug:
         print("Iterating")
     for k in range(n_iter_max):
@@ -199,7 +227,7 @@ def time_step(a, t, phys, num, geom, epsilon=1e-2, debug=False):
         # Reconstruct 2D temperature on top
         a_temp = aK + num.KK * S 
         T_temp_old = T_temp
-        T_temp = to_cpu(reconstruct_temperature(a_temp, num, geom))
+        T_temp = to_cpu(reconstruct_temperature_top(a_temp, num, geom))
         if debug:
             print("iteration : ", k)
             print("Tmax = ",np.max(np.abs(T_temp)))
@@ -239,7 +267,11 @@ def run_simulation(phys, num, geom):
 #   RECONSTRUCT TEMPERATURE FIELD (GPU)
 # ============================================================
 
-def reconstruct_temperature(a, num, geom):
+def reconstruct_temperature_top(a, num, geom):
+    """Reconstruct the top surface temperature (y,x) from modal coefficients `a`.
+
+    Returns an array of shape (ny, nx). Works with CuPy or NumPy (via fallback).
+    """
     a_gpu = cp.asarray(a)  # Send modal coefficients to GPU
 
     nx, ny, nz = num.nx, num.ny, num.nz
@@ -261,6 +293,88 @@ def reconstruct_temperature(a, num, geom):
     A = (Cn[:, None] * a2d) * Cm[None, :]
     T = By.T.dot(A).dot(Bx)
     return T
+
+
+def reconstruct_temperature_xz(a, num, geom, phys, y0=None, mode='full_field'):
+    """Reconstruct an x-z slice of the temperature at a given y position.
+    Not optimized, as we call it only for analysis.
+
+    Returns (x_vals, z_vals, T_xz) where T_xz has shape (nz, nx_selected)
+    and x_vals, z_vals are numpy arrays in meters.
+    """
+    if y0 is None:
+        y0 = phys.y0
+
+    nx, ny, nz = num.nx, num.ny, num.nz
+
+    # Precompute normalization and basis functions
+    Cp = cp.asarray(C_coef(nz, geom.Lz))
+    Cm = cp.asarray(C_coef(nx, geom.Lx))
+    Cn = cp.asarray(C_coef(ny, geom.Ly))
+
+    # discrete modal indices
+    n_idx = cp.arange(ny)
+    m_idx = cp.arange(nx)
+
+    # evaluate cos(n*pi*y0/Ly) * Cn[n]
+    cos_n_y0 = Cn * cp.cos(cp.pi * n_idx * (y0) / geom.Ly)   # shape (ny,)
+
+    x_vals = to_cpu(geom.X[0, :])
+    z_vals = np.linspace(0.0, geom.Lz, nz)
+
+    a_gpu = cp.asarray(a)  # (nz, ny, nx)
+
+    # For each p (z-mode) compute temperature along x at y=y0
+    T_xz = []
+    for p in range(nz):
+        a_p = a_gpu[p, :, :]  # (ny, nx)
+        # sum over n: S_m = sum_n Cn[n]*cos(n*pi*y0/Ly) * a_p[n,m]
+        S_m = (cos_n_y0[:, None] * a_p).sum(axis=0)   # (nx,)
+        # multiply by Cm and project on x basis
+        x_cos = cp.cos(cp.pi * m_idx[:, None] * geom.X[0, :][None, :] / geom.Lx)  # (nx, nx)
+        T_p_x = Cp[p] * (Cm[:, None] * S_m[:, None]).sum(axis=0)  # crude: will compute below
+        # Alternative: perform explicit formula: T_p_x = Cp[p] * sum_m (Cm[m]*S_m[m]*cos(m*pi*x/Lx))
+        T_p_x = Cp[p] * (Cm * S_m) @ x_cos  # (nx,)
+        T_xz.append(T_p_x)
+
+    T_xz = cp.stack(T_xz, axis=0)  # (nz, nx)
+
+    # Convert to CPU numpy
+    T_xz = to_cpu(T_xz)
+
+    # If meltpool mode, crop x-range around laser spot
+    if mode == 'meltpool':
+        # Reconstruct top temperature to estimate meltpool length
+        T_top = to_cpu(reconstruct_temperature_top(a, num, geom))
+        mask = T_top > phys.T_liquidus
+        x_coords = to_cpu(geom.X[0, :])
+        if np.any(mask):
+            x_mask = np.any(mask, axis=0)
+            x_min_mp = x_coords[x_mask].min()
+            x_max_mp = x_coords[x_mask].max()
+            mp_length = x_max_mp - x_min_mp
+        else:
+            # fallback small length
+            mp_length = geom.Lx * 0.1
+
+        half_span = 1.5 * mp_length / 2.0
+        x_center = phys.x0
+        x_min = max(0.0, x_center - half_span)
+        x_max = min(geom.Lx, x_center + half_span)
+
+        # select indices
+        ix_min = int(np.searchsorted(x_coords, x_min))
+        ix_max = int(np.searchsorted(x_coords, x_max))
+        if ix_min == ix_max:
+            ix_min = max(0, ix_min - 1)
+            ix_max = min(nx, ix_max + 1)
+
+        x_sel = x_coords[ix_min:ix_max]
+        T_xz = T_xz[:, ix_min:ix_max]
+        return x_sel, z_vals, T_xz
+
+    # full field
+    return x_vals, z_vals, T_xz
 
 
 # ============================================================
@@ -343,21 +457,23 @@ phys = PhysParams(rho=7900, Ceff=500, k=14, T0=300.0,
                   P=200.0, Absorptivity=0.30, r_b=0.00006,
                   x0=0.001, y0=0.0025, vx=0.8)
 
-num = NumericalParams(dt=0.00001, t_final=0.005,
+num = NumericalParams(dt=0.0000075, t_final=0.005,
                       nx=512, ny=256, nz=1000)
 
-geom = GeomParams(Lx=0.01, Ly=0.005, Lz=0.0025, params=num)
+geom = GeomParams(Lx=0.01, Ly=0.005, Lz=0.0025, num=num, phys=phys)
 
 a_final, T_top_history = run_simulation(phys, num, geom)
+
 T_final = T_top_history[-1]
 # Probing a point on top surface
 # chose x probe so that temperature max is reached on a chosen time step
-x_probe = 20 * phys.vx * num.dt # = 20 * 0.8 * 0.00005 = 0.0008
+x_probe = 100 * phys.vx * num.dt # = 100 * 0.8 * 0.0000075 = 0.0006
 y_probe = 0.0025
 ix = int(x_probe / geom.Lx * num.nx)
 iy = int(y_probe / geom.Ly * num.ny)
 T_probe = [T_top[iy, ix] for T_top in T_top_history]
-
+# save probe history to csv
+np.savetxt("T_probe.csv", np.array(T_probe), delimiter=",")
 # CPU for plotting
 X = to_cpu(geom.X)
 Y = to_cpu(geom.Y)
@@ -370,14 +486,25 @@ q_eva = q_evap_point(T, phys)                             # CPU array
 fig = plt.figure(figsize=(14, 10))
 gs = fig.add_gridspec(2, 2, height_ratios=[1, 1])  # 2 rows, 2 cols, top bigger
 
-# --- Temperature (top, spanning both columns) ---
-ax0 = fig.add_subplot(gs[0, :])
+# --- Temperature (top left) ---
+ax0 = fig.add_subplot(gs[0, 0])
 im0 = ax0.contourf(X*1e3, Y*1e3, T, levels=50, cmap='hot')
 fig.colorbar(im0, ax=ax0, label='Temperature (K)')
 ax0.set_title("Final Temperature Field")
 ax0.set_xlabel("x (mm)")
 ax0.set_ylabel("y (mm)")
 ax0.set_aspect('equal')
+
+# --- Temperature xz slice (top right) ---
+ax1 = fig.add_subplot(gs[0, 1])
+x_vals, z_vals, T_xz = reconstruct_temperature_xz(a_final, num, geom, phys, y0=phys.y0, mode='meltpool')
+im1 = ax1.imshow(T_xz, aspect='auto',
+                   extent=[x_vals[0]*1e3, x_vals[-1]*1e3, z_vals[0]*1e3, z_vals[-1]*1e3],
+                   origin='lower', cmap='hot')
+fig.colorbar(im1, ax=ax1, label='Temperature (K)')
+ax1.set_title("Temperature x-z slice (y = {:.3f} m)".format(phys.y0))
+ax1.set_xlabel('x (mm)')
+ax1.set_ylabel('z (mm)')
 
 # --- Laser flux (bottom left) ---
 ax1 = fig.add_subplot(gs[1, 0])
