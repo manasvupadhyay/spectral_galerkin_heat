@@ -23,7 +23,12 @@ else:
         return x
     def to_cpu(x):
         return x
-
+    
+#make .out directory if not exists
+import os
+if not os.path.exists(".out"):
+    os.makedirs(".out")
+    
 # ============================================================
 #  GEOMETRY PARAMETERS (GPU only for 2D fields)
 # ============================================================
@@ -294,88 +299,126 @@ def reconstruct_temperature_top(a, num, geom):
     T = By.T.dot(A).dot(Bx)
     return T
 
-
 def reconstruct_temperature_xz(a, num, geom, phys, y0=None, mode='full_field'):
-    """Reconstruct an x-z slice of the temperature at a given y position.
-    Not optimized, as we call it only for analysis.
-
-    Returns (x_vals, z_vals, T_xz) where T_xz has shape (nz, nx_selected)
-    and x_vals, z_vals are numpy arrays in meters.
+    """Compact vectorized x-z slice at y=y0. Returns (x_vals, z_vals, T_xz).
     """
     if y0 is None:
         y0 = phys.y0
-
     nx, ny, nz = num.nx, num.ny, num.nz
 
-    # Precompute normalization and basis functions
     Cp = cp.asarray(C_coef(nz, geom.Lz))
     Cm = cp.asarray(C_coef(nx, geom.Lx))
     Cn = cp.asarray(C_coef(ny, geom.Ly))
 
-    # discrete modal indices
-    n_idx = cp.arange(ny)
-    m_idx = cp.arange(nx)
+    m = cp.arange(nx); n = cp.arange(ny); p = cp.arange(nz)
+    cos_n_y0 = Cn * cp.cos(cp.pi * n * y0 / geom.Ly)            # (ny,)
+    x_gpu = geom.X[0, :]
+    x_cos = cp.cos(cp.pi * m[:, None] * x_gpu[None, :] / geom.Lx)  # (nx, nx)
 
-    # evaluate cos(n*pi*y0/Ly) * Cn[n]
-    cos_n_y0 = Cn * cp.cos(cp.pi * n_idx * (y0) / geom.Ly)   # shape (ny,)
+    a_gpu = cp.asarray(a)                                        # (nz, ny, nx)
+    S = (a_gpu * cos_n_y0[None, :, None]).sum(axis=1) * Cm[None, :]  # (nz, nx)
+    T_p_x = (Cp[:, None] * (S @ x_cos))                             # (nz, nx)
 
-    x_vals = to_cpu(geom.X[0, :])
     z_vals = np.linspace(0.0, geom.Lz, nz)
+    cos_pz = cp.cos(cp.pi * p[:, None] * (cp.asarray(z_vals)[None, :]) / geom.Lz)  # (nz, nz)
+    T_xz = to_cpu(cos_pz.T @ T_p_x)  # (nz, nx)
+    x_vals = to_cpu(x_gpu)
 
-    a_gpu = cp.asarray(a)  # (nz, ny, nx)
-
-    # For each p (z-mode) compute temperature along x at y=y0
-    T_xz = []
-    for p in range(nz):
-        a_p = a_gpu[p, :, :]  # (ny, nx)
-        # sum over n: S_m = sum_n Cn[n]*cos(n*pi*y0/Ly) * a_p[n,m]
-        S_m = (cos_n_y0[:, None] * a_p).sum(axis=0)   # (nx,)
-        # multiply by Cm and project on x basis
-        x_cos = cp.cos(cp.pi * m_idx[:, None] * geom.X[0, :][None, :] / geom.Lx)  # (nx, nx)
-        T_p_x = Cp[p] * (Cm[:, None] * S_m[:, None]).sum(axis=0)  # crude: will compute below
-        # Alternative: perform explicit formula: T_p_x = Cp[p] * sum_m (Cm[m]*S_m[m]*cos(m*pi*x/Lx))
-        T_p_x = Cp[p] * (Cm * S_m) @ x_cos  # (nx,)
-        T_xz.append(T_p_x)
-
-    T_xz = cp.stack(T_xz, axis=0)  # (nz, nx)
-
-    # Convert to CPU numpy
-    T_xz = to_cpu(T_xz)
-
-    # If meltpool mode, crop x-range around laser spot
     if mode == 'meltpool':
-        # Reconstruct top temperature to estimate meltpool length
-        T_top = to_cpu(reconstruct_temperature_top(a, num, geom))
-        mask = T_top > phys.T_liquidus
-        x_coords = to_cpu(geom.X[0, :])
-        if np.any(mask):
-            x_mask = np.any(mask, axis=0)
-            x_min_mp = x_coords[x_mask].min()
-            x_max_mp = x_coords[x_mask].max()
-            mp_length = x_max_mp - x_min_mp
+        # Determine melt extents from the x-z slice itself
+        melt_mask_xz = T_xz >= phys.T_liquidus
+        if np.any(melt_mask_xz):
+            x_mask = np.any(melt_mask_xz, axis=0)
+            z_mask = np.any(melt_mask_xz, axis=1)
+            x_min0, x_max0 = x_vals[x_mask].min(), x_vals[x_mask].max()
+            z_min0, z_max0 = z_vals[z_mask].min(), z_vals[z_mask].max()
+            mp_len = x_max0 - x_min0
+            mp_depth = z_max0 - z_min0
         else:
-            # fallback small length
-            mp_length = geom.Lx * 0.1
+            # fallback to top-view estimate if slice has no melt
+            T_top = to_cpu(reconstruct_temperature_top(a, num, geom))
+            top_mask = np.any(T_top > phys.T_liquidus, axis=0)
+            if np.any(top_mask):
+                x_min0, x_max0 = x_vals[top_mask].min(), x_vals[top_mask].max()
+                mp_len = x_max0 - x_min0
+            else:
+                mp_len = geom.Lx * 0.1
+            mp_depth = geom.Lz * 0.05
 
-        half_span = 1.5 * mp_length / 2.0
-        x_center = phys.x0
-        x_min = max(0.0, x_center - half_span)
-        x_max = min(geom.Lx, x_center + half_span)
+        # Horizontal cropping: center on laser spot and extend 1.5x melt length
+        half_x = 1.5 * mp_len / 2.0
+        xc = phys.x0
+        xmin, xmax = max(0.0, xc - half_x), min(geom.Lx, xc + half_x)
+        ix0, ix1 = int(np.searchsorted(x_vals, xmin)), int(np.searchsorted(x_vals, xmax))
+        if ix0 == ix1:
+            ix0 = max(0, ix0 - 1); ix1 = min(nx, ix1 + 1)
 
-        # select indices
-        ix_min = int(np.searchsorted(x_coords, x_min))
-        ix_max = int(np.searchsorted(x_coords, x_max))
-        if ix_min == ix_max:
-            ix_min = max(0, ix_min - 1)
-            ix_max = min(nx, ix_max + 1)
+        # Vertical cropping: extend vertical range to 2x melt depth (show front/back)
+        zc = 0.5 * (z_min0 + z_max0) if np.any(melt_mask_xz) else mp_depth / 2.0
+        half_z = max(mp_depth, mp_depth)  # base depth; we'll double it
+        # target half span = mp_depth (so total = 2*mp_depth)
+        zmin, zmax = max(0.0, zc - mp_depth), min(geom.Lz, zc + mp_depth)
+        iz0, iz1 = int(np.searchsorted(z_vals, zmin)), int(np.searchsorted(z_vals, zmax))
+        if iz0 == iz1:
+            iz0 = max(0, iz0 - 1); iz1 = min(nz, iz1 + 1)
 
-        x_sel = x_coords[ix_min:ix_max]
-        T_xz = T_xz[:, ix_min:ix_max]
-        return x_sel, z_vals, T_xz
+        x_sel = x_vals[ix0:ix1]
+        z_sel = z_vals[iz0:iz1]
+        return x_sel, z_sel, T_xz[iz0:iz1, ix0:ix1]
 
-    # full field
     return x_vals, z_vals, T_xz
 
+
+def save_temp_profiles(a, num, geom, phys, t=None):
+        """Save 1D temperature profiles through the last laser position.
+        Produces three files in the working directory:
+
+        Arguments:
+            - a: modal coefficients (nz, ny, nx)
+            - num, geom, phys: parameter objects used throughout the module
+            - t: optional time to compute last laser position; defaults to num.t_final
+        """
+        if t is None:
+                t = num.t_final
+
+        # last laser x position
+        x_center = phys.x0 + phys.vx * t
+        y_center = phys.y0
+
+        # Top surface temperature (ny, nx)
+        T_top = to_cpu(reconstruct_temperature_top(a, num, geom))
+        x_vals = to_cpu(geom.X[0, :])
+        y_vals = to_cpu(geom.Y[:, 0])
+
+        # nearest indices
+        ix = int(np.argmin(np.abs(x_vals - x_center)))
+        iy = int(np.argmin(np.abs(y_vals - y_center)))
+
+        # profiles on top surface
+        x_profile = T_top[iy, :]
+        y_profile = T_top[:, ix]
+
+        # x-z slice at y_center (full field) and pick column at nearest x
+        x_xz, z_vals, T_xz = reconstruct_temperature_xz(a, num, geom, phys, y0=y_center, mode='full_field')
+        ix_xz = int(np.argmin(np.abs(x_xz - x_center)))
+        z_profile = T_xz[:, ix_xz]
+
+        # Save files: two columns each (coordinate, temperature)
+        # save to .out folder
+        out_dir = ".out"
+        fname_x = f"{out_dir}/x_spectral_latent_heat.txt"
+        fname_y = f"{out_dir}/y_spectral_latent_heat.txt"
+        fname_z = f"{out_dir}/z_spectral_latent_heat.txt"
+
+        np.savetxt(fname_x, np.vstack([x_vals, x_profile]).T,
+                             header='x(m) T_top(K)', fmt='% .6e')
+        np.savetxt(fname_y, np.vstack([y_vals, y_profile]).T,
+                             header='y(m) T_top(K)', fmt='% .6e')
+        np.savetxt(fname_z, np.vstack([z_vals, z_profile]).T,
+                             header='z(m) T_xz(K)', fmt='% .6e')
+
+        print(f"Saved: {fname_x}, {fname_y}, {fname_z}")
+        return fname_x, fname_y, fname_z
 
 # ============================================================
 #   SENSITIVITY ANALYSIS OVER nz
@@ -454,20 +497,20 @@ plt.show()
 # ============================================================
 
 phys = PhysParams(rho=7900, Ceff=500, k=14, T0=300.0,
-                  P=200.0, Absorptivity=0.30, r_b=0.00006,
-                  x0=0.001, y0=0.0025, vx=0.8)
+                  P=200.0, Absorptivity=0.30, r_b=6e-5,
+                  x0=0.005, y0=0.0025, vx=0.8)
 
-num = NumericalParams(dt=0.0000075, t_final=0.005,
+num = NumericalParams(dt=5e-6, t_final=0.00012 ,
                       nx=512, ny=256, nz=1000)
 
 geom = GeomParams(Lx=0.01, Ly=0.005, Lz=0.0025, num=num, phys=phys)
 
 a_final, T_top_history = run_simulation(phys, num, geom)
-
+save_temp_profiles(a_final, num, geom, phys)
 T_final = T_top_history[-1]
 # Probing a point on top surface
 # chose x probe so that temperature max is reached on a chosen time step
-x_probe = 100 * phys.vx * num.dt # = 100 * 0.8 * 0.0000075 = 0.0006
+x_probe = 30 * phys.vx * num.dt + phys.x0 # = 100 * 0.8 * 0.0000075 = 0.0006
 y_probe = 0.0025
 ix = int(x_probe / geom.Lx * num.nx)
 iy = int(y_probe / geom.Ly * num.ny)
@@ -500,7 +543,7 @@ ax1 = fig.add_subplot(gs[0, 1])
 x_vals, z_vals, T_xz = reconstruct_temperature_xz(a_final, num, geom, phys, y0=phys.y0, mode='meltpool')
 im1 = ax1.imshow(T_xz, aspect='auto',
                    extent=[x_vals[0]*1e3, x_vals[-1]*1e3, z_vals[0]*1e3, z_vals[-1]*1e3],
-                   origin='lower', cmap='hot')
+                   origin='upper', cmap='hot')
 fig.colorbar(im1, ax=ax1, label='Temperature (K)')
 ax1.set_title("Temperature x-z slice (y = {:.3f} m)".format(phys.y0))
 ax1.set_xlabel('x (mm)')
