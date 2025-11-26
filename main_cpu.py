@@ -1,43 +1,12 @@
 import numpy as np
 import pyfftw
+from pyfftw.interfaces.scipy_fft import dctn
 import matplotlib.pyplot as plt
 import time
 from numba import njit, prange
 import os
 
 pyfftw.config.NUM_THREADS = os.cpu_count()
-
-# Timing aggregator and decorator
-TIMINGS = {}
-def timed(label=None):
-    def deco(func):
-        name = label or func.__name__
-        def wrapper(*args, **kwargs):
-            t0 = time.perf_counter()
-            res = func(*args, **kwargs)
-            dt = time.perf_counter() - t0
-            entry = TIMINGS.get(name)
-            if entry is None:
-                TIMINGS[name] = {'total': dt, 'count': 1}
-            else:
-                entry['total'] += dt
-                entry['count'] += 1
-            return res
-        wrapper.__name__ = func.__name__
-        wrapper.__doc__ = func.__doc__
-        return wrapper
-    return deco
-
-
-def add_timing(name, dt):
-    """Add dt seconds to TIMINGS[name] (creates entry if needed)."""
-    entry = TIMINGS.get(name)
-    if entry is None:
-        TIMINGS[name] = {'total': float(dt), 'count': 1}
-    else:
-        entry['total'] += float(dt)
-        entry['count'] += 1
-
 
 # Numba-parallel slice updater: compute a_temp[p,:,:] = aK[p,:,:] + KK_by_Cp[p,:,:] * B_scaled
 @njit(parallel=True, fastmath=True)
@@ -46,22 +15,6 @@ def compute_a_temp_numba(aK, KK_by_Cp, B_scaled, a_temp_out):
     for p in prange(nz):
         # elementwise multiply KK_by_Cp[p] (ny,nx) with B_scaled (ny,nx)
         a_temp_out[p, :, :] = aK[p, :, :] + KK_by_Cp[p, :, :] * B_scaled
-
-
-# Fused kernel: combine DCT scaling + modal update in one pass (×2-×4 speedup)
-@njit(parallel=True, fastmath=True)
-def compute_a_temp_fused(aK, KK_by_Cp, q_dct, scale, a_temp_out):
-    """Fused kernel: scale q_dct and update modal coefficients in one pass.
-    
-    Eliminates intermediate B_buffer allocation and reduces memory traffic.
-    """
-    nz = aK.shape[0]
-    ny, nx = q_dct.shape
-    for p in prange(nz):
-        for i in range(ny):
-            for j in range(nx):
-                B_val = scale * q_dct[i, j]
-                a_temp_out[p, i, j] = aK[p, i, j] + KK_by_Cp[p, i, j] * B_val
 
 
 #make .out directory if not exists
@@ -177,13 +130,6 @@ class NumericalParams:
         self.B_buffer = None
         self.a_temp = None
         self.aK = None
-        # Direct FFTW plans for DCT-II and DCT-III
-        self.dct2_in = None
-        self.dct2_out = None
-        self.dct2_plan = None
-        self.dct3_in = None
-        self.dct3_out = None
-        self.dct3_plan = None
 
 
 # ============================================================
@@ -200,7 +146,6 @@ def C_coef(N, L):
 #   HEAT FLUX (GPU)
 # ============================================================
 
-@timed()
 def q_laser(geom, t, phys):
     """Return q_laser as a NumPy array (CPU-only).
 
@@ -216,7 +161,6 @@ def q_laser(geom, t, phys):
     return flux.astype(np.float32)
 
 
-@timed()
 def q_evap_point(T: np.ndarray, phys: PhysParams) -> np.ndarray:
     Lv, Rv, Tb = phys.DeltaH_LV, phys.R_v, phys.T_boil
     #T_safe = np.maximum(T, 1.0)
@@ -228,22 +172,16 @@ def q_evap_point(T: np.ndarray, phys: PhysParams) -> np.ndarray:
 #   DCT-II 2D 
 # ============================================================
 
-@timed()
-def DCT_II(q, num):
-    """2D DCT-II on surface q using pre-planned FFTW with orthonormal scaling.
+def DCT_II(q, geom=None):
+    """2D DCT-II on surface q.
     """
-    num.dct2_in[:] = q
-    num.dct2_plan()
-    # Apply orthonormal scaling: FFTW DCT-II is unnormalized, ortho needs 1/sqrt(4*N*M)
-    ortho_scale = 1.0 / np.sqrt(4.0 * num.ny * num.nx)
-    return ortho_scale * num.dct2_out
+    return dctn(q, type=2, norm='ortho', workers=-1).astype(np.float32, copy=False)
 
 
 # ============================================================
 #   PRECOMPUTE 3D K / KK 
 # ============================================================
 
-@timed()
 def precompute_K_KK(phys, num, geom):
     nx, ny, nz = num.nx, num.ny, num.nz
     Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
@@ -271,22 +209,15 @@ def precompute_K_KK(phys, num, geom):
 #   TIME STEP 
 # ============================================================
 
-@timed()
 def time_step(a, t, phys, num, geom, epsilon=1e-0, debug=False):
     n_iter_max = 20
-    # GPU laser field (timed locally for finer breakdown)
-    t0 = time.perf_counter()
     q_las = q_laser(geom, t, phys)
-    add_timing('time_step:q_laser', time.perf_counter() - t0)
 
     # Initial modal source term (compute separable S cheaply, do not allocate full 3D)
-    t0 = time.perf_counter()
     dx = geom.dx
     dy = geom.dy
-    q_dct = DCT_II(q_las, num)
-    add_timing('time_step:DCT', time.perf_counter() - t0)
+    q_dct = DCT_II(q_las, geom=geom)
 
-    t0 = time.perf_counter()
     scale = (dx * dy / 4.0) *np.sqrt((geom.nx * geom.ny) / (geom.Lx * geom.Ly))
 
     aK = num.aK
@@ -294,37 +225,26 @@ def time_step(a, t, phys, num, geom, epsilon=1e-0, debug=False):
     a_temp = num.a_temp
     # use precomputed KK_by_Cp for faster updates
     KK_by_Cp = num.KK_by_Cp
-    # Fused kernel: scale + update in one pass (no intermediate buffer)
-    compute_a_temp_fused(aK, KK_by_Cp, q_dct, scale, a_temp)
-    add_timing('time_step:forcing_initial', time.perf_counter() - t0)
+    np.multiply(scale, q_dct, out=num.B_buffer, casting='same_kind')
+    compute_a_temp_numba(aK, KK_by_Cp, num.B_buffer, a_temp)
 
-    t0 = time.perf_counter()
     T_temp = reconstruct_temperature_top(a_temp, num, geom)
-    add_timing('time_step:reconstruct_initial', time.perf_counter() - t0)
     if debug:
         print("Iterating")
     for k in range(n_iter_max):
-        it0 = time.perf_counter()
         q_evap = q_evap_point(T_temp, phys)          # (ny, nx)
 
         # data-transfer / diff (all NumPy now)
-        t_sub = time.perf_counter()
         q_diff = num.q_diff
         np.subtract(q_las, q_evap, out=q_diff, casting='same_kind')
-        add_timing('time_step:q_diff_compute', time.perf_counter() - t_sub)
 
         # forcing for iteration: compute q_diff DCT and update modal field without full S
-        t_sub = time.perf_counter()
-        qd = DCT_II(q_diff, num)
-        # Fused kernel: scale + update in one pass (eliminates B_buffer writes)
-        compute_a_temp_fused(aK, num.KK_by_Cp, qd, scale, a_temp)
-        add_timing('time_step:forcing_iter', time.perf_counter() - t_sub)
-        t_sub = time.perf_counter()
+        qd = DCT_II(q_diff, geom=geom)
+        np.multiply(scale, qd, out=num.B_buffer, casting='same_kind')
+        # compute a_temp in parallel using precomputed KK_by_Cp
+        compute_a_temp_numba(aK, num.KK_by_Cp, num.B_buffer, a_temp)
         T_temp_old = T_temp
         T_temp = reconstruct_temperature_top(a_temp, num, geom)
-        add_timing('time_step:reconstruct_iter', time.perf_counter() - t_sub)
-
-        add_timing('time_step:iteration_total', time.perf_counter() - it0)
         if debug:
             print("iteration : ", k)
             print("Tmax = ",np.max(np.abs(T_temp)))
@@ -338,7 +258,6 @@ def time_step(a, t, phys, num, geom, epsilon=1e-0, debug=False):
 #   RUN SIMULATION
 # ============================================================
 
-@timed()
 def run_simulation(phys, num, geom):
     print("Precomputing K, KK ...")
     K, KK = precompute_K_KK(phys, num, geom)
@@ -350,29 +269,6 @@ def run_simulation(phys, num, geom):
     num.B_buffer = np.empty((num.ny, num.nx), dtype=np.float64)
     num.a_temp = np.empty((num.nz, num.ny, num.nx), dtype=np.float64)
     num.aK = np.empty((num.nz, num.ny, num.nx), dtype=np.float64)
-    
-    # Create reusable FFTW plans for DCT-II and DCT-III 
-    print("Planning FFTW DCT transforms...")
-    shape_2d = (num.ny, num.nx)
-    num.dct2_in = pyfftw.empty_aligned(shape_2d, dtype='float32')
-    num.dct2_out = pyfftw.empty_aligned(shape_2d, dtype='float32')
-    # For 2D DCT-II: apply REDFT10 on both axes
-    num.dct2_plan = pyfftw.FFTW(num.dct2_in, num.dct2_out,
-                                axes=(0, 1),
-                                direction=('FFTW_REDFT10', 'FFTW_REDFT10'),  # DCT-II on both axes
-                                flags=('FFTW_MEASURE',),
-                                threads=pyfftw.config.NUM_THREADS)
-    
-    num.dct3_in = pyfftw.empty_aligned(shape_2d, dtype='float32')
-    num.dct3_out = pyfftw.empty_aligned(shape_2d, dtype='float32')
-    # For 2D DCT-III: apply REDFT01 on both axes
-    num.dct3_plan = pyfftw.FFTW(num.dct3_in, num.dct3_out,
-                                axes=(0, 1),
-                                direction=('FFTW_REDFT01', 'FFTW_REDFT01'),  # DCT-III on both axes
-                                flags=('FFTW_MEASURE',),
-                                threads=pyfftw.config.NUM_THREADS)
-    print("FFTW planning complete.")
-    
     T_top_history = []
 
     print("Allocating modal field a ...")
@@ -384,10 +280,7 @@ def run_simulation(phys, num, geom):
     start = time.perf_counter()
     for step in range(nsteps):
         print(f"Step {step+1}/{nsteps} | Time: t={t:.6e}s")
-        loop0 = time.perf_counter()
         a, T_top = time_step(a, t, phys, num, geom, debug=num.debug)
-        loop_dt = time.perf_counter() - loop0
-        add_timing('run_simulation:step_wall', loop_dt)
         t += num.dt
         T_top_history.append(T_top)
 
@@ -400,7 +293,6 @@ def run_simulation(phys, num, geom):
 #   RECONSTRUCT TEMPERATURE FIELD (GPU)
 # ============================================================
 
-@timed()
 def reconstruct_temperature_top(a, num, geom):
     """Reconstruct the top surface temperature (ny, nx) from modal coefficients a (nz, ny, nx).
     Always returns a NumPy array (for consistency with DCT and forcing).
@@ -409,12 +301,7 @@ def reconstruct_temperature_top(a, num, geom):
     A = (geom.Cp[:, None, None] * a).sum(axis=0)
     scale_top = np.float32(np.sqrt(geom.nx * geom.ny) / np.sqrt(geom.Lx * geom.Ly))
     A32 = A.astype(np.float32)
-    # Use pre-planned FFTW DCT-III
-    num.dct3_in[:] = A32
-    num.dct3_plan()
-    # Apply orthonormal scaling: FFTW unnormalized, ortho needs 1/sqrt(4*N*M)
-    ortho_scale = 1.0 / np.sqrt(4.0 * num.ny * num.nx)
-    T = scale_top * ortho_scale * num.dct3_out
+    T = scale_top * dctn(A32, type=3, norm='ortho', axes=(0, 1), workers=-1)
     if False: 
         fname = os.path.join(OUT_DIR, f"reconstruct_top_debug_t.png")
         fig = plt.figure(figsize=(6, 4))
@@ -433,7 +320,6 @@ def reconstruct_temperature_top(a, num, geom):
 
     return T.astype(np.float32, copy=False)
 
-@timed()
 def reconstruct_temperature_xz(a, num, geom, phys, y0=None, mode='full_field'):
     """Compact vectorized x-z slice at y=y0. Returns (x_vals, z_vals, T_xz).
     """
@@ -500,7 +386,6 @@ def reconstruct_temperature_xz(a, num, geom, phys, y0=None, mode='full_field'):
     return x_vals, z_vals, T_xz
 
 
-@timed()
 def save_temp_profiles(a, num, geom, phys, t=None):
         """Save 1D temperature profiles through the last laser position.
         Produces three files in the working directory:
@@ -673,10 +558,6 @@ np.savetxt("T_probe.csv", np.array(T_probe), delimiter=",")
 X = geom.X
 Y = geom.Y
 T = T_final
-
-
-# Print detailed timings collected during the run
-print_timings_summary()
 
 # Compute q_laser and q_evap for final time
 q_las = q_laser(geom, num.t_final, phys) 
