@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.fft import dctn
 import matplotlib.pyplot as plt
+import time
 
 # Try to use CuPy (GPU). If unavailable, fall back to NumPy (CPU).
 try:
@@ -28,7 +29,7 @@ else:
 import os
 if not os.path.exists(".out"):
     os.makedirs(".out")
-    
+
 # ============================================================
 #  GEOMETRY PARAMETERS (GPU only for 2D fields)
 # ============================================================
@@ -260,11 +261,15 @@ def run_simulation(phys, num, geom):
 
     t = 0.0
     nsteps = int(np.ceil(num.t_final / num.dt))
+    start = time.perf_counter()
     for step in range(nsteps):
-        print(f"t = {t:.6f}")
+        print(f"Step {step+1}/{nsteps} | Time: t={t:.6e}s")
         a, T_top = time_step(a, t, phys, num, geom, debug=num.debug)
         t += num.dt
         T_top_history.append(T_top)
+
+    elapsed = time.perf_counter() - start
+    print(f"Total elapsed real time: {elapsed:.3f} s over {nsteps} steps (avg {elapsed/max(1,nsteps):.3f} s/step)")
     return a, T_top_history
 
 
@@ -500,7 +505,7 @@ phys = PhysParams(rho=7900, Ceff=500, k=14, T0=300.0,
                   P=200.0, Absorptivity=0.30, r_b=6e-5,
                   x0=0.005, y0=0.0025, vx=0.8)
 
-num = NumericalParams(dt=5e-6, t_final=0.00012 ,
+num = NumericalParams(dt=6e-6, t_final=0.012 ,
                       nx=512, ny=256, nz=1000)
 
 geom = GeomParams(Lx=0.01, Ly=0.005, Lz=0.0025, num=num, phys=phys)
