@@ -175,7 +175,8 @@ def q_evap_point(T: np.ndarray, phys: PhysParams) -> np.ndarray:
 def DCT_II(q, geom=None):
     """2D DCT-II on surface q.
     """
-    return dctn(q, type=2, norm='ortho', workers=-1).astype(np.float32, copy=False)
+    q32 = q.astype(np.float32, copy=False)
+    return dctn(q32, type=2, norm='ortho', workers=-1).astype(np.float32, copy=False)
 
 
 # ============================================================
@@ -202,7 +203,7 @@ def precompute_K_KK(phys, num, geom):
     KK[mask] = (1 - K[mask]) / (phys.rho * phys.Ceff * lambda_j[mask])
     KK[~mask] = dt / (phys.rho * phys.Ceff)
 
-    return K, KK
+    return K.astype(np.float32), KK.astype(np.float32)
 
 
 # ============================================================
@@ -264,15 +265,15 @@ def run_simulation(phys, num, geom):
     num.K = K
     num.KK = KK
     # Precompute KK multiplied by Cp to reduce per-step work: KK_by_Cp[p,:,:] = KK[p,:,:] * Cp[p]
-    num.KK_by_Cp = KK * geom.Cp[:, None, None]
+    num.KK_by_Cp = (KK * geom.Cp[:, None, None]).astype(np.float32)
     num.q_diff = np.empty((num.ny, num.nx), dtype=np.float32)
-    num.B_buffer = np.empty((num.ny, num.nx), dtype=np.float64)
-    num.a_temp = np.empty((num.nz, num.ny, num.nx), dtype=np.float64)
-    num.aK = np.empty((num.nz, num.ny, num.nx), dtype=np.float64)
+    num.B_buffer = np.empty((num.ny, num.nx), dtype=np.float32)
+    num.a_temp = np.empty((num.nz, num.ny, num.nx), dtype=np.float32)
+    num.aK = np.empty((num.nz, num.ny, num.nx), dtype=np.float32)
     T_top_history = []
 
     print("Allocating modal field a ...")
-    a = np.zeros((num.nz, num.ny, num.nx), dtype=np.float64)  # (nz, ny, nx)
+    a = np.zeros((num.nz, num.ny, num.nx), dtype=np.float32)  # (nz, ny, nx)
     a[0,0,0] = phys.T0 * np.sqrt(geom.Lx * geom.Ly * geom.Lz)
 
     t = 0.0
@@ -298,10 +299,10 @@ def reconstruct_temperature_top(a, num, geom):
     Always returns a NumPy array (for consistency with DCT and forcing).
     """
     # 1) weight by Cp and sum over p -> a2d (ny, nx)
-    A = (geom.Cp[:, None, None] * a).sum(axis=0)
+    Cp32 = geom.Cp.astype(np.float32)
+    A = (Cp32[:, None, None] * a).sum(axis=0)
     scale_top = np.float32(np.sqrt(geom.nx * geom.ny) / np.sqrt(geom.Lx * geom.Ly))
-    A32 = A.astype(np.float32)
-    T = scale_top * dctn(A32, type=3, norm='ortho', axes=(0, 1), workers=-1)
+    T = scale_top * dctn(A, type=3, norm='ortho', axes=(0, 1), workers=-1)
     if False: 
         fname = os.path.join(OUT_DIR, f"reconstruct_top_debug_t.png")
         fig = plt.figure(figsize=(6, 4))
@@ -438,24 +439,6 @@ def save_temp_profiles(a, num, geom, phys, t=None):
         return fname_x, fname_y, fname_z
 
 
-def print_timings_summary():
-    """Print a detailed timing summary from the TIMINGS aggregator."""
-    if not TIMINGS:
-        print("No timings recorded.")
-        return
-    total_all = sum(v['total'] for v in TIMINGS.values())
-    print('\n==== Detailed timings summary ====>')
-    print(f"Total tracked time: {total_all:.6f} s")
-    print(f"{'Function':40s} {'Total(s)':>10s} {'%':>6s} {'Calls':>8s} {'Avg(s)':>10s}")
-    print('-' * 80)
-    for name, v in sorted(TIMINGS.items(), key=lambda kv: -kv[1]['total']):
-        tot = v['total']
-        cnt = v['count']
-        pct = (tot / total_all * 100.0) if total_all > 0 else 0.0
-        avg = tot / cnt if cnt else 0.0
-        print(f"{name:40s} {tot:10.6f} {pct:6.2f}% {cnt:8d} {avg:10.6f}")
-    print('==== End timings ====>\n')
-
 # ============================================================
 #   SENSITIVITY ANALYSIS OVER nz
 # ============================================================
@@ -536,7 +519,7 @@ phys = PhysParams(rho=7900, Ceff=500, k=14, T0=300.0,
                   P=200.0, Absorptivity=0.30, r_b=6e-5,
                   x0=0.005, y0=0.0025, vx=0.8)
 
-num = NumericalParams(dt=6e-6, t_final=0.0006,
+num = NumericalParams(dt=6e-6, t_final=0.012,
                       nx=512, ny=256, nz=1000)
 
 geom = GeomParams(Lx=0.01, Ly=0.005, Lz=0.0025, num=num, phys=phys)

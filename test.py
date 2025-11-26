@@ -1,43 +1,12 @@
 import numpy as np
 import pyfftw
+from pyfftw.interfaces.scipy_fft import dctn
 import matplotlib.pyplot as plt
 import time
 from numba import njit, prange
 import os
 
 pyfftw.config.NUM_THREADS = os.cpu_count()
-
-# Timing aggregator and decorator
-TIMINGS = {}
-def timed(label=None):
-    def deco(func):
-        name = label or func.__name__
-        def wrapper(*args, **kwargs):
-            t0 = time.perf_counter()
-            res = func(*args, **kwargs)
-            dt = time.perf_counter() - t0
-            entry = TIMINGS.get(name)
-            if entry is None:
-                TIMINGS[name] = {'total': dt, 'count': 1}
-            else:
-                entry['total'] += dt
-                entry['count'] += 1
-            return res
-        wrapper.__name__ = func.__name__
-        wrapper.__doc__ = func.__doc__
-        return wrapper
-    return deco
-
-
-def add_timing(name, dt):
-    """Add dt seconds to TIMINGS[name] (creates entry if needed)."""
-    entry = TIMINGS.get(name)
-    if entry is None:
-        TIMINGS[name] = {'total': float(dt), 'count': 1}
-    else:
-        entry['total'] += float(dt)
-        entry['count'] += 1
-
 
 # Numba-parallel slice updater: compute a_temp[p,:,:] = aK[p,:,:] + KK_by_Cp[p,:,:] * B_scaled
 @njit(parallel=True, fastmath=True)
@@ -46,22 +15,6 @@ def compute_a_temp_numba(aK, KK_by_Cp, B_scaled, a_temp_out):
     for p in prange(nz):
         # elementwise multiply KK_by_Cp[p] (ny,nx) with B_scaled (ny,nx)
         a_temp_out[p, :, :] = aK[p, :, :] + KK_by_Cp[p, :, :] * B_scaled
-
-
-# Fused kernel: combine DCT scaling + modal update in one pass (×2-×4 speedup)
-@njit(parallel=True, fastmath=True)
-def compute_a_temp_fused(aK, KK_by_Cp, q_dct, scale, a_temp_out):
-    """Fused kernel: scale q_dct and update modal coefficients in one pass.
-    
-    Eliminates intermediate B_buffer allocation and reduces memory traffic.
-    """
-    nz = aK.shape[0]
-    ny, nx = q_dct.shape
-    for p in prange(nz):
-        for i in range(ny):
-            for j in range(nx):
-                B_val = scale * q_dct[i, j]
-                a_temp_out[p, i, j] = aK[p, i, j] + KK_by_Cp[p, i, j] * B_val
 
 
 #make .out directory if not exists
@@ -102,31 +55,22 @@ class GeomParams:
         self.X = self.X.astype(np.float32)
         self.Y = self.Y.astype(np.float32)
 
-        # Precompute normalization coefficients (NumPy)
+        # Precompute normalization coefficients
         self.Cm = C_coef(self.nx, self.Lx)
         self.Cn = C_coef(self.ny, self.Ly)
         self.Cp = C_coef(self.nz, self.Lz)
+        self.Cp32 = self.Cp.astype(np.float32)
+        
+        # Precompute DCT scaling constant
+        self.dct_scale = np.float32((self.dx * self.dy / 4.0) * np.sqrt((self.nx * self.ny) / (self.Lx * self.Ly)))
+        self.recon_scale = np.float32(np.sqrt(self.nx * self.ny) / np.sqrt(self.Lx * self.Ly))
+        
+        # Laser coefficient base
+        self.laser_coef = phys.Absorptivity * 2.0 * phys.P / (np.pi * phys.r_b ** 2)
 
-
-        # Precompute small separable coefficients and outer products
-        # Avoid allocating large dense basis matrices (Bx, By, Bz) to save memory.
-        m = np.arange(self.nx)
-        n = np.arange(self.ny)
-        p = np.arange(self.nz)
-        # Keep 1D coefficient vectors and the outer product CnCm used repeatedly
-        self.Bx = None
-        self.By = None
-        self.Bz = None
-        self.CnCm = np.outer(self.Cn, self.Cm)   # (ny, nx)
-
-
-        # Informational numerical checks
-        dx = self.Lx / self.nx
-        dy = self.Ly / self.ny
-        rb = phys.r_b
-        v_res_x = dx / num.dt
+        # Numerical checks
         lambda_max_z = (phys.k / (phys.rho * phys.Ceff)) * (np.pi * num.nz / self.Lz) ** 2
-        print(f"Numerical checks -> dx={dx:.3e}, dy={dy:.3e}, r_b={rb}, v_res_x={v_res_x:.3e}, phys.vx={phys.vx}, lambda_max_z*dt={lambda_max_z*num.dt:.3e}")
+        print(f"dx={self.dx:.3e}, dy={self.dy:.3e}, r_b={phys.r_b:.3e}, v_res_x={self.dx/num.dt:.3e}, vx={phys.vx}, lambda_max_z*dt={lambda_max_z*num.dt:.3e}")
 
 # ============================================================
 #   MATERIAL & LASER PARAMETERS
@@ -177,13 +121,6 @@ class NumericalParams:
         self.B_buffer = None
         self.a_temp = None
         self.aK = None
-        # Direct FFTW plans for DCT-II and DCT-III
-        self.dct2_in = None
-        self.dct2_out = None
-        self.dct2_plan = None
-        self.dct3_in = None
-        self.dct3_out = None
-        self.dct3_plan = None
 
 
 # ============================================================
@@ -200,50 +137,33 @@ def C_coef(N, L):
 #   HEAT FLUX (GPU)
 # ============================================================
 
-@timed()
 def q_laser(geom, t, phys):
-    """Return q_laser as a NumPy array (CPU-only).
-
-    Evaluates the Gaussian laser heat flux on the precomputed NumPy meshgrid
-    `geom.X, geom.Y` and returns a NumPy array.
-    """
+    """Gaussian laser heat flux."""
     x0t = phys.x0 + phys.vx * t
-    rb = phys.r_b
-    coeff = phys.Absorptivity * 2.0 * phys.P / (np.pi * rb ** 2)
-    X = geom.X
-    Y = geom.Y
-    flux = coeff * np.exp(-2.0 * ((X - x0t) ** 2 + (Y - phys.y0) ** 2) / (rb ** 2))
-    return flux.astype(np.float32)
+    r_sq = (geom.X - x0t) ** 2 + (geom.Y - phys.y0) ** 2
+    return (geom.laser_coef * np.exp(-2.0 * r_sq / phys.r_b ** 2)).astype(np.float32)
 
 
-@timed()
 def q_evap_point(T: np.ndarray, phys: PhysParams) -> np.ndarray:
-    Lv, Rv, Tb = phys.DeltaH_LV, phys.R_v, phys.T_boil
-    #T_safe = np.maximum(T, 1.0)
-    q = 0.82 * Lv / np.sqrt(2 * np.pi * Rv * T) * np.exp((Lv / (Rv * Tb)) * (1.0 - Tb / T))
-    q[T < Tb] = 0.0
+    """Evaporative heat flux."""
+    q = 0.82 * phys.DeltaH_LV / np.sqrt(2 * np.pi * phys.R_v * T) * \
+        np.exp((phys.DeltaH_LV / (phys.R_v * phys.T_boil)) * (1.0 - phys.T_boil / T))
+    q[T < phys.T_boil] = 0.0
     return q.astype(np.float32)
 
 # ============================================================
 #   DCT-II 2D 
 # ============================================================
 
-@timed()
-def DCT_II(q, num):
-    """2D DCT-II on surface q using pre-planned FFTW with orthonormal scaling.
-    """
-    num.dct2_in[:] = q
-    num.dct2_plan()
-    # Apply orthonormal scaling: FFTW DCT-II is unnormalized, ortho needs 1/sqrt(4*N*M)
-    ortho_scale = 1.0 / np.sqrt(4.0 * num.ny * num.nx)
-    return ortho_scale * num.dct2_out
+def DCT_II(q):
+    """2D DCT-II on surface q."""
+    return dctn(q.astype(np.float32, copy=False), type=2, norm='ortho', workers=-1).astype(np.float32, copy=False)
 
 
 # ============================================================
 #   PRECOMPUTE 3D K / KK 
 # ============================================================
 
-@timed()
 def precompute_K_KK(phys, num, geom):
     nx, ny, nz = num.nx, num.ny, num.nz
     Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
@@ -264,135 +184,61 @@ def precompute_K_KK(phys, num, geom):
     KK[mask] = (1 - K[mask]) / (phys.rho * phys.Ceff * lambda_j[mask])
     KK[~mask] = dt / (phys.rho * phys.Ceff)
 
-    return K, KK
+    return K.astype(np.float32), KK.astype(np.float32)
 
 
 # ============================================================
 #   TIME STEP 
 # ============================================================
 
-@timed()
-def time_step(a, t, phys, num, geom, epsilon=1e-0, debug=False):
-    n_iter_max = 20
-    # GPU laser field (timed locally for finer breakdown)
-    t0 = time.perf_counter()
+def time_step(a, t, phys, num, geom, epsilon=1e-0):
     q_las = q_laser(geom, t, phys)
-    add_timing('time_step:q_laser', time.perf_counter() - t0)
-
-    # Initial modal source term (compute separable S cheaply, do not allocate full 3D)
-    t0 = time.perf_counter()
-    dx = geom.dx
-    dy = geom.dy
-    q_dct = DCT_II(q_las, num)
-    add_timing('time_step:DCT', time.perf_counter() - t0)
-
-    t0 = time.perf_counter()
-    scale = (dx * dy / 4.0) *np.sqrt((geom.nx * geom.ny) / (geom.Lx * geom.Ly))
-
-    aK = num.aK
-    np.multiply(a, num.K, out=aK, casting='same_kind')
-    a_temp = num.a_temp
-    # use precomputed KK_by_Cp for faster updates
-    KK_by_Cp = num.KK_by_Cp
-    # Fused kernel: scale + update in one pass (no intermediate buffer)
-    compute_a_temp_fused(aK, KK_by_Cp, q_dct, scale, a_temp)
-    add_timing('time_step:forcing_initial', time.perf_counter() - t0)
-
-    t0 = time.perf_counter()
-    T_temp = reconstruct_temperature_top(a_temp, num, geom)
-    add_timing('time_step:reconstruct_initial', time.perf_counter() - t0)
-    if debug:
-        print("Iterating")
-    for k in range(n_iter_max):
-        it0 = time.perf_counter()
-        q_evap = q_evap_point(T_temp, phys)          # (ny, nx)
-
-        # data-transfer / diff (all NumPy now)
-        t_sub = time.perf_counter()
-        q_diff = num.q_diff
-        np.subtract(q_las, q_evap, out=q_diff, casting='same_kind')
-        add_timing('time_step:q_diff_compute', time.perf_counter() - t_sub)
-
-        # forcing for iteration: compute q_diff DCT and update modal field without full S
-        t_sub = time.perf_counter()
-        qd = DCT_II(q_diff, num)
-        # Fused kernel: scale + update in one pass (eliminates B_buffer writes)
-        compute_a_temp_fused(aK, num.KK_by_Cp, qd, scale, a_temp)
-        add_timing('time_step:forcing_iter', time.perf_counter() - t_sub)
-        t_sub = time.perf_counter()
-        T_temp_old = T_temp
-        T_temp = reconstruct_temperature_top(a_temp, num, geom)
-        add_timing('time_step:reconstruct_iter', time.perf_counter() - t_sub)
-
-        add_timing('time_step:iteration_total', time.perf_counter() - it0)
-        if debug:
-            print("iteration : ", k)
-            print("Tmax = ",np.max(np.abs(T_temp)))
-        if np.max(np.abs(T_temp - T_temp_old)) < epsilon:
+    q_dct = DCT_II(q_las)
+    
+    np.multiply(a, num.K, out=num.aK, casting='same_kind')
+    np.multiply(geom.dct_scale, q_dct, out=num.B_buffer, casting='same_kind')
+    compute_a_temp_numba(num.aK, num.KK_by_Cp, num.B_buffer, num.a_temp)
+    
+    T_temp = reconstruct_temperature_top(num.a_temp, num, geom)
+    for k in range(20):
+        np.subtract(q_las, q_evap_point(T_temp, phys), out=num.q_diff, casting='same_kind')
+        np.multiply(geom.dct_scale, DCT_II(num.q_diff), out=num.B_buffer, casting='same_kind')
+        compute_a_temp_numba(num.aK, num.KK_by_Cp, num.B_buffer, num.a_temp)
+        T_old = T_temp
+        T_temp = reconstruct_temperature_top(num.a_temp, num, geom)
+        if np.max(np.abs(T_temp - T_old)) < epsilon:
             break
-        T_temp_old = T_temp
-    return a_temp, T_temp
+    return num.a_temp, T_temp
 
 
 # ============================================================
 #   RUN SIMULATION
 # ============================================================
 
-@timed()
 def run_simulation(phys, num, geom):
-    print("Precomputing K, KK ...")
-    K, KK = precompute_K_KK(phys, num, geom)
-    num.K = K
-    num.KK = KK
-    # Precompute KK multiplied by Cp to reduce per-step work: KK_by_Cp[p,:,:] = KK[p,:,:] * Cp[p]
-    num.KK_by_Cp = KK * geom.Cp[:, None, None]
+    print("Precomputing K, KK, buffers...")
+    num.K, num.KK = precompute_K_KK(phys, num, geom)
+    num.KK_by_Cp = (num.KK * geom.Cp[:, None, None]).astype(np.float32)
     num.q_diff = np.empty((num.ny, num.nx), dtype=np.float32)
-    num.B_buffer = np.empty((num.ny, num.nx), dtype=np.float64)
-    num.a_temp = np.empty((num.nz, num.ny, num.nx), dtype=np.float64)
-    num.aK = np.empty((num.nz, num.ny, num.nx), dtype=np.float64)
+    num.B_buffer = np.empty((num.ny, num.nx), dtype=np.float32)
+    num.a_temp = np.empty((num.nz, num.ny, num.nx), dtype=np.float32)
+    num.aK = np.empty((num.nz, num.ny, num.nx), dtype=np.float32)
     
-    # Create reusable FFTW plans for DCT-II and DCT-III 
-    print("Planning FFTW DCT transforms...")
-    shape_2d = (num.ny, num.nx)
-    num.dct2_in = pyfftw.empty_aligned(shape_2d, dtype='float32')
-    num.dct2_out = pyfftw.empty_aligned(shape_2d, dtype='float32')
-    # For 2D DCT-II: apply REDFT10 on both axes
-    num.dct2_plan = pyfftw.FFTW(num.dct2_in, num.dct2_out,
-                                axes=(0, 1),
-                                direction=('FFTW_REDFT10', 'FFTW_REDFT10'),  # DCT-II on both axes
-                                flags=('FFTW_MEASURE',),
-                                threads=pyfftw.config.NUM_THREADS)
-    
-    num.dct3_in = pyfftw.empty_aligned(shape_2d, dtype='float32')
-    num.dct3_out = pyfftw.empty_aligned(shape_2d, dtype='float32')
-    # For 2D DCT-III: apply REDFT01 on both axes
-    num.dct3_plan = pyfftw.FFTW(num.dct3_in, num.dct3_out,
-                                axes=(0, 1),
-                                direction=('FFTW_REDFT01', 'FFTW_REDFT01'),  # DCT-III on both axes
-                                flags=('FFTW_MEASURE',),
-                                threads=pyfftw.config.NUM_THREADS)
-    print("FFTW planning complete.")
-    
-    T_top_history = []
-
-    print("Allocating modal field a ...")
-    a = np.zeros((num.nz, num.ny, num.nx), dtype=np.float64)  # (nz, ny, nx)
+    a = np.zeros((num.nz, num.ny, num.nx), dtype=np.float32)
     a[0,0,0] = phys.T0 * np.sqrt(geom.Lx * geom.Ly * geom.Lz)
-
-    t = 0.0
+    
     nsteps = int(np.ceil(num.t_final / num.dt))
+    T_top_history = []
     start = time.perf_counter()
+    
     for step in range(nsteps):
-        print(f"Step {step+1}/{nsteps} | Time: t={t:.6e}s")
-        loop0 = time.perf_counter()
-        a, T_top = time_step(a, t, phys, num, geom, debug=num.debug)
-        loop_dt = time.perf_counter() - loop0
-        add_timing('run_simulation:step_wall', loop_dt)
-        t += num.dt
+        t = step * num.dt
+        print(f"Step {step+1}/{nsteps} | t={t:.6e}s")
+        a, T_top = time_step(a, t, phys, num, geom)
         T_top_history.append(T_top)
-
+    
     elapsed = time.perf_counter() - start
-    print(f"Total elapsed real time: {elapsed:.3f} s over {nsteps} steps (avg {elapsed/max(1,nsteps):.3f} s/step)")
+    print(f"\nTotal: {elapsed:.3f}s ({nsteps} steps, {elapsed/nsteps:.3f}s/step)")
     return a, T_top_history
 
 
@@ -400,40 +246,11 @@ def run_simulation(phys, num, geom):
 #   RECONSTRUCT TEMPERATURE FIELD (GPU)
 # ============================================================
 
-@timed()
 def reconstruct_temperature_top(a, num, geom):
-    """Reconstruct the top surface temperature (ny, nx) from modal coefficients a (nz, ny, nx).
-    Always returns a NumPy array (for consistency with DCT and forcing).
-    """
-    # 1) weight by Cp and sum over p -> a2d (ny, nx)
-    A = (geom.Cp[:, None, None] * a).sum(axis=0)
-    scale_top = np.float32(np.sqrt(geom.nx * geom.ny) / np.sqrt(geom.Lx * geom.Ly))
-    A32 = A.astype(np.float32)
-    # Use pre-planned FFTW DCT-III
-    num.dct3_in[:] = A32
-    num.dct3_plan()
-    # Apply orthonormal scaling: FFTW unnormalized, ortho needs 1/sqrt(4*N*M)
-    ortho_scale = 1.0 / np.sqrt(4.0 * num.ny * num.nx)
-    T = scale_top * ortho_scale * num.dct3_out
-    if False: 
-        fname = os.path.join(OUT_DIR, f"reconstruct_top_debug_t.png")
-        fig = plt.figure(figsize=(6, 4))
-        ax = fig.add_subplot(1, 1, 1)
-        X = geom.X * 1e3
-        Y = geom.Y * 1e3
-        c = ax.contourf(X, Y, T, levels=50, cmap='viridis')
-        fig.colorbar(c, ax=ax, label='Temperature (K)')
-        ax.set_title('Reconstructed Top Surface (debug)')
-        ax.set_xlabel('x (mm)')
-        ax.set_ylabel('y (mm)')
-        plt.tight_layout()
-        fig.savefig(fname, dpi=150)
-        #plt.show()
-        plt.close(fig)
+    """Reconstruct top surface temperature from modal coefficients."""
+    A = (geom.Cp32[:, None, None] * a).sum(axis=0)
+    return (geom.recon_scale * dctn(A, type=3, norm='ortho', axes=(0, 1), workers=-1)).astype(np.float32, copy=False)
 
-    return T.astype(np.float32, copy=False)
-
-@timed()
 def reconstruct_temperature_xz(a, num, geom, phys, y0=None, mode='full_field'):
     """Compact vectorized x-z slice at y=y0. Returns (x_vals, z_vals, T_xz).
     """
@@ -500,76 +317,28 @@ def reconstruct_temperature_xz(a, num, geom, phys, y0=None, mode='full_field'):
     return x_vals, z_vals, T_xz
 
 
-@timed()
 def save_temp_profiles(a, num, geom, phys, t=None):
-        """Save 1D temperature profiles through the last laser position.
-        Produces three files in the working directory:
+    """Save 1D temperature profiles through the last laser position."""
+    t = num.t_final if t is None else t
+    x_center = phys.x0 + phys.vx * t
+    
+    T_top = reconstruct_temperature_top(a, num, geom)
+    x_vals, y_vals = geom.X[0, :], geom.Y[:, 0]
+    ix = int(np.argmin(np.abs(x_vals - x_center)))
+    iy = int(np.argmin(np.abs(y_vals - phys.y0)))
+    
+    x_xz, z_vals, T_xz = reconstruct_temperature_xz(a, num, geom, phys, y0=phys.y0, mode='full_field')
+    ix_xz = int(np.argmin(np.abs(x_xz - x_center)))
+    
+    for direction, coords, profile in [
+        ('x', x_vals, T_top[iy, :]),
+        ('y', y_vals, T_top[:, ix]),
+        ('z', z_vals, T_xz[:, ix_xz])
+    ]:
+        fname = f"{OUT_DIR}/{direction}_spectral_latent_heat.txt"
+        np.savetxt(fname, np.vstack([coords, profile]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
+        print(f"Saved: {fname}")
 
-        Arguments:
-            - a: modal coefficients (nz, ny, nx)
-            - num, geom, phys: parameter objects used throughout the module
-            - t: optional time to compute last laser position; defaults to num.t_final
-        """
-        if t is None:
-                t = num.t_final
-
-        # last laser x position
-        x_center = phys.x0 + phys.vx * t
-        y_center = phys.y0
-
-        # Top surface temperature (ny, nx)
-        T_top = reconstruct_temperature_top(a, num, geom)
-        x_vals = geom.X[0, :]
-        y_vals = geom.Y[:, 0]
-
-        # nearest indices
-        ix = int(np.argmin(np.abs(x_vals - x_center)))
-        iy = int(np.argmin(np.abs(y_vals - y_center)))
-
-        # profiles on top surface
-        x_profile = T_top[iy, :]
-        y_profile = T_top[:, ix]
-
-        # x-z slice at y_center (full field) and pick column at nearest x
-        x_xz, z_vals, T_xz = reconstruct_temperature_xz(a, num, geom, phys, y0=y_center, mode='full_field')
-        ix_xz = int(np.argmin(np.abs(x_xz - x_center)))
-        z_profile = T_xz[:, ix_xz]
-
-        # Save files: two columns each (coordinate, temperature)
-        # save to .out folder
-        out_dir = ".out"
-        fname_x = f"{out_dir}/x_spectral_latent_heat.txt"
-        fname_y = f"{out_dir}/y_spectral_latent_heat.txt"
-        fname_z = f"{out_dir}/z_spectral_latent_heat.txt"
-
-        np.savetxt(fname_x, np.vstack([x_vals, x_profile]).T,
-                             header='x(m) T_top(K)', fmt='% .6e')
-        np.savetxt(fname_y, np.vstack([y_vals, y_profile]).T,
-                             header='y(m) T_top(K)', fmt='% .6e')
-        np.savetxt(fname_z, np.vstack([z_vals, z_profile]).T,
-                             header='z(m) T_xz(K)', fmt='% .6e')
-
-        print(f"Saved: {fname_x}, {fname_y}, {fname_z}")
-        return fname_x, fname_y, fname_z
-
-
-def print_timings_summary():
-    """Print a detailed timing summary from the TIMINGS aggregator."""
-    if not TIMINGS:
-        print("No timings recorded.")
-        return
-    total_all = sum(v['total'] for v in TIMINGS.values())
-    print('\n==== Detailed timings summary ====>')
-    print(f"Total tracked time: {total_all:.6f} s")
-    print(f"{'Function':40s} {'Total(s)':>10s} {'%':>6s} {'Calls':>8s} {'Avg(s)':>10s}")
-    print('-' * 80)
-    for name, v in sorted(TIMINGS.items(), key=lambda kv: -kv[1]['total']):
-        tot = v['total']
-        cnt = v['count']
-        pct = (tot / total_all * 100.0) if total_all > 0 else 0.0
-        avg = tot / cnt if cnt else 0.0
-        print(f"{name:40s} {tot:10.6f} {pct:6.2f}% {cnt:8d} {avg:10.6f}")
-    print('==== End timings ====>\n')
 
 # ============================================================
 #   SENSITIVITY ANALYSIS OVER nz
@@ -651,7 +420,7 @@ phys = PhysParams(rho=7900, Ceff=500, k=14, T0=300.0,
                   P=200.0, Absorptivity=0.30, r_b=6e-5,
                   x0=0.005, y0=0.0025, vx=0.8)
 
-num = NumericalParams(dt=6e-6, t_final=0.0006,
+num = NumericalParams(dt=6e-6, t_final=0.012,
                       nx=512, ny=256, nz=1000)
 
 geom = GeomParams(Lx=0.01, Ly=0.005, Lz=0.0025, num=num, phys=phys)
@@ -673,10 +442,6 @@ np.savetxt("T_probe.csv", np.array(T_probe), delimiter=",")
 X = geom.X
 Y = geom.Y
 T = T_final
-
-
-# Print detailed timings collected during the run
-print_timings_summary()
 
 # Compute q_laser and q_evap for final time
 q_las = q_laser(geom, num.t_final, phys) 
