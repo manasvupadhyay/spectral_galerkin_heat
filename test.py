@@ -73,7 +73,7 @@ class GeomParams:
         self.Cp32 = self.Cp.astype(np.float32)
         
         # Precompute DCT scaling constant
-        self.dct_scale = np.float32((self.dx * self.dy / 4.0) * np.sqrt((self.nx * self.ny) / (self.Lx * self.Ly)))
+        self.dct_scale = np.float32((self.dx * self.dy) * np.sqrt((self.nx * self.ny) / (self.Lx * self.Ly)))
         self.recon_scale = np.float32(np.sqrt(self.nx * self.ny) / np.sqrt(self.Lx * self.Ly))
         
         # Laser coefficient base
@@ -117,14 +117,15 @@ class GeomParams:
 class PhysParams:
     def __init__(self, rho, Cp, k,
                  P, Absorptivity, r_b, x0, y0, vx,
-                 L_f=267700.0, DeltaH_LV=7.41e6, R_v=150.774, T0=293.0,
+                 L_f=267700.0, DeltaH_LV=7.41e6, R_v=150.774, T0=293.0, Pa = 101325.0, 
                  T_boil=3090.0, T_liquidus=1800.0, T_solidus=1700.0):
 
         self.rho = rho
         self.Cp = Cp
         self.k = k
         self.L_f = L_f
-        
+        print("Warning: Latent heat currently disabled in Ceff calculation.")
+        print("Warning: Evaporation currently disabled in heat flux calculation.")
         # Compute effective heat capacity including latent heat of fusion
         # C_eff = C_p + L_f / (T_L - T_S)
         self.Ceff = Cp #+ L_f / (T_liquidus - T_solidus)  temporarily disabled
@@ -139,6 +140,7 @@ class PhysParams:
         self.DeltaH_LV = DeltaH_LV
         self.R_v = R_v
         self.T0 = T0
+        self.Pa = Pa
         self.T_boil = T_boil
         self.T_liquidus = T_liquidus
         self.T_solidus = T_solidus
@@ -180,6 +182,7 @@ class NumericalParams:
         self.a_temp = None
         self.aK = None
         self.S_n = None  # Forcing term from previous time step (for ETD2)
+        self.q_evap_old = np.zeros((ny, nx), dtype=np.float32)
 
 
 # ============================================================
@@ -237,10 +240,30 @@ def q_laser(geom, t, phys):
 
 def q_evap_point(T: np.ndarray, phys: PhysParams) -> np.ndarray:
     """Evaporative heat flux."""
-    q = 0.82 * phys.DeltaH_LV / np.sqrt(2 * np.pi * phys.R_v * T) * \
+    q = 0.82 * phys.DeltaH_LV * phys.Pa/ np.sqrt(2 * np.pi * phys.R_v * T) * \
         np.exp((phys.DeltaH_LV / (phys.R_v * phys.T_boil)) * (1.0 - phys.T_boil / T))
-    q[T < phys.T_boil] = 0.0
+    q[T < phys.T_liquidus] = 0.0
     return q.astype(np.float32)
+
+
+def shift_flux_along_x(field: np.ndarray, shift: float, geom: GeomParams) -> np.ndarray:
+    """Translate a surface flux field along +x by ``shift`` meters using linear interpolation."""
+    if field is None or field.size == 0:
+        return np.zeros((geom.ny, geom.nx), dtype=np.float32)
+
+    if abs(shift) < 1e-12:
+        return field.astype(np.float32, copy=True)
+
+    x_coords = geom.x.astype(np.float64)
+    x_shifted = (x_coords - shift).astype(np.float64)
+    shifted = np.empty_like(field, dtype=np.float32)
+
+    for j in range(field.shape[0]):
+        row = np.asarray(field[j], dtype=np.float64)
+        shifted_row = np.interp(x_shifted, x_coords, row, left=0.0, right=0.0)
+        shifted[j] = shifted_row.astype(np.float32)
+
+    return shifted
 
 # ============================================================
 #   DCT-II 2D 
@@ -298,47 +321,67 @@ def precompute_K_KK(phys, num, geom):
 #   TIME STEP 
 # ============================================================
 
-def time_step(a, t, phys, num, geom, epsilon=1e-2):
+def time_step(a, t, phys, num, geom, epsilon=2e+1):
     """Time stepping with ETD1 or ETD2 scheme."""
     
     if num.ETD == 'ETD1':
         # ============ ETD1: First-order (constant forcing) ============
         q_las = q_laser(geom, t, phys)
-        q_dct = DCT_II(q_las)
+
+        # Warm-start evaporation flux using previous step translated by the laser travel distance
+        x_shift = phys.vx * num.dt
+        q_evap = shift_flux_along_x(num.q_evap_old, x_shift, geom)
+
+        q_dct = DCT_II(q_las - q_evap)
         
         # Compute a*K
         np.multiply(a, num.K, out=num.aK, casting='same_kind')
         
         # Initial forcing S_n^{n+1} (before iteration)
         S_n = geom.dct_scale * q_dct
-        
+        omega = 0.1
         # Initial prediction: a_temp = a*K + KK_by_Cp * S_n
         np.multiply(geom.dct_scale, q_dct, out=num.B_buffer, casting='same_kind')
         compute_a_temp_numba(num.aK, num.KK_by_Cp, num.B_buffer, num.a_temp)
-        
+        S_current = S_n.copy()
         # Fixed-point iteration for nonlinear evaporation
         T_temp = reconstruct_temperature_top(num.a_temp, num, geom)
-        for k in range(20):
+        for k in range(30):
             q_evap = q_evap_point(T_temp, phys)
+            
+            # Calculate the full difference (Laser - Evap)
             np.subtract(q_las, q_evap, out=num.q_diff, casting='same_kind')
             
-            # Update forcing: S_n = scale * DCT(q_diff)
-            S_n = geom.dct_scale * DCT_II(num.q_diff)
+            # Calculate the NEW target forcing term
+            S_target = geom.dct_scale * DCT_II(num.q_diff)
             
-            # Update a_temp = a*K + KK_by_Cp * S_n
-            np.multiply(1.0, S_n, out=num.B_buffer, casting='same_kind')
+            # --- UNDER-RELAXATION STEP ---
+            # Instead of S_current = S_target, we blend them:
+            # New = omega * Target + (1 - omega) * Old
+            S_current = omega * S_target + (1.0 - omega) * S_current
+                
+            # Update simulation with this smoothed forcing
+            np.multiply(1.0, S_current, out=num.B_buffer, casting='same_kind')
             compute_a_temp_numba(num.aK, num.KK_by_Cp, num.B_buffer, num.a_temp)
             
             T_old = T_temp
             T_temp = reconstruct_temperature_top(num.a_temp, num, geom)
+            
+            # Check convergence
             if np.max(np.abs(T_temp - T_old)) < epsilon:
                 break
         
-        # Store forcing for next time step (used by ETD2)
+        # Store forcing and evaporation for next time step
         num.S_n = S_n.copy()
-        return num.a_temp, T_temp
+        num.q_evap_old = q_evap.astype(np.float32, copy=True)
+        
+        # Compute exact laser power (integral of q_las over domain)
+        P_laser = np.sum(q_las) * geom.dx * geom.dy
+
+        return num.a_temp, T_temp, P_laser, k+1
     
     elif num.ETD == 'ETD2':
+        print("Warning: ETD2 scheme has no under relaxation.")
         # ============ ETD2: Second-order (linear forcing) ============
         # Using precomputed K_phi0, KK_phi1, KKK_phi2
         
@@ -375,7 +418,11 @@ def time_step(a, t, phys, num, geom, epsilon=1e-2):
         
         # Store forcing for next time step
         num.S_n = S_n_next.copy()
-        return num.a_temp, T_temp
+        
+        # Compute exact laser power (integral of q_las over domain)
+        P_laser = np.sum(q_las) * geom.dx * geom.dy
+        
+        return num.a_temp, T_temp, P_laser, k+1
     
     else:
         raise ValueError(f"Unknown ETD scheme: {num.ETD}. Use 'ETD1' or 'ETD2'.")
@@ -403,23 +450,28 @@ def run_simulation(phys, num, geom):
     num.a_temp = np.empty((num.nz, num.ny, num.nx), dtype=np.float32)
     num.aK = np.empty((num.nz, num.ny, num.nx), dtype=np.float32)
     num.S_n = np.zeros((num.ny, num.nx), dtype=np.float32)  # Initialize forcing term
+    num.q_evap_old.fill(0.0)
     
     a = np.zeros((num.nz, num.ny, num.nx), dtype=np.float32)
     a[0,0,0] = phys.T0 * np.sqrt(geom.Lx * geom.Ly * geom.Lz)
     
     nsteps = int(np.ceil(num.t_final / num.dt))
     T_top_history = []
+    P_laser_history = []
     start = time.perf_counter()
     
     for step in range(nsteps+1):
         t = step * num.dt
-        print(f"Step {step}/{nsteps} | t={t:.6e}s")
-        a, T_top = time_step(a, t, phys, num, geom)
+        a, T_top, P_laser, n_iter = time_step(a, t, phys, num, geom)
+        print(f"Step {step}/{nsteps} | t={t:.6e}s | Peak T: {np.max(T_top):.2f} K | P_laser: {P_laser:.3f} W | Iterations: {n_iter}")
         T_top_history.append(T_top)
-    
+        P_laser_history.append(P_laser)
+
     elapsed = time.perf_counter() - start
     print(f"\nTotal: {elapsed:.3f}s ({nsteps} steps, {elapsed/nsteps:.3f}s/step)")
-    return a, T_top_history
+    print(f"Laser power: min={min(P_laser_history):.3f} W, max={max(P_laser_history):.3f} W, mean={np.mean(P_laser_history):.3f} W")
+    print(f"Nominal laser power: {phys.P} W")
+    return a, T_top_history, P_laser_history
 
 
 # ============================================================
@@ -538,17 +590,23 @@ phys = PhysParams(rho=7850, Cp=500, k=15, T0=293.0,
                   P=200.0, Absorptivity=0.30, r_b=6e-5,
                   x0=0.0, y0=0.0025, vx=0.8)
 
-num = NumericalParams(dt=6e-5, t_final=0.012, nx=512, ny=256, nz=1200, ETD='ETD1')
+num = NumericalParams(dt=6e-6, t_final=0.012, nx=512, ny=256, nz=1000, ETD='ETD1')
 
 geom = GeomParams(Lx=0.01, Ly=0.005, Lz=0.0025, num=num, phys=phys)
 
-a_final, T_top_history = run_simulation(phys, num, geom)
+a_final, T_top_history, P_laser_history = run_simulation(phys, num, geom)
 save_temp_profiles(a_final, num, geom, phys)
 T_final = T_top_history[-1]
 
+# Save laser power history
+np.savetxt(f"{OUT_DIR}/laser_power_history.csv", 
+           np.column_stack([np.arange(len(P_laser_history)) * num.dt, P_laser_history]),
+           header='time(s) P_laser(W)', delimiter=',', fmt='%.6e')
+print(f"Saved laser power history to {OUT_DIR}/laser_power_history.csv")
+
 # Probing a point on top surface
 # chose x probe so that temperature max is reached on a chosen time step
-x_probe = 30 * phys.vx * num.dt + phys.x0 # = 100 * 0.8 * 0.0000075 = 0.0006
+x_probe = 30 * phys.vx * num.dt + phys.x0 
 y_probe = 0.0025
 ix = int(x_probe / geom.Lx * num.nx)
 iy = int(y_probe / geom.Ly * num.ny)
@@ -661,7 +719,7 @@ for nz in nz_values:
     num = NumericalParams(dt=6e-6, t_final=0.0006, nx=512, ny=256, nz=nz)
     geom = GeomParams(Lx=0.01, Ly=0.005, Lz=0.0025, num=num, phys=phys)
     
-    a_final, _ = run_simulation(phys, num, geom)
+    a_final, _, _ = run_simulation(phys, num, geom)
     T_final = reconstruct_temperature_top(a_final, num, geom)
     
     Tmax, W, L = meltpool_metrics(T_final, phys, geom)
@@ -716,13 +774,13 @@ num_etd2 = NumericalParams(dt=6e-5, t_final=0.0006, nx=512, ny=256, nz=1000, ETD
 # Run ETD1
 print("\nRunning ETD1 simulation...")
 geom_etd1 = GeomParams(Lx=0.01, Ly=0.005, Lz=0.0025, num=num_etd1, phys=phys_test)
-a_final_etd1, T_history_etd1 = run_simulation(phys_test, num_etd1, geom_etd1)
+a_final_etd1, T_history_etd1, P_laser_etd1 = run_simulation(phys_test, num_etd1, geom_etd1)
 T_final_etd1 = T_history_etd1[-1]
 
 # Run ETD2
 print("\nRunning ETD2 simulation...")
 geom_etd2 = GeomParams(Lx=0.01, Ly=0.005, Lz=0.0025, num=num_etd2, phys=phys_test)
-a_final_etd2, T_history_etd2 = run_simulation(phys_test, num_etd2, geom_etd2)
+a_final_etd2, T_history_etd2, P_laser_etd2 = run_simulation(phys_test, num_etd2, geom_etd2)
 T_final_etd2 = T_history_etd2[-1]
 
 # Extract probe temperature along x
@@ -804,7 +862,7 @@ for nx in nx_values:
     print(f"  nx = {nx}")
     num_conv = NumericalParams(dt=dt_ref, t_final=t_final_conv, nx=nx, ny=ny_ref, nz=nz_ref, ETD='ETD1')
     geom_conv = GeomParams(Lx=Lx, Ly=Ly, Lz=Lz, num=num_conv, phys=phys_conv)
-    a_final_conv, T_history_conv = run_simulation(phys_conv, num_conv, geom_conv)
+    a_final_conv, T_history_conv, _ = run_simulation(phys_conv, num_conv, geom_conv)
     T_final_conv = T_history_conv[-1]
     
     dx = Lx / nx
@@ -823,7 +881,7 @@ for ny in ny_values:
     print(f"  ny = {ny}")
     num_conv = NumericalParams(dt=dt_ref, t_final=t_final_conv, nx=nx_ref, ny=ny, nz=nz_ref, ETD='ETD1')
     geom_conv = GeomParams(Lx=Lx, Ly=Ly, Lz=Lz, num=num_conv, phys=phys_conv)
-    a_final_conv, T_history_conv = run_simulation(phys_conv, num_conv, geom_conv)
+    a_final_conv, T_history_conv, _ = run_simulation(phys_conv, num_conv, geom_conv)
     T_final_conv = T_history_conv[-1]
     
     dy = Ly / ny
@@ -842,7 +900,7 @@ for nz in nz_values:
     print(f"  nz = {nz}")
     num_conv = NumericalParams(dt=dt_ref, t_final=t_final_conv, nx=nx_ref, ny=ny_ref, nz=nz, ETD='ETD1')
     geom_conv = GeomParams(Lx=Lx, Ly=Ly, Lz=Lz, num=num_conv, phys=phys_conv)
-    a_final_conv, T_history_conv = run_simulation(phys_conv, num_conv, geom_conv)
+    a_final_conv, T_history_conv, _ = run_simulation(phys_conv, num_conv, geom_conv)
     T_final_conv = T_history_conv[-1]
     
     # Compute lambda_max_z * dt
@@ -862,7 +920,7 @@ for dt in dt_values:
     print(f"  dt = {dt:.2e}")
     num_conv = NumericalParams(dt=dt, t_final=t_final_conv, nx=nx_ref, ny=ny_ref, nz=nz_ref, ETD='ETD1')
     geom_conv = GeomParams(Lx=Lx, Ly=Ly, Lz=Lz, num=num_conv, phys=phys_conv)
-    a_final_conv, T_history_conv = run_simulation(phys_conv, num_conv, geom_conv)
+    a_final_conv, T_history_conv, _ = run_simulation(phys_conv, num_conv, geom_conv)
     T_final_conv = T_history_conv[-1]
     
     # Compute lambda_max_z * dt

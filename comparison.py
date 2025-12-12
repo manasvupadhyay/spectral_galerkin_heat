@@ -3,6 +3,8 @@ Comparison of spectral method results with finite element results.
 
 This script loads temperature profiles from .out (spectral) and .validation (FE)
 directories and compares them.
+
+
 """
 
 import numpy as np
@@ -50,37 +52,101 @@ def load_temperature_profiles(out_dir=".out", validation_dir=".validation"):
 
 
 def plot_comparison(profiles, output_file="temperature_comparison.png"):
-    """Create comparison plots for all three directions.
+    """Create comparison plots for all three directions with derivatives and error curves.
     
     Args:
         profiles: Dictionary returned by load_temperature_profiles
-        output_file: Path to save the comparison figure
+        output_file: Path to save the comparison figure (will be suffixed with _x, _y, _z)
     """
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-    
     directions = ['x', 'y', 'z']
     labels = ['x (m)', 'y (m)', 'z (m)']
     
-    for ax, direction, label in zip(axes, directions, labels):
-        # Plot spectral method
-        coords_spec, T_spec = profiles[f'{direction}_spectral']
-        if len(coords_spec) > 0:
-            ax.plot(coords_spec * 1e3, T_spec, 'b-', label='Spectral', linewidth=2)
-        
-        # Plot FE method
-        coords_FE, T_FE = profiles[f'{direction}_FE']
-        if len(coords_FE) > 0:
-            ax.plot(coords_FE * 1e3, T_FE, 'r--', label='Finite Element', linewidth=2)
-        
-        ax.set_xlabel(f'{label.split()[0]} (mm)')
-        ax.set_ylabel('Temperature (K)')
-        ax.set_title(f'Temperature Profile along {direction.upper()}')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
+    base_name, ext = os.path.splitext(output_file)
     
-    plt.tight_layout()
-    plt.savefig(output_file, dpi=150)
-    print(f"\nComparison plot saved to: {output_file}")
+    for direction, label in zip(directions, labels):
+        # Get data
+        coords_spec, T_spec = profiles[f'{direction}_spectral']
+        coords_FE, T_FE = profiles[f'{direction}_FE']
+        
+        if len(coords_spec) == 0 or len(coords_FE) == 0:
+            print(f"Skipping {direction}: missing data")
+            continue
+            
+        # Create figure with 2 subplots
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12), sharex=True)
+        
+        # --- Top Plot: Temperature ---
+        # Plot Spectral
+        ax1.plot(coords_spec * 1e3, T_spec, 'b-', label='Spectral', linewidth=2)
+        # Plot FE
+        ax1.plot(coords_FE * 1e3, T_FE, 'r--', label='Finite Element', linewidth=2)
+        
+        # Compute and plot error (interpolate FE to Spectral)
+        # We use the spectral grid as the reference for error calculation
+        if len(coords_FE) > 1:
+            # Ensure FE coords are sorted for interpolation
+            sort_idx = np.argsort(coords_FE)
+            coords_FE_sorted = coords_FE[sort_idx]
+            T_FE_sorted = T_FE[sort_idx]
+            
+            T_FE_interp = np.interp(coords_spec, coords_FE_sorted, T_FE_sorted, left=np.nan, right=np.nan)
+            error_T = np.abs(T_spec - T_FE_interp)
+            
+            ax1_err = ax1.twinx()
+            ax1_err.plot(coords_spec * 1e3, error_T, 'g-', label='Error', linewidth=1.5, alpha=0.7)
+            ax1_err.set_ylabel('Abs. Error (K)', color='g')
+            ax1_err.tick_params(axis='y', labelcolor='g')
+            
+            # Combine legends
+            lines1, labels1 = ax1.get_legend_handles_labels()
+            lines2, labels2 = ax1_err.get_legend_handles_labels()
+            ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+        else:
+            ax1.legend(loc='upper right')
+
+        ax1.set_ylabel('Temperature (K)')
+        ax1.set_title(f'Temperature Profile along {direction.upper()}')
+        ax1.grid(True, alpha=0.3)
+        
+
+        # --- Bottom Plot: Derivative ---
+        # Compute derivatives (dT/dx)
+        if len(coords_spec) > 1:
+            dT_spec = np.gradient(T_spec, coords_spec)
+            ax2.plot(coords_spec * 1e3, dT_spec, 'b-', label='Spectral Deriv.', linewidth=2)
+        
+        if len(coords_FE) > 1:
+            dT_FE = np.gradient(T_FE, coords_FE)
+            ax2.plot(coords_FE * 1e3, dT_FE, 'r--', label='FE Deriv.', linewidth=2)
+        
+        # Compute and plot derivative error
+        if len(coords_spec) > 1 and len(coords_FE) > 1:
+            # Interpolate FE derivative to spectral grid
+            dT_FE_interp = np.interp(coords_spec, coords_FE_sorted, dT_FE, left=np.nan, right=np.nan)
+            error_dT = np.abs(dT_spec - dT_FE_interp)
+            
+            ax2_err = ax2.twinx()
+            ax2_err.plot(coords_spec * 1e3, error_dT, 'g-', label='Deriv. Error', linewidth=1.5, alpha=0.7)
+            ax2_err.set_ylabel('Abs. Error (K/m)', color='g')
+            ax2_err.tick_params(axis='y', labelcolor='g')
+            
+            # Combine legends
+            lines1, labels1 = ax2.get_legend_handles_labels()
+            lines2, labels2 = ax2_err.get_legend_handles_labels()
+            ax2.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+        else:
+            ax2.legend(loc='upper right')
+        
+        ax2.set_xlabel(f'{label.split()[0]} (mm)')
+        ax2.set_ylabel('Temperature Gradient (K/m)')
+        ax2.set_title(f'Temperature Gradient along {direction.upper()}')
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        current_output = f"{base_name}_{direction}{ext}"
+        plt.savefig(current_output, dpi=150)
+        print(f"Comparison plot saved to: {current_output}")
+    
     plt.show()
 
 
