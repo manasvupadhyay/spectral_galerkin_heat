@@ -125,7 +125,6 @@ class PhysParams:
         self.k = k
         self.L_f = L_f
         print("Warning: Latent heat currently disabled in Ceff calculation.")
-        print("Warning: Evaporation currently disabled in heat flux calculation.")
         # Compute effective heat capacity including latent heat of fusion
         # C_eff = C_p + L_f / (T_L - T_S)
         self.Ceff = Cp #+ L_f / (T_liquidus - T_solidus)  temporarily disabled
@@ -151,8 +150,6 @@ class PhysParams:
         print(f"Cp (base specific heat): {self.Cp:.2f} J/(kg·K)")
         print(f"L_f (latent heat of fusion): {self.L_f:.2f} J/kg")
         print(f"Melting range: T_S = {self.T_solidus:.0f} K, T_L = {self.T_liquidus:.0f} K")
-        print(f"C_eff (apparent heat capacity): {self.Ceff:.2f} J/(kg·K)")
-        print(f"  = Cp + L_f/(T_L - T_S) = {Cp:.2f} + {L_f/(T_liquidus - T_solidus):.2f}")
         print("="*60 + "\n")
 
 
