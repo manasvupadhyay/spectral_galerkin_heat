@@ -6,7 +6,7 @@ from numba import njit, prange
 import os
 
 pyfftw.config.NUM_THREADS = os.cpu_count()
-OUT_DIR = ".out"
+OUT_DIR = "out"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # ============================================================

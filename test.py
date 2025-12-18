@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import time
 from numba import njit, prange
 import os
+import helpers as hp
 
 pyfftw.config.NUM_THREADS = os.cpu_count()
 
@@ -25,7 +26,7 @@ def compute_a_temp_ETD2(a_phi0, KK_phi1, KKK_phi2, S_prev, S_next, a_temp_out):
                 dS = S_next[i, j] - S_prev[i, j]
                 a_temp_out[p, i, j] = a_phi0[p, i, j] + KK_phi1[p, i, j] * S_prev[i, j] + KKK_phi2[p, i, j] * dS
 
-OUT_DIR = ".out"
+OUT_DIR = "out"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # ============================================================
@@ -54,11 +55,14 @@ class Laser:
         # Current position (initialized to start)
         self.x = x0
         self.y = y0
+        self.t = 0
         
     def update(self, dt):
         """Update current x and y positions based on velocity and time step."""
         self.x += self.v[0] * dt
         self.y += self.v[1] * dt
+        self.t += dt
+
 
 # ============================================================
 #  GEOMETRY PARAMETERS
@@ -66,7 +70,9 @@ class Laser:
 
 class GeomParams:
     def __init__(self, Lx, Ly, Lz, num, phys, laser):
-        """Geometry and precomputed cosine bases (NumPy)."""
+        """Geometry and precomputed cosine bases (NumPy).
+        Convertions to float32 for speed
+        """
         self.Lx = float(Lx)
         self.Ly = float(Ly)
         self.Lz = float(Lz)
@@ -99,7 +105,13 @@ class GeomParams:
         # Precompute DCT scaling constant
         self.dct_scale = np.float32((self.dx * self.dy) * np.sqrt((self.nx * self.ny) / (self.Lx * self.Ly)))
         self.recon_scale = np.float32(np.sqrt(self.nx * self.ny) / np.sqrt(self.Lx * self.Ly))
-        
+
+        # Precompute cosine bases (NumPy)
+        # Shape: (Mode Index, Spatial Index)
+        self.cos_mx = np.cos(np.pi * np.arange(self.nx)[:, None] * x_np[None, :] / self.Lx).astype(np.float32)
+        self.cos_ny = np.cos(np.pi * np.arange(self.ny)[:, None] * y_np[None, :] / self.Ly).astype(np.float32)
+        self.cos_pz = np.cos(np.pi * np.arange(self.nz)[:, None] * z_np[None, :] / self.Lz).astype(np.float32)
+
         # Laser coefficient base (Uses Laser object parameters)
         self.laser_coef = laser.Absorptivity * 2.0 * laser.P / (np.pi * laser.r_b ** 2)
 
@@ -182,21 +194,28 @@ class NumericalParams:
         self.nz = nz
         self.ETD = ETD  # 'ETD1' or 'ETD2'
         self.debug = debug
+        self.iter = 0
 
-        self.K = None   # CPU arrays (nz, ny, nx)
-        self.KK = None
-        self.KK_by_Cp = None
-        # ETD2 coefficients
-        self.K_phi0 = None
-        self.KK_phi1 = None
-        self.KKK_phi2 = None
-        self.q_diff = None
-        self.B_buffer = None
-        self.a_temp = None
-        self.aK = None
-        self.S_n = None
-        self.q_evap_old = np.zeros((ny, nx), dtype=np.float32)
-
+    def prepare_K_buffers(self, phys, geom):
+        print(f"Precomputing K, KK, buffers... (using {self.ETD})")
+        K, KK, K_phi0, KK_phi1, KKK_phi2 = precompute_K_KK(phys, self, geom)
+        self.K = K
+        self.KK = KK
+        self.KK_by_Cp = (self.KK * geom.Cp[:, None, None]).astype(np.float32)
+        
+        if self.ETD == 'ETD2':
+            self.K_phi0 = K_phi0
+            self.KK_phi1 = KK_phi1
+            self.KKK_phi2 = KKK_phi2
+        
+        self.q_diff = np.empty((self.ny, self.nx), dtype=np.float32)
+        self.B_buffer = np.empty((self.ny, self.nx), dtype=np.float32)
+        self.a_temp = np.empty((self.nz, self.ny, self.nx), dtype=np.float32)
+        self.aK = np.empty((self.nz, self.ny, self.nx), dtype=np.float32)
+        self.S_n = np.zeros((self.ny, self.nx), dtype=np.float32)
+        self.q_evap_old = np.zeros((self.ny, self.nx), dtype=np.float32)
+        self.q_evap_old.fill(0.0)
+        self.iter = 0
 
 # ============================================================
 #   COSINE NORMALIZATION COEFFICIENTS
@@ -213,6 +232,7 @@ def C_coef(N, L):
 # ============================================================
 
 def phi_functions(z):
+    """ Functions used for the time stepping, taking into account exponential decay"""
     small_threshold = 1e-6
     phi_0 = np.exp(z)
     
@@ -229,7 +249,7 @@ def phi_functions(z):
 
 
 # ============================================================
-#   HEAT FLUX (GPU)
+#   HEAT FLUX
 # ============================================================
 
 def q_laser(geom, laser):
@@ -254,6 +274,31 @@ def shift_flux(field: np.ndarray, shift: tuple, geom: GeomParams) -> np.ndarray:
     shift_pixels = (dy / geom.dy, dx / geom.dx)
     return scipy_shift(field, shift_pixels, order=1, mode='constant', cval=0.0).astype(np.float32) 
 
+# ============================================================
+#   LATENT HEAT 
+# ============================================================
+
+def apply_latent_heat(T_box_old, T_box_target, num, phys, geom, laser):
+    """ Apply latent heat correction to the temperature box
+    Using line heat sources approximation for melt pool solidification
+    """
+    # Create a mask for melt region, region is centered on laser
+    mask_melt = T_box_target[len(T_box_target)//2, :, :] >= phys.T_liquidus
+    # for debuging purposes
+    plt.imshow(mask_melt, origin='lower')
+    plt.colorbar()
+    plt.title(f"Melt region at t={laser.t:.6e}s")
+    plt.savefig(f"{OUT_DIR}/melt_region_step_{laser.t:.5f}.png")
+    plt.close()
+    # get mask for mushy zone  
+    mask_mushy = (T_box_target[len(T_box_target)//2, :, :] >= phys.T_solidus) & (T_box_target[len(T_box_target)//2, :, :] < phys.T_liquidus)
+    # debug as well 
+    plt.imshow(mask_mushy, origin='lower')
+    plt.colorbar()
+    plt.title(f"Mushy region at t={laser.t:.6e}s")
+    plt.savefig(f"{OUT_DIR}/mushy_region_step_{laser.t:.5f}.png")
+    plt.close()
+    # Retrieve 
 # ============================================================
 #   DCT-II 2D 
 # ============================================================
@@ -304,9 +349,13 @@ def precompute_K_KK(phys, num, geom):
 #   TIME STEP 
 # ============================================================
 
-def time_step(a, phys, num, geom, laser, epsilon=2e+1):
-    """Time stepping with ETD1 or ETD2 scheme using Laser object."""
-    
+def time_step(a, phys, num, geom, laser, epsilon=2e+1, iter_step=None):
+    """Time stepping with ETD1 or ETD2 scheme using Laser object.
+    iter_step: current iteration (optional, for debug/output control)
+    """
+    if iter_step is None:
+        iter_step = getattr(num, 'iter', 0)
+
     if num.ETD == 'ETD1':
         # Use Laser object for heat flux and velocity shift
         q_las = q_laser(geom, laser)
@@ -319,7 +368,7 @@ def time_step(a, phys, num, geom, laser, epsilon=2e+1):
 
         q_dct = DCT_II(q_las - q_evap)
         
-        np.multiply(a, num.K, out=num.aK, casting='same_kind')
+        np.multiply(a, num.K, out=num.aK, casting='same_kind')   # Time update of coeffs, exponential decay
         
         S_n = geom.dct_scale * q_dct
         omega = 0.1
@@ -348,7 +397,20 @@ def time_step(a, phys, num, geom, laser, epsilon=2e+1):
         num.q_evap_old = q_evap.astype(np.float32, copy=True)
         P_laser = np.sum(q_las) * geom.dx * geom.dy
 
-        return num.a_temp, T_temp, P_laser, k+1
+        T_box_old, box_coords = reconstruct_temperature_box(num.a_temp, num, geom, laser)
+        T_box_target, box_coords = reconstruct_temperature_box(num.a_temp, num, geom, laser)
+        T_box_temp = T_box_target.copy()
+        # For debug purpoeses, save as .h5 the T_box
+        if iter_step%10 == 0: 
+            print("Box coords:", box_coords[0].min(), box_coords[0].max(), box_coords[1].min(), box_coords[1].max(), box_coords[2].min(), box_coords[2].max())
+            hp.T_to_HDF5(f"{OUT_DIR}/T_box_step_{laser.t:.5f}", T_box_target, box_coords, geom=geom)
+        for l in range(30):
+            T_box_temp = apply_latent_heat(T_box_old, T_box_target, num, phys, geom, laser)
+            
+            if np.max(np.abs(T_box_temp - T_box_target)) < epsilon:
+                break
+        # Here a function to add contribution of corrected temperature to the a_temp
+        return num.a_temp, T_temp, P_laser, k+1, l+1
     
     elif num.ETD == 'ETD2':
         print("Warning: ETD2 scheme has no under relaxation.")
@@ -387,26 +449,9 @@ def time_step(a, phys, num, geom, laser, epsilon=2e+1):
 # ============================================================
 
 def run_simulation(phys, num, geom, laser):
-    print(f"Precomputing K, KK, buffers... (using {num.ETD})")
-    # Initialiszation shouldn't be done here
-    K, KK, K_phi0, KK_phi1, KKK_phi2 = precompute_K_KK(phys, num, geom)
-    num.K = K
-    num.KK = KK
-    num.KK_by_Cp = (num.KK * geom.Cp[:, None, None]).astype(np.float32)
-    
-    if num.ETD == 'ETD2':
-        num.K_phi0 = K_phi0
-        num.KK_phi1 = KK_phi1
-        num.KKK_phi2 = KKK_phi2
-    
-    num.q_diff = np.empty((num.ny, num.nx), dtype=np.float32)
-    num.B_buffer = np.empty((num.ny, num.nx), dtype=np.float32)
-    num.a_temp = np.empty((num.nz, num.ny, num.nx), dtype=np.float32)
-    num.aK = np.empty((num.nz, num.ny, num.nx), dtype=np.float32)
-    num.S_n = np.zeros((num.ny, num.nx), dtype=np.float32)
-    num.q_evap_old.fill(0.0)
-    
+    num.prepare_K_buffers(phys, geom)
     a = np.zeros((num.nz, num.ny, num.nx), dtype=np.float32)
+    # Zeroth order eigen function receives the mean temperature
     a[0,0,0] = phys.T0 * np.sqrt(geom.Lx * geom.Ly * geom.Lz)
     
     nsteps = int(np.ceil(num.t_final / num.dt))
@@ -416,14 +461,12 @@ def run_simulation(phys, num, geom, laser):
     
     for step in range(nsteps+1):
         t = step * num.dt
-        
-        # 1. Compute time step using current laser position
-        a, T_top, P_laser, n_iter = time_step(a, phys, num, geom, laser)
-        
-        # 2. Update laser position for the next step (Implicitly t -> t + dt)
+        num.iter = step  # update current iteration
+        # Compute time step using current laser position
+        a, T_top, P_laser, n_iter_evap, n_iter_LH = time_step(a, phys, num, geom, laser, iter_step=step)
         laser.update(num.dt)
         
-        print(f"Step {step}/{nsteps} | t={t:.6e}s | Peak T: {np.max(T_top):.2f} K | P_laser: {P_laser:.3f} W | Iterations: {n_iter}")
+        print(f"Step {step}/{nsteps} | t={t:.6e}s | Peak T: {np.max(T_top):.2f} K | P_laser: {P_laser:.3f} W | Evap Iterations: {n_iter_evap} | LH Iterations: {n_iter_LH}")
         T_top_history.append(T_top)
         P_laser_history.append(P_laser)
 
@@ -481,6 +524,83 @@ def reconstruct_temperature_xz(a, num, geom, phys, laser, y0=None, mode='full_fi
 
     return geom.x[ix0:ix1], geom.z[iz0:iz1], T_xz[iz0:iz1, ix0:ix1].astype(np.float32)
 
+def reconstruct_temperature_box(a, num, geom, laser, simetrize=False):
+    """
+    Reconstructs temperature in a small ROI around the laser using 
+    Tensor Contraction on slices of precomputed cosine bases.
+    Handles boundaries by mirroring indices (Neumann BCs imply even symmetry)
+    or by zero-padding if simetrize=False.
+    
+    """
+    # Define Box Size + box indices
+    Lx_box, Ly_box, Lz_box = 0.5e-3, 0.5e-3, 0.25e-3
+    x_min, x_max = laser.x - Lx_box/2, laser.x + Lx_box/2
+    y_min, y_max = laser.y - Ly_box/2, laser.y + Ly_box/2
+    z_min, z_max = 0, Lz_box 
+    
+    # Map to raw indices (can be negative or > N)
+    ix0 = int(np.floor(x_min / geom.dx))
+    ix1 = int(np.ceil(x_max / geom.dx))
+    iy0 = int(np.floor(y_min / geom.dy))
+    iy1 = int(np.ceil(y_max / geom.dy))
+    iz0 = 0
+    iz1 = int(np.ceil(z_max / geom.dz))
+    
+    if simetrize:
+        # Generate Index Arrays with Reflection (Mirroring) > cosines are even
+        def get_mirrored_indices(start, end, limit):
+            idx = np.arange(start, end)
+            # Reflect Left: -i -> i
+            idx = np.abs(idx)
+            # Reflect Right: N + i -> N - i
+            mask_over = idx >= limit
+            idx[mask_over] = 2 * limit - idx[mask_over]
+            # Safety clamp to ensure valid array access (handles exactly boundary N)
+            return np.clip(idx, 0, limit - 1)
+
+        idx_x = get_mirrored_indices(ix0, ix1, num.nx)
+        idx_y = get_mirrored_indices(iy0, iy1, num.ny)
+        idx_z = get_mirrored_indices(iz0, iz1, num.nz)
+        
+        # Extract Basis Slices & Apply Normalization
+        Bx_sub = geom.cos_mx[:, idx_x] * geom.Cm[:, None]
+        By_sub = geom.cos_ny[:, idx_y] * geom.Cn[:, None]
+        Bz_sub = geom.cos_pz[:, idx_z] * geom.Cp[:, None]
+    else:
+        # Zero padding outside domain
+        def get_clamped_indices_and_mask(start, end, limit):
+            idx = np.arange(start, end)
+            mask = (idx >= 0) & (idx < limit)
+            idx_clamped = np.clip(idx, 0, limit - 1)
+            return idx_clamped, mask
+
+        idx_x, mask_x = get_clamped_indices_and_mask(ix0, ix1, num.nx)
+        idx_y, mask_y = get_clamped_indices_and_mask(iy0, iy1, num.ny)
+        idx_z, mask_z = get_clamped_indices_and_mask(iz0, iz1, num.nz)
+
+        # Extract Basis Slices & Apply Normalization
+        Bx_sub = geom.cos_mx[:, idx_x] * geom.Cm[:, None]
+        Bx_sub[:, ~mask_x] = 0.0
+        
+        By_sub = geom.cos_ny[:, idx_y] * geom.Cn[:, None]
+        By_sub[:, ~mask_y] = 0.0
+        
+        Bz_sub = geom.cos_pz[:, idx_z] * geom.Cp[:, None]
+        Bz_sub[:, ~mask_z] = 0.0
+    
+    # Tensor Contraction (Reconstruction)
+    # T(z,y,x) = sum_p sum_n sum_m  a[p,n,m] * Bz[p,z] * By[n,y] * Bx[m,x]
+    T_step1 = np.tensordot(a, Bx_sub, axes=(2, 0))
+    T_step2 = np.tensordot(T_step1, By_sub, axes=(1, 0))
+    T_step3 = np.tensordot(T_step2, Bz_sub, axes=(0, 0))
+    T_box = T_step3.transpose(2, 1, 0).astype(np.float32)
+    
+    # Return T_box and the PHYSICAL coordinates (linear) for the latent heat logic.
+    box_x = np.linspace(x_min, x_max, len(idx_x))
+    box_y = np.linspace(y_min, y_max, len(idx_y))
+    box_z = np.linspace(z_min, z_max, len(idx_z))
+    
+    return T_box, (box_x, box_y, box_z)
 
 def save_temp_profiles(a, num, geom, phys, laser, t=None):
     """Save 1D temperature profiles."""
@@ -515,22 +635,16 @@ def save_temp_profiles(a, num, geom, phys, laser, t=None):
 #   MAIN SCRIPT
 # ============================================================
 
-# 1. Initialize Laser
+# Initialize 
 laser = Laser(P=200.0, r_b=6e-5, x0=0.0, y0=0.0025, v=(0.8, 0), Absorptivity=0.30)
-
-# 2. Initialize Physics (Material only)
 phys = PhysParams(rho=7850, Cp=500, k=15, T0=293.0)
-
-# 3. Initialize Numerical Params
 num = NumericalParams(dt=6e-6, t_final=0.0006, nx=512, ny=256, nz=1000, ETD='ETD1')
-
-# 4. Initialize Geometry (Needs Laser for checks/coeffs)
 geom = GeomParams(Lx=0.01, Ly=0.005, Lz=0.0025, num=num, phys=phys, laser=laser)
 
-# 5. Run Simulation
+#  Run Simulation
 a_final, T_top_history, P_laser_history = run_simulation(phys, num, geom, laser)
 
-# 6. Post-processing
+#  Post-processing
 save_temp_profiles(a_final, num, geom, phys, laser)
 T_final = T_top_history[-1]
 

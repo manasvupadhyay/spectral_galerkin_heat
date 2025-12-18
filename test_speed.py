@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import time
 from numba import njit, prange
 import os
+import helpers
 
 pyfftw.config.NUM_THREADS = os.cpu_count()
 
@@ -25,7 +26,7 @@ def compute_a_temp_ETD2(a_phi0, KK_phi1, KKK_phi2, S_prev, S_next, a_temp_out):
                 dS = S_next[i, j] - S_prev[i, j]
                 a_temp_out[p, i, j] = a_phi0[p, i, j] + KK_phi1[p, i, j] * S_prev[i, j] + KKK_phi2[p, i, j] * dS
 
-OUT_DIR = ".out"
+OUT_DIR = "out"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # ============================================================
@@ -212,7 +213,8 @@ def C_coef(N, L):
 #   ETD PHI FUNCTIONS
 # ============================================================
 
-def phi_functions(z):
+def phi_functions(z): 
+    """ Functions used for the time stepping, taking into account exponential decay"""
     small_threshold = 1e-6
     phi_0 = np.exp(z)
     
@@ -229,7 +231,7 @@ def phi_functions(z):
 
 
 # ============================================================
-#   HEAT FLUX (GPU)
+#   HEAT FLUX
 # ============================================================
 
 def q_laser(geom, laser):
@@ -253,6 +255,46 @@ def shift_flux(field: np.ndarray, shift: tuple, geom: GeomParams) -> np.ndarray:
     dx, dy = shift
     shift_pixels = (dy / geom.dy, dx / geom.dx)
     return scipy_shift(field, shift_pixels, order=1, mode='constant', cval=0.0).astype(np.float32) 
+
+
+# ===========================================================
+#   LATENT HEAT APPLICATION
+# ===========================================================
+
+def apply_latent_heat(T_box_current, T_box_base, phys, geom, laser, box_coords):
+    """
+    Applies latent heat correction iteratively.
+    Returns updated T_box.
+    """
+    u, v, w = box_coords 
+    
+    # Calculate dS for the streamtube (dy * dz in box frame)
+    dy_box = v[1] - v[0]
+    dz_box = w[1] - w[0] if len(w)>1 else 1.0
+    dS = dy_box * dz_box
+    
+    v_scan = np.sqrt(laser.v[0]**2 + laser.v[1]**2)
+    D = phys.k / (phys.rho * phys.Cp) # Diffusivity
+    
+    # Compute Correction Field (calls Helper)
+    T_corr = helpers.compute_correction_field(
+        T_box_current, 
+        u.astype(np.float32), 
+        v.astype(np.float32), 
+        w.astype(np.float32),
+        phys.T_liquidus, 
+        phys.T_solidus, 
+        phys.L_f, 
+        phys.rho, 
+        v_scan, 
+        dS, 
+        D, 
+        phys.k
+    )
+    
+    # Update: T(k+1) = T_base + T_corr
+    return T_box_base + T_corr
+
 
 # ============================================================
 #   DCT-II 2D 
@@ -316,10 +358,8 @@ def time_step(a, phys, num, geom, laser, epsilon=2e+1):
         y_shift = laser.v[1] * num.dt
 
         q_evap = shift_flux(num.q_evap_old, (x_shift, y_shift), geom)
-
         q_dct = DCT_II(q_las - q_evap)
-        
-        np.multiply(a, num.K, out=num.aK, casting='same_kind')
+        np.multiply(a, num.K, out=num.aK, casting='same_kind')    # Time update of coeffs, exponential decay
         
         S_n = geom.dct_scale * q_dct
         omega = 0.1
@@ -328,6 +368,7 @@ def time_step(a, phys, num, geom, laser, epsilon=2e+1):
         S_current = S_n.copy()
         
         T_temp = reconstruct_temperature_top(num.a_temp, num, geom)
+        # Fixed-point iteration with under-relaxation for q_evap
         for k in range(30):
             q_evap = q_evap_point(T_temp, phys)
             
@@ -343,10 +384,45 @@ def time_step(a, phys, num, geom, laser, epsilon=2e+1):
             
             if np.max(np.abs(T_temp - T_old)) < epsilon:
                 break
-        
         num.S_n = S_n.copy()
         num.q_evap_old = q_evap.astype(np.float32, copy=True)
         P_laser = np.sum(q_las) * geom.dx * geom.dy
+        # Fixed-pont iteration for latent heat 
+        T_box_base, box_coords, box_dims = reconstruct_temperature_box(num.a_temp, num, geom, laser)
+        T_box = T_box_base.copy()
+        
+        omega_latent = 0.5
+        
+        # implement this function -> box centered on laser position
+        # dimensions 0.5 *0.5 * 0.25mm
+        # Carefull !! Box is oriented in the laser frame by the laser direction of movement
+        for k in range(30):
+            T_box_old = T_box
+            # Compute latent heat effect in box
+            T_box_new = apply_latent_heat(T_box, T_box_base, phys, geom, laser, box_coords)
+            
+            # Under-relaxation
+            T_box = omega_latent * T_box_new + (1.0 - omega_latent) * T_box_old
+            
+            if np.max(np.abs(T_box - T_box_old)) < epsilon:
+                break
+        
+        # Project correction back to spectral coefficients
+        T_corr_final = T_box - T_box_base
+        u, v, w = box_coords
+        x_vec = (laser.x + u).astype(np.float32)
+        y_vec = (laser.y + v).astype(np.float32)
+        z_vec = w.astype(np.float32)
+        
+        delta_a = helpers.project_box_to_spectral_numba(
+            T_corr_final, x_vec, y_vec, z_vec,
+            geom.Lx, geom.Ly, geom.Lz,
+            geom.Cm, geom.Cn, geom.Cp,
+            num.nx, num.ny, num.nz
+        )
+        
+        num.a_temp += delta_a
+
 
         return num.a_temp, T_temp, P_laser, k+1
     
@@ -388,7 +464,7 @@ def time_step(a, phys, num, geom, laser, epsilon=2e+1):
 
 def run_simulation(phys, num, geom, laser):
     print(f"Precomputing K, KK, buffers... (using {num.ETD})")
-    # Initialiszation shouldn't be done here
+    # Initialiszation shouldn't be done here -> should be moved to init of class num 
     K, KK, K_phi0, KK_phi1, KKK_phi2 = precompute_K_KK(phys, num, geom)
     num.K = K
     num.KK = KK
@@ -405,7 +481,8 @@ def run_simulation(phys, num, geom, laser):
     num.aK = np.empty((num.nz, num.ny, num.nx), dtype=np.float32)
     num.S_n = np.zeros((num.ny, num.nx), dtype=np.float32)
     num.q_evap_old.fill(0.0)
-    
+    # comment valid until here
+
     a = np.zeros((num.nz, num.ny, num.nx), dtype=np.float32)
     a[0,0,0] = phys.T0 * np.sqrt(geom.Lx * geom.Ly * geom.Lz)
     
@@ -417,11 +494,12 @@ def run_simulation(phys, num, geom, laser):
     for step in range(nsteps+1):
         t = step * num.dt
         
-        # 1. Compute time step using current laser position
+        # 1. Compute time step
         a, T_top, P_laser, n_iter = time_step(a, phys, num, geom, laser)
         
-        # 2. Update laser position for the next step (Implicitly t -> t + dt)
-        laser.update(num.dt)
+    
+        laser.update(num.dt) # update laser position 
+
         
         print(f"Step {step}/{nsteps} | t={t:.6e}s | Peak T: {np.max(T_top):.2f} K | P_laser: {P_laser:.3f} W | Iterations: {n_iter}")
         T_top_history.append(T_top)
@@ -481,6 +559,31 @@ def reconstruct_temperature_xz(a, num, geom, phys, laser, y0=None, mode='full_fi
 
     return geom.x[ix0:ix1], geom.z[iz0:iz1], T_xz[iz0:iz1, ix0:ix1].astype(np.float32)
 
+
+def reconstruct_temperature_box(a, num, geom, laser, box_dims=(0.5e-3, 0.5e-3, 0.25e-3), res=(100, 100, 50)):
+    """Reconstructs temperature in a local axis-aligned box centered on laser."""
+    Lx_b, Ly_b, Lz_b = box_dims
+    nx_b, ny_b, nz_b = res
+    
+    # 1. Local coordinates (z, y, x) order for correct reshaping
+    u = np.linspace(-Lx_b/2, Lx_b/2, nx_b, dtype=np.float32)
+    v = np.linspace(-Ly_b/2, Ly_b/2, ny_b, dtype=np.float32)
+    w = np.linspace(0, Lz_b, nz_b, dtype=np.float32)
+    
+    # 2. Global coordinates vectors
+    x_vec = (laser.x + u).astype(np.float32)
+    y_vec = (laser.y + v).astype(np.float32)
+    z_vec = w.astype(np.float32)
+    
+    # 3. Compute Temperature using efficient grid summation
+    T_box = helpers.sum_spectral_modes_grid_numba(
+        a, x_vec, y_vec, z_vec, 
+        geom.Lx, geom.Ly, geom.Lz,
+        geom.Cm, geom.Cn, geom.Cp
+    )
+    
+    # Reshape to (nz, ny, nx) - already done by helper
+    return T_box, (u, v, w), box_dims
 
 def save_temp_profiles(a, num, geom, phys, laser, t=None):
     """Save 1D temperature profiles."""

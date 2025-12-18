@@ -5,7 +5,7 @@ import time
 import os
 
 # Ensure output directory exists
-OUT_DIR = ".out"
+OUT_DIR = "out"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # ============================================================
