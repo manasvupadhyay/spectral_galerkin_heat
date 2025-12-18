@@ -282,23 +282,63 @@ def apply_latent_heat(T_box_old, T_box_target, num, phys, geom, laser):
     """ Apply latent heat correction to the temperature box
     Using line heat sources approximation for melt pool solidification
     """
-    # Create a mask for melt region, region is centered on laser
-    mask_melt = T_box_target[len(T_box_target)//2, :, :] >= phys.T_liquidus
-    # for debuging purposes
-    plt.imshow(mask_melt, origin='lower')
-    plt.colorbar()
-    plt.title(f"Melt region at t={laser.t:.6e}s")
-    plt.savefig(f"{OUT_DIR}/melt_region_step_{laser.t:.5f}.png")
-    plt.close()
-    # get mask for mushy zone  
-    mask_mushy = (T_box_target[len(T_box_target)//2, :, :] >= phys.T_solidus) & (T_box_target[len(T_box_target)//2, :, :] < phys.T_liquidus)
-    # debug as well 
-    plt.imshow(mask_mushy, origin='lower')
-    plt.colorbar()
-    plt.title(f"Mushy region at t={laser.t:.6e}s")
-    plt.savefig(f"{OUT_DIR}/mushy_region_step_{laser.t:.5f}.png")
-    plt.close()
-    # Retrieve 
+    # Create a mask for melt region, region is centered on laser x (first dimension)
+    mask_melt = T_box_target[T_box_target.shape[0]//2, :, :] >= phys.T_liquidus
+    mask_mushy = (T_box_target[T_box_target.shape[0]//2, :, :] >= phys.T_solidus) & (T_box_target[T_box_target.shape[0]//2, :, :] < phys.T_liquidus)
+
+    # Retrieve indices, where latent heat will be applied [i1, i2, i3, i4]
+    idx_melt = find_mushy(mask_melt, T_box_target, phys, laser)
+    idx_mushy = find_mushy(mask_mushy, T_box_target, phys, laser)
+    print("Number of melt lines to correct:", len(idx_melt))
+    print("Number of mushy lines to correct:", len(idx_mushy))
+
+    # Apply latent heat correction for melt elemental regions
+    T_box 
+    return T_box_target
+
+def find_mushy(mask, T_box_target, phys, laser):
+    """
+    Finds isotherm indices for each (y, z) row identified by mask.
+    T_box_target has shape (nx, ny, nz).
+    
+    Returns a dictionary mapping (iy, iz) to (i_S_back, i_L_back, i_L_front, i_S_front).
+    i_S_back: first x index where T >= T_solidus (from back)
+    i_L_back: first x index where T >= T_liquidus (from back)
+    i_L_front: last x index where T >= T_liquidus (from front)
+    i_S_front: last x index where T >= T_solidus (from front)
+    """
+    nx = T_box_target.shape[0]
+    results = {}
+    
+    # mask is (ny, nz), get unique (iy, iz) pairs
+    iy_arr, iz_arr = np.where(mask)
+    
+    for iy, iz in zip(iy_arr, iz_arr):
+        # Extract 1D temperature profile along x for this (y, z)
+        T_line = T_box_target[:, iy, iz]
+        
+        # Find indices where T >= T_solidus
+        idx_S = np.where(T_line >= phys.T_solidus)[0]
+        if len(idx_S) == 0:
+            continue
+        i_S_back = idx_S[0]
+        i_S_front = idx_S[-1]
+        
+        # Find indices where T >= T_liquidus
+        idx_L = np.where(T_line >= phys.T_liquidus)[0]
+        if len(idx_L) > 0:
+            i_L_back = idx_L[0]
+            i_L_front = idx_L[-1]
+        else:
+            # No liquidus crossing - partial melt
+            i_L_back = -1
+            i_L_front = -1
+        
+        results[(iy, iz)] = (i_S_back, i_L_back, i_L_front, i_S_front)
+    
+    return results
+
+    
 # ============================================================
 #   DCT-II 2D 
 # ============================================================
@@ -531,6 +571,9 @@ def reconstruct_temperature_box(a, num, geom, laser, simetrize=False):
     Handles boundaries by mirroring indices (Neumann BCs imply even symmetry)
     or by zero-padding if simetrize=False.
     
+    Future development : box oriented in the direction of the laser 
+    For that sample a first box of size*sqrt(2)
+    Then linear interpolate to a rectange region
     """
     # Define Box Size + box indices
     Lx_box, Ly_box, Lz_box = 0.5e-3, 0.5e-3, 0.25e-3
@@ -592,8 +635,8 @@ def reconstruct_temperature_box(a, num, geom, laser, simetrize=False):
     # T(z,y,x) = sum_p sum_n sum_m  a[p,n,m] * Bz[p,z] * By[n,y] * Bx[m,x]
     T_step1 = np.tensordot(a, Bx_sub, axes=(2, 0))
     T_step2 = np.tensordot(T_step1, By_sub, axes=(1, 0))
-    T_step3 = np.tensordot(T_step2, Bz_sub, axes=(0, 0))
-    T_box = T_step3.transpose(2, 1, 0).astype(np.float32)
+    T_box = np.tensordot(T_step2, Bz_sub, axes=(0, 0))
+    #T_box = T_step3.transpose(2, 1, 0).astype(np.float32)
     
     # Return T_box and the PHYSICAL coordinates (linear) for the latent heat logic.
     box_x = np.linspace(x_min, x_max, len(idx_x))
