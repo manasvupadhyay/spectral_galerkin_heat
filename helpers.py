@@ -195,7 +195,7 @@ def integrate_line_source_scipy(xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_
 
 
 @njit(fastmath=True)
-def integrate_line_source_trapz(xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_line, n_points=20):
+def integrate_line_source_trapz(xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_line, n_points=10):
     """
     Integrate the line source using trapezoidal rule (Numba compatible).
     
@@ -384,15 +384,27 @@ def compute_latent_heat_correction(T_corr, box_coords, isotherm_data, phys, lase
     T_corr_front = np.zeros_like(T_corr)
     
     # Compute correction using MOVING FRAME coordinates
-    compute_T_corr_for_box(
-        T_corr, 
-        T_corr_back,
-        T_corr_front,
-        box_xi.astype(np.float64),
-        box_y_rel.astype(np.float64),
-        box_z.astype(np.float64),
-        isotherm_entries,
-        v, D, lmbda, rho, L_f, dS
+    # compute_T_corr_for_box(
+    #     T_corr, 
+    #     T_corr_back,
+    #     T_corr_front,
+    #     box_xi.astype(np.float64),
+    #     box_y_rel.astype(np.float64),
+    #     box_z.astype(np.float64),
+    #     isotherm_entries,
+    #     v, D, lmbda, rho, L_f, dS
+    # )
+    
+    # Use Fast Kernel Method
+    if not hasattr(geom, 'kernel'):
+        geom.kernel = precompute_rosenthal_kernel(phys, geom, laser)
+        
+    apply_latent_heat_correction_fast(
+        T_corr, T_corr_back, T_corr_front,
+        geom.kernel, isotherm_entries,
+        geom.nx_box, geom.ny_box, geom.nz_box,
+        geom.dx_fine, geom.dy_fine, geom.dz_fine,
+        rho, L_f, dS, v
     )
     
     # Compute energy statistics (integrate T * rho * Cp over volume)
@@ -583,8 +595,182 @@ def find_isotherms_along_x(T_box, M_yz, mask_full, mask_partial, phys):
     
     return results
 
+# ============================================================
+#   FAST LATENT HEAT CORRECTION (PRECOMPUTED KERNEL)
+# ============================================================
 
+def precompute_rosenthal_kernel(phys, geom, laser):
+    """
+    Precompute the temperature field of a finite line source of length dx_fine
+    centered at (0,0,z_s) for all possible relative positions in the fine mesh box.
     
+    Returns:
+        kernel: 4D array (nz_box, 2*nx_box+1, 2*ny_box+1, nz_box)
+                Indices: [iz_source, ix_rel, iy_rel, iz_field]
+                Values: Temperature contribution per unit linear power density (K / (W/m))
+    """
+    print("Precomputing Rosenthal Green's Function Kernel...")
+    
+    nx_box, ny_box, nz_box = geom.nx_box, geom.ny_box, geom.nz_box
+    dx, dy, dz = geom.dx_fine, geom.dy_fine, geom.dz_fine
+    
+    # Relative coordinate ranges
+    # ix_rel goes from -nx_box to +nx_box (size 2*nx_box + 1)
+    # iy_rel goes from -ny_box to +ny_box (size 2*ny_box + 1)
+    
+    xi_range = np.arange(-nx_box, nx_box + 1) * dx
+    y_range = np.arange(-ny_box, ny_box + 1) * dy
+    z_range = geom.box_z # Absolute z coordinates
+    
+    # Physical parameters
+    v = np.linalg.norm(laser.v)
+    D = phys.k / (phys.rho * phys.Cp)
+    lmbda = phys.k
+    
+    # Source segment: length dx, centered at 0
+    xi_start = -dx / 2.0
+    xi_end = dx / 2.0
+    q_unit = 1.0 # Unit power density W/m
+    
+    # Allocate kernel
+    # Shape: (nz_source, nx_rel, ny_rel, nz_field)
+    # We use a list of 3D arrays to avoid one giant 4D block if memory is tight, 
+    # but here it's small enough.
+    kernel = np.zeros((nz_box, len(xi_range), len(y_range), nz_box), dtype=np.float32)
+    
+    # Compute kernel
+    # We can parallelize this loop or use the vectorized integration function if adapted.
+    # For simplicity and since it's precomputation, we loop over source depths.
+    
+    for iz_s in range(nz_box):
+        z_s = z_range[iz_s]
+        
+        # Create meshgrid for field points
+        # We compute for all relative x, y and all absolute z
+        XI, Y, Z = np.meshgrid(xi_range, y_range, z_range, indexing='ij')
+        
+        # Flatten for parallel computation
+        XI_flat = XI.ravel()
+        Y_flat = Y.ravel()
+        Z_flat = Z.ravel()
+        T_flat = np.zeros_like(XI_flat)
+        
+        # Use the Numba integrator
+        # We use a higher number of points for the kernel to be accurate
+        _compute_kernel_layer(T_flat, XI_flat, Y_flat, Z_flat, z_s, xi_start, xi_end, v, D, lmbda, q_unit)
+        
+        kernel[iz_s] = T_flat.reshape(XI.shape).astype(np.float32)
+        
+    return kernel
+
+@njit(parallel=True, fastmath=True)
+def _compute_kernel_layer(T_out, xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_line):
+    n = len(xi)
+    for i in prange(n):
+        T_out[i] = integrate_line_source_trapz(xi[i], y[i], z[i], z_s, xi_start, xi_end, v, D, lmbda, q_line, 20)
+
+@njit(parallel=True, fastmath=True)
+def apply_latent_heat_correction_fast(T_corr, T_corr_back, T_corr_front, 
+                                      kernel, isotherm_entries, 
+                                      nx_box, ny_box, nz_box, 
+                                      dx, dy, dz, 
+                                      rho, L_f, dS, v):
+    """
+    Apply latent heat correction using precomputed kernel (Gather approach).
+    Parallelized over field points.
+    """
+    # Kernel center offsets
+    kc_x = nx_box
+    kc_y = ny_box
+    
+    # Box start position in relative coordinates (approx)
+    # box_xi goes from -Lx_box/2 to +Lx_box/2
+    # We assume the grid is centered on the laser
+    # ix=0 corresponds to xi = -nx_box*dx/2
+    xi_box_offset = (nx_box * dx) / 2.0
+    
+    # Parallel loop over field points (x, y, z)
+    for ix in prange(nx_box):
+        for iy in range(ny_box):
+            for iz in range(nz_box):
+                
+                val_back = 0.0
+                val_front = 0.0
+                
+                # Loop over all source tubes
+                for ie in range(isotherm_entries.shape[0]):
+                    iy_src = int(isotherm_entries[ie, 0])
+                    iz_src = int(isotherm_entries[ie, 1])
+                    
+                    # Relative y index for kernel lookup
+                    # ky = (iy_field - iy_source) + center_offset
+                    ky = (iy - iy_src) + kc_y
+                    
+                    # Quick bounds check for y
+                    if ky < 0 or ky >= 2*ny_box + 1: continue
+                    
+                    # Extract source parameters
+                    xi_S_back = isotherm_entries[ie, 2]
+                    xi_L_back = isotherm_entries[ie, 3]
+                    xi_L_front = isotherm_entries[ie, 4]
+                    xi_S_front = isotherm_entries[ie, 5]
+                    f_scale = isotherm_entries[ie, 6]
+                    
+                    # --- 1. Back Zone (Solidification) ---
+                    L_back = abs(xi_L_back - xi_S_back)
+                    if L_back > 1e-10:
+                        n_segs = int(round(L_back / dx))
+                        if n_segs < 1: n_segs = 1
+                        
+                        # Effective source strength per segment
+                        q_eff = (rho * v * dS * L_f * f_scale) / (n_segs * dx)
+                        
+                        # Center of the mushy zone
+                        xi_center = (xi_S_back + xi_L_back) / 2.0
+                        
+                        # Convert center to grid index
+                        # ix_s = (xi_center - (-offset)) / dx = (xi_center + offset) / dx
+                        ix_s_center = (xi_center + xi_box_offset) / dx
+                        
+                        # Loop over segments
+                        for s in range(n_segs):
+                            # Segment offset from center
+                            s_off = s - (n_segs - 1) / 2.0
+                            
+                            # Segment grid index
+                            ix_s = int(round(ix_s_center + s_off))
+                            
+                            # Kernel x index
+                            # kx = (ix_field - ix_source) + center_offset
+                            kx = (ix - ix_s) + kc_x
+                            
+                            if kx >= 0 and kx < 2*nx_box + 1:
+                                val_back += q_eff * kernel[iz_src, kx, ky, iz]
+
+                    # --- 2. Front Zone (Melting) ---
+                    L_front = abs(xi_S_front - xi_L_front)
+                    if L_front > 1e-10:
+                        n_segs = int(round(L_front / dx))
+                        if n_segs < 1: n_segs = 1
+                        
+                        q_eff = -(rho * v * dS * L_f * f_scale) / (n_segs * dx)
+                        
+                        xi_center = (xi_L_front + xi_S_front) / 2.0
+                        ix_s_center = (xi_center + xi_box_offset) / dx
+                        
+                        for s in range(n_segs):
+                            s_off = s - (n_segs - 1) / 2.0
+                            ix_s = int(round(ix_s_center + s_off))
+                            kx = (ix - ix_s) + kc_x
+                            
+                            if kx >= 0 and kx < 2*nx_box + 1:
+                                val_front += q_eff * kernel[iz_src, kx, ky, iz]
+                
+                # Write results
+                T_corr_back[ix, iy, iz] = val_back
+                T_corr_front[ix, iy, iz] = val_front
+                T_corr[ix, iy, iz] = val_back + val_front
+
 # ============================================================
 #   DCT-II 2D 
 # ============================================================
@@ -702,26 +888,36 @@ def T_corr_to_modes(T_corr, geom):
     """
     Convert a local temperature correction field to spectral mode corrections.
     Uses precomputed fine mesh cosine bases from geom.
+    Optimized using explicit matrix multiplications.
     """
     if not geom.fine_mesh_initialized:
         raise RuntimeError("Fine mesh not initialized. Call geom.update_fine_mesh(laser) first.")
     
-    # Analysis: project T_corr onto the spectral basis using precomputed bases
-    # delta_a[p,n,m] = sum over box of T_corr[ix,iy,iz] * Bx[m,ix] * By[n,iy] * Bz[p,iz] * dV
-    
     # T_corr shape: (nx_box, ny_box, nz_box)
-    # Step 1: contract over x
-    temp1 = np.tensordot(geom.Bx_fine, T_corr, axes=(1, 0))  # (nx, ny_box, nz_box)
+    nx_box, ny_box, nz_box = T_corr.shape
+    nx, _ = geom.Bx_fine.shape
+    ny, _ = geom.By_fine.shape
+    nz, _ = geom.Bz_fine.shape
     
-    # Step 2: contract over y
-    temp2 = np.tensordot(temp1, geom.By_fine.T, axes=(1, 0))  # (nx, nz_box, ny)
-    temp2 = np.moveaxis(temp2, 1, 2)  # (nx, ny, nz_box)
+    # 1. Contract X: (nx, nx_box) @ (nx_box, ny_box*nz_box) -> (nx, ny_box*nz_box)
+    # Reshape T_corr to combine Y and Z
+    T_reshaped = T_corr.reshape(nx_box, ny_box * nz_box)
+    temp1 = geom.Bx_fine @ T_reshaped
     
-    # Step 3: contract over z
-    delta_a = np.tensordot(temp2, geom.Bz_fine.T, axes=(2, 0))  # (nx, ny, nz)
+    # 2. Contract Y: (ny, ny_box) @ (ny_box, nx*nz_box) -> (ny, nx*nz_box)
+    # Reshape temp1 to (nx, ny_box, nz_box) and transpose to (ny_box, nx, nz_box)
+    # Then flatten last two dims
+    temp1 = temp1.reshape(nx, ny_box, nz_box).transpose(1, 0, 2).reshape(ny_box, nx * nz_box)
+    temp2 = geom.By_fine @ temp1
     
-    # Reorder to (nz, ny, nx) to match the mode array convention
-    delta_a = np.moveaxis(delta_a, (0, 1, 2), (2, 1, 0))  # (nz, ny, nx)
+    # 3. Contract Z: (nz, nz_box) @ (nz_box, ny*nx) -> (nz, ny*nx)
+    # Reshape temp2 to (ny, nx, nz_box) and transpose to (nz_box, ny, nx)
+    # Then flatten last two dims
+    temp2 = temp2.reshape(ny, nx, nz_box).transpose(2, 0, 1).reshape(nz_box, ny * nx)
+    delta_a = geom.Bz_fine @ temp2
+    
+    # Final reshape to (nz, ny, nx)
+    delta_a = delta_a.reshape(nz, ny, nx)
     
     # Multiply by dV for the numerical integration
     delta_a *= geom.dV_fine
