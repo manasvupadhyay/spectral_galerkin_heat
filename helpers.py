@@ -7,75 +7,58 @@ import pyfftw
 
 OUT_DIR = "out"
 
-def T_to_HDF5(filename_base, T_box, box_coords, geom=None, verbose=False):
-    """
-    Saves the 3D temperature box to HDF5 and creates an XDMF wrapper 
-    for easy opening in Paraview.
-    
-    Args:
-        filename_base: Filename without extension (e.g., "debug_step_10")
-        T_box: 3D numpy array of temperature (z, y, x)
-        box_coords: Tuple (x_coords, y_coords, z_coords) 1D arrays
-        geom: Optional geometry object for metadata
-        verbose: if True, print status messages (default: False)
-    """
-    h5_name = f"{filename_base}.h5"
-    xmf_name = f"{filename_base}.xmf"
-    
-    # Use basename for the reference inside XDMF to avoid double directory paths
-    # when ParaView resolves relative paths.
-    h5_ref = os.path.basename(h5_name)
-    
-    x, y, z = box_coords
-    nz, ny, nx = T_box.shape
-    
-    if verbose and geom is not None:
-        print(f"Exporting HDF5/XDMF. Domain Size: {geom.Lx:.2e} x {geom.Ly:.2e} x {geom.Lz:.2e}")
+def save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", geom=None, verbose=False):
+        """Serialize a 3D scalar field to HDF5 with an accompanying XDMF wrapper."""
+        h5_name = f"{filename_base}.h5"
+        xmf_name = f"{filename_base}.xmf"
 
-    # 1. Save Data to HDF5
-    with h5py.File(h5_name, "w") as f:
-        # Save geometry
-        f.create_dataset("X", data=x)
-        f.create_dataset("Y", data=y)
-        f.create_dataset("Z", data=z)
-        # Save attributes
-        f.create_dataset("Temperature", data=T_box)
+        # Use basename for the reference inside XDMF to avoid double directory paths
+        # when ParaView resolves relative paths.
+        h5_ref = os.path.basename(h5_name)
+    
+        x_coords, y_coords, z_coords = grid_coords
+        nz, ny, nx = field.shape
+    
+        if verbose and geom is not None:
+                print(f"Exporting HDF5/XDMF. Domain Size: {geom.Lx:.2e} x {geom.Ly:.2e} x {geom.Lz:.2e}")
 
-    # 2. Write XDMF File (XML description for Paraview)
-    # This maps the raw H5 data to a 3D Rectilinear Grid
-    # Topology Dimensions are K J I (Z Y X) for C-order arrays
-    # Geometry VXVYVZ expects DataItems in order X, Y, Z
-    xmf_content = f"""<?xml version="1.0" ?>
+        with h5py.File(h5_name, "w") as f:
+                f.create_dataset("X", data=x_coords)
+                f.create_dataset("Y", data=y_coords)
+                f.create_dataset("Z", data=z_coords)
+                f.create_dataset(value_name, data=field)
+
+        xmf_content = f"""<?xml version="1.0" ?>
 <!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>
 <Xdmf Version="2.0">
  <Domain>
-   <Grid Name="Mesh" GridType="Uniform">
-     <Topology TopologyType="3DRectMesh" Dimensions="{nz} {ny} {nx}"/>
-     <Geometry GeometryType="VXVYVZ">
-       <DataItem Dimensions="{nx}" NumberType="Float" Precision="4" Format="HDF">
-        {h5_ref}:/X
-       </DataItem>
-       <DataItem Dimensions="{ny}" NumberType="Float" Precision="4" Format="HDF">
-        {h5_ref}:/Y
-       </DataItem>
-       <DataItem Dimensions="{nz}" NumberType="Float" Precision="4" Format="HDF">
-        {h5_ref}:/Z
-       </DataItem>
-     </Geometry>
-     <Attribute Name="Temperature" AttributeType="Scalar" Center="Node">
-       <DataItem Dimensions="{nz} {ny} {nx}" NumberType="Float" Precision="4" Format="HDF">
-        {h5_ref}:/Temperature
-       </DataItem>
-     </Attribute>
-   </Grid>
+     <Grid Name="Mesh" GridType="Uniform">
+         <Topology TopologyType="3DRectMesh" Dimensions="{nz} {ny} {nx}"/>
+         <Geometry GeometryType="VXVYVZ">
+             <DataItem Dimensions="{nx}" NumberType="Float" Precision="4" Format="HDF">
+                {h5_ref}:/X
+             </DataItem>
+             <DataItem Dimensions="{ny}" NumberType="Float" Precision="4" Format="HDF">
+                {h5_ref}:/Y
+             </DataItem>
+             <DataItem Dimensions="{nz}" NumberType="Float" Precision="4" Format="HDF">
+                {h5_ref}:/Z
+             </DataItem>
+         </Geometry>
+         <Attribute Name="{value_name}" AttributeType="Scalar" Center="Node">
+             <DataItem Dimensions="{nz} {ny} {nx}" NumberType="Float" Precision="4" Format="HDF">
+                {h5_ref}:/{value_name}
+             </DataItem>
+         </Attribute>
+     </Grid>
  </Domain>
 </Xdmf>
 """
-    with open(xmf_name, "w") as f:
-        f.write(xmf_content)
+        with open(xmf_name, "w") as f:
+                f.write(xmf_content)
     
-    if verbose:
-        print(f"Saved debug files: {xmf_name} (Open this in Paraview)")
+        if verbose:
+                print(f"Saved debug files: {xmf_name} (Open this in Paraview)")
 
 
 # ============================================================
@@ -118,12 +101,13 @@ def rosenthal_point_source(xi, y, z, z_s, v, D, lmbda):
     
     term1 = np.exp(-v_over_2D * (xi + R1)) / R1
     term2 = np.exp(-v_over_2D * (xi + R2)) / R2
-    
-    return term1 + term2
+    # Warning temporary removal of image source contribution
+    # Is is probably implicitely accounted in the modal basis 
+    return term1 #+ term2
 
 
 @njit(fastmath=True)
-def line_source_integrand(u, xi, y, z, z_s, v, D):
+def line_source_integrand(u, xi, y, z, z_s, v, D, R_min):
     """
     Integrand for the line source integral.
     
@@ -135,16 +119,12 @@ def line_source_integrand(u, xi, y, z, z_s, v, D):
         xi, y, z: field point coordinates
         z_s: source depth
         v, D: velocity and diffusivity
+        R_min: regularization radius
     
     Returns:
         Integrand value
     """
     xi_rel = xi - u  # Relative position from source point at u
-    
-    # Regularization: minimum distance to avoid singularity
-    # Use a fraction of the thermal diffusion length scale: D/v ~ 5e-6 m
-    # Grid scale is ~5e-6 m, so use something smaller
-    R_min = 1e-6  # 1 µm regularization
     
     # Distance to real source
     R1_sq = xi_rel**2 + y**2 + (z - z_s)**2
@@ -159,10 +139,12 @@ def line_source_integrand(u, xi, y, z, z_s, v, D):
     term1 = np.exp(-v_over_2D * (xi_rel + R1)) / R1
     term2 = np.exp(-v_over_2D * (xi_rel + R2)) / R2
     
-    return term1 + term2
+    # removal of image source (term2) as it is implicitly 
+    # handled by the spectral cosine basis (even extension).
+    return term1 # + term2
 
 
-def integrate_line_source_scipy(xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_line):
+def integrate_line_source_scipy(xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_line, R_min=1e-6):
     """
     Integrate the line source Green's function from xi_start to xi_end.
     Uses scipy.integrate.quad for accuracy.
@@ -177,6 +159,7 @@ def integrate_line_source_scipy(xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_
         D: thermal diffusivity
         lmbda: thermal conductivity
         q_line: linear power density (W/m)
+        R_min: regularization radius
     
     Returns:
         Temperature correction at (xi, y, z)
@@ -187,7 +170,7 @@ def integrate_line_source_scipy(xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_
     prefactor = q_line / (4.0 * np.pi * lmbda)
     
     def integrand(u):
-        return line_source_integrand(u, xi, y, z, z_s, v, D)
+        return line_source_integrand(u, xi, y, z, z_s, v, D, R_min)
     
     result, _ = quad(integrand, xi_start, xi_end, limit=100)
     
@@ -195,7 +178,7 @@ def integrate_line_source_scipy(xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_
 
 
 @njit(fastmath=True)
-def integrate_line_source_trapz(xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_line, n_points=10):
+def integrate_line_source_trapz(xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_line, n_points=10, R_min=1e-6):
     """
     Integrate the line source using trapezoidal rule (Numba compatible).
     
@@ -206,6 +189,7 @@ def integrate_line_source_trapz(xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_
         v, D, lmbda: physical parameters
         q_line: linear power density
         n_points: number of integration points
+        R_min: regularization radius
     
     Returns:
         Temperature correction
@@ -220,7 +204,7 @@ def integrate_line_source_trapz(xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_
     
     for i in range(n_points):
         u = xi_start + i * du
-        val = line_source_integrand(u, xi, y, z, z_s, v, D)
+        val = line_source_integrand(u, xi, y, z, z_s, v, D, R_min)
         
         if i == 0 or i == n_points - 1:
             integral += 0.5 * val
@@ -263,6 +247,9 @@ def compute_T_corr_for_box(T_corr, T_corr_back, T_corr_front, box_xi, box_y_rel,
     nz = len(box_z)
     n_entries = isotherm_entries.shape[0]
     
+    # Calculate R_min based on tube cross-section
+    R_min = np.sqrt(dS / np.pi)
+    
     # Loop over all field points in parallel
     for ix in prange(nx):
         xi = box_xi[ix]  # Field point xi in moving frame
@@ -301,7 +288,7 @@ def compute_T_corr_for_box(T_corr, T_corr_back, T_corr_front, box_xi, box_y_rel,
                         T_back = integrate_line_source_trapz(
                             xi, y_rel, z_field, z_s,
                             xi_S_back, xi_L_back,
-                            v, D, lmbda, q_line_back, 20
+                            v, D, lmbda, q_line_back, 20, R_min
                         )
                         T_sum += T_back
                         T_corr_back[ix, iy_field, iz_field] += T_back
@@ -313,7 +300,7 @@ def compute_T_corr_for_box(T_corr, T_corr_back, T_corr_front, box_xi, box_y_rel,
                         T_front = integrate_line_source_trapz(
                             xi, y_rel, z_field, z_s,
                             xi_L_front, xi_S_front,
-                            v, D, lmbda, q_line_front, 20
+                            v, D, lmbda, q_line_front, 20, R_min
                         )
                         T_sum += T_front
                         T_corr_front[ix, iy_field, iz_field] += T_front
@@ -632,6 +619,9 @@ def precompute_rosenthal_kernel(phys, geom, laser):
     xi_end = dx / 2.0
     q_unit = 1.0 # Unit power density W/m
     
+    # Calculate R_min based on tube cross-section
+    R_min = np.sqrt(dy * dz / np.pi)
+    
     # Allocate kernel
     # Shape: (nz_source, nx_rel, ny_rel, nz_field)
     # We use a list of 3D arrays to avoid one giant 4D block if memory is tight, 
@@ -657,17 +647,17 @@ def precompute_rosenthal_kernel(phys, geom, laser):
         
         # Use the Numba integrator
         # We use a higher number of points for the kernel to be accurate
-        _compute_kernel_layer(T_flat, XI_flat, Y_flat, Z_flat, z_s, xi_start, xi_end, v, D, lmbda, q_unit)
+        _compute_kernel_layer(T_flat, XI_flat, Y_flat, Z_flat, z_s, xi_start, xi_end, v, D, lmbda, q_unit, R_min)
         
         kernel[iz_s] = T_flat.reshape(XI.shape).astype(np.float32)
         
     return kernel
 
 @njit(parallel=True, fastmath=True)
-def _compute_kernel_layer(T_out, xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_line):
+def _compute_kernel_layer(T_out, xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_line, R_min):
     n = len(xi)
     for i in prange(n):
-        T_out[i] = integrate_line_source_trapz(xi[i], y[i], z[i], z_s, xi_start, xi_end, v, D, lmbda, q_line, 20)
+        T_out[i] = integrate_line_source_trapz(xi[i], y[i], z[i], z_s, xi_start, xi_end, v, D, lmbda, q_line, 100, R_min)
 
 @njit(parallel=True, fastmath=True)
 def apply_latent_heat_correction_fast(T_corr, T_corr_back, T_corr_front, 

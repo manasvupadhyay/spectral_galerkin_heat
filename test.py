@@ -288,8 +288,20 @@ def time_step(a, phys, num, geom, laser, epsilon=2e+1, iter_step=0):
         
         # Debug output
         if iter_step % 5 == 0:
-            hp.T_to_HDF5(f"{OUT_DIR}/T_box_step_{laser.t:.5f}", T_box_target.transpose(2, 1, 0), (geom.box_x, geom.box_y, geom.box_z), geom=geom)
-            hp.T_to_HDF5(f"{OUT_DIR}/T_corr_step_{laser.t:.5f}", T_corr_final.transpose(2, 1, 0), (geom.box_x, geom.box_y, geom.box_z), geom=geom)
+            hp.save_field_to_hdf5(
+                f"{OUT_DIR}/T_box_step_{laser.t:.5f}",
+                T_box_target.transpose(2, 1, 0),
+                (geom.box_x, geom.box_y, geom.box_z),
+                value_name="Temperature",
+                geom=geom,
+            )
+            hp.save_field_to_hdf5(
+                f"{OUT_DIR}/T_corr_step_{laser.t:.5f}",
+                T_corr_final.transpose(2, 1, 0),
+                (geom.box_x, geom.box_y, geom.box_z),
+                value_name="DeltaT",
+                geom=geom,
+            )
         
         return num.a_temp, T_temp, P_laser, k+1, n_iter_LH
     
