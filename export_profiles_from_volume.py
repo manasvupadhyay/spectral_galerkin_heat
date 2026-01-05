@@ -3,7 +3,7 @@ import os
 from types import SimpleNamespace
 
 import h5py
-import helpers_spectral as hp
+import fastHeatSolv.helpers as hp
 
 
 def parse_args() -> argparse.Namespace:

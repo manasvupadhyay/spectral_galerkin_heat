@@ -2,8 +2,10 @@ import h5py
 import os
 import numpy as np
 from scipy.ndimage import shift as scipy_shift
+from scipy.interpolate import RegularGridInterpolator
 from pyfftw.interfaces.scipy_fft import dctn
 import pyfftw
+from numba import njit, prange
 
 OUT_DIR = "out"
 
@@ -11,14 +13,11 @@ def save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", ge
         """Serialize a 3D scalar field to HDF5 with an accompanying XDMF wrapper."""
         h5_name = f"{filename_base}.h5"
         xmf_name = f"{filename_base}.xmf"
-
-        # Use basename for the reference inside XDMF to avoid double directory paths
-        # when ParaView resolves relative paths.
         h5_ref = os.path.basename(h5_name)
-    
+
         x_coords, y_coords, z_coords = grid_coords
         nz, ny, nx = field.shape
-    
+
         if verbose and geom is not None:
                 print(f"Exporting HDF5/XDMF. Domain Size: {geom.Lx:.2e} x {geom.Ly:.2e} x {geom.Lz:.2e}")
 
@@ -56,288 +55,133 @@ def save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", ge
 """
         with open(xmf_name, "w") as f:
                 f.write(xmf_content)
-    
+
         if verbose:
                 print(f"Saved debug files: {xmf_name} (Open this in Paraview)")
 
 
 # ============================================================
-#   LINE SOURCE GREEN'S FUNCTION FOR LATENT HEAT CORRECTION
+#   LATENT HEAT SOURCE RASTERIZATION
 # ============================================================
 
-import numpy as np
-from numba import njit, prange
-from scipy.integrate import quad
-
-@njit(fastmath=True)
-def rosenthal_point_source(xi, y, z, z_s, v, D, lmbda):
-    """
-    Rosenthal point source Green's function with image source for Neumann BC at z=0.
-    
-    dT = (q / 4πλ) * [exp(-v(ξ+R1)/2D)/R1 + exp(-v(ξ+R2)/2D)/R2]
-    
-    Args:
-        xi: x - vt (position in moving frame)
-        y: y coordinate relative to source
-        z: z coordinate (depth, positive downward)
-        z_s: source depth (positive)
-        v: laser velocity magnitude
-        D: thermal diffusivity (k / (rho * Cp))
-        lmbda: thermal conductivity
-    
-    Returns:
-        Green's function value (without q/4πλ prefactor)
-    """
-    # Distance to real source at (0, 0, z_s)
-    R1_sq = xi**2 + y**2 + (z - z_s)**2
-    R1 = np.sqrt(R1_sq) if R1_sq > 1e-20 else 1e-10
-    
-    # Distance to image source at (0, 0, -z_s)
-    R2_sq = xi**2 + y**2 + (z + z_s)**2
-    R2 = np.sqrt(R2_sq) if R2_sq > 1e-20 else 1e-10
-    
-    # Exponential decay terms
-    v_over_2D = v / (2.0 * D)
-    
-    term1 = np.exp(-v_over_2D * (xi + R1)) / R1
-    term2 = np.exp(-v_over_2D * (xi + R2)) / R2
-    # Warning temporary removal of image source contribution
-    # Is is probably implicitely accounted in the modal basis 
-    return term1 #+ term2
-
-
-@njit(fastmath=True)
-def line_source_integrand(u, xi, y, z, z_s, v, D, R_min):
-    """
-    Integrand for the line source integral.
-    
-    The line source extends along x (the ξ direction in moving frame).
-    Integration variable u is the position along the source line.
-    
-    Args:
-        u: integration variable (source position along x)
-        xi, y, z: field point coordinates
-        z_s: source depth
-        v, D: velocity and diffusivity
-        R_min: regularization radius
-    
-    Returns:
-        Integrand value
-    """
-    xi_rel = xi - u  # Relative position from source point at u
-    
-    # Distance to real source
-    R1_sq = xi_rel**2 + y**2 + (z - z_s)**2
-    R1 = max(np.sqrt(R1_sq), R_min)
-    
-    # Distance to image source  
-    R2_sq = xi_rel**2 + y**2 + (z + z_s)**2
-    R2 = max(np.sqrt(R2_sq), R_min)
-    
-    v_over_2D = v / (2.0 * D)
-    
-    term1 = np.exp(-v_over_2D * (xi_rel + R1)) / R1
-    term2 = np.exp(-v_over_2D * (xi_rel + R2)) / R2
-    
-    # removal of image source (term2) as it is implicitly 
-    # handled by the spectral cosine basis (even extension).
-    return term1 # + term2
-
-
-def integrate_line_source_scipy(xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_line, R_min=1e-6):
-    """
-    Integrate the line source Green's function from xi_start to xi_end.
-    Uses scipy.integrate.quad for accuracy.
-    
-    T_corr = (q_line / 4πλ) * ∫[xi_start to xi_end] G(xi-u, y, z, z_s) du
-    
-    Args:
-        xi, y, z: field point coordinates
-        z_s: source depth
-        xi_start, xi_end: integration bounds (isotherm positions)
-        v: laser velocity
-        D: thermal diffusivity
-        lmbda: thermal conductivity
-        q_line: linear power density (W/m)
-        R_min: regularization radius
-    
-    Returns:
-        Temperature correction at (xi, y, z)
-    """
-    if abs(xi_end - xi_start) < 1e-12:
-        return 0.0
-    
-    prefactor = q_line / (4.0 * np.pi * lmbda)
-    
-    def integrand(u):
-        return line_source_integrand(u, xi, y, z, z_s, v, D, R_min)
-    
-    result, _ = quad(integrand, xi_start, xi_end, limit=100)
-    
-    return prefactor * result
-
-
-@njit(fastmath=True)
-def integrate_line_source_trapz(xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_line, n_points=10, R_min=1e-6):
-    """
-    Integrate the line source using trapezoidal rule (Numba compatible).
-    
-    Args:
-        xi, y, z: field point
-        z_s: source depth
-        xi_start, xi_end: integration bounds
-        v, D, lmbda: physical parameters
-        q_line: linear power density
-        n_points: number of integration points
-        R_min: regularization radius
-    
-    Returns:
-        Temperature correction
-    """
-    if abs(xi_end - xi_start) < 1e-12:
-        return 0.0
-    
-    prefactor = q_line / (4.0 * np.pi * lmbda)
-    
-    du = (xi_end - xi_start) / (n_points - 1)
-    integral = 0.0
-    
-    for i in range(n_points):
-        u = xi_start + i * du
-        val = line_source_integrand(u, xi, y, z, z_s, v, D, R_min)
-        
-        if i == 0 or i == n_points - 1:
-            integral += 0.5 * val
-        else:
-            integral += val
-    
-    integral *= du
-    
-    return prefactor * integral
-
-
 @njit(parallel=True, fastmath=True)
-def compute_T_corr_for_box(T_corr, T_corr_back, T_corr_front, box_xi, box_y_rel, box_z, 
-                            isotherm_entries, 
-                            v, D, lmbda, rho, L_f, dS):
+def rasterize_latent_heat(Q_box, isotherm_entries, 
+                          nx_box, ny_box, nz_box, 
+                          dx, dy, dz, 
+                          rho, L_f, dS, v, xi_box_offset):
     """
-    Compute temperature correction for entire box from all line sources.
-    
-    All coordinates are in the MOVING FRAME (relative to laser position).
+    Rasterize latent heat source onto the fine grid.
     
     Args:
-        T_corr: output array (nx, ny, nz) - total correction (modified in place)
-        T_corr_back: output array (nx, ny, nz) - back mushy zone contribution (solidification)
-        T_corr_front: output array (nx, ny, nz) - front mushy zone contribution (melting)
-        box_xi: 1D array of xi coordinates (x - x_laser) in moving frame
-        box_y_rel: 1D array of y coordinates relative to laser
-        box_z: 1D array of z coordinates (depth)
-        isotherm_entries: array of shape (n_entries, 8) containing:
-            [iy, iz, xi_S_back, xi_L_back, xi_L_front, xi_S_front, f_scale, is_partial]
-            where xi values are in MOVING FRAME coordinates
-        v: laser velocity magnitude
-        D: thermal diffusivity
-        lmbda: thermal conductivity
-        rho: density
-        L_f: latent heat of fusion
-        dS: cross-section area for each tube (dy * dz)
+        Q_box: output array (nx, ny, nz) - volumetric heat source W/m^3
+        isotherm_entries: array of shape (n_entries, 8)
+        nx_box, ny_box, nz_box: dimensions
+        dx, dy, dz: cell sizes
+        rho, L_f: material properties
+        dS: cross-section area of the tube (dy*dz)
+        v: velocity magnitude
+        xi_box_offset: offset to convert relative coordinate xi to box index
     """
-    nx = len(box_xi)
-    ny = len(box_y_rel)
-    nz = len(box_z)
+    # Box start position in relative coordinates (approx)
+    # box_xi goes from -Lx_box/2 to +Lx_box/2
+    # ix=0 corresponds to xi = -nx_box*dx/2
+    # xi_box_offset passed as argument now
+    
+    # Volumetric source magnitude base: Power / Volume
+    # Power = rho * v * dS * L_f * f_scale
+    # Volume = dx * dy * dz
+    # Q_vol = (rho * v * dS * L_f * f_scale) / (dx * dy * dz)
+    # Since dS = dy * dz (usually), Q_vol = rho * v * L_f * f_scale / dx
+    
+    # Precompute constant part
+    # We use dS explicitly in case the tube area is different from voxel face
+    Q_pre = (rho * v * dS * L_f) / (dx * dy * dz)
+    
     n_entries = isotherm_entries.shape[0]
     
-    # Calculate R_min based on tube cross-section
-    R_min = np.sqrt(dS / np.pi)
+    # We iterate over entries and fill the grid
+    # Since multiple entries might map to the same voxel (unlikely if 1-to-1 map), 
+    # or we just want to parallelize over entries.
+    # Parallelizing over entries is safer if we write to different y,z lines.
+    # Isotherm entries are distinct in (y,z).
     
-    # Loop over all field points in parallel
-    for ix in prange(nx):
-        xi = box_xi[ix]  # Field point xi in moving frame
-        for iy_field in range(ny):
-            y_field = box_y_rel[iy_field]  # Field point y relative to laser
-            for iz_field in range(nz):
-                z_field = box_z[iz_field]
-                
-                T_sum = 0.0
-                
-                # Accumulate contributions from all line sources
-                for ie in range(n_entries):
-                    iy_src = int(isotherm_entries[ie, 0])
-                    iz_src = int(isotherm_entries[ie, 1])
-                    xi_S_back = isotherm_entries[ie, 2]
-                    xi_L_back = isotherm_entries[ie, 3]
-                    xi_L_front = isotherm_entries[ie, 4]
-                    xi_S_front = isotherm_entries[ie, 5]
-                    f_scale = isotherm_entries[ie, 6]
-                    
-                    # Source location in y-z plane (relative coordinates)
-                    y_s = box_y_rel[iy_src]  # y position of source relative to laser
-                    z_s = box_z[iz_src]      # z position (depth) of source
-                    
-                    # Relative y position between field point and source
-                    y_rel = y_field - y_s
-                    
-                    # Mushy zone lengths (in moving frame)
-                    l_m_back = xi_L_back - xi_S_back    # Back mushy zone (negative xi, behind laser)
-                    l_m_front = xi_S_front - xi_L_front  # Front mushy zone (positive xi, ahead of laser)
-                    
-                    # Back mushy zone (solidification - heat SOURCE, positive)
-                    # This is BEHIND the laser where material is solidifying
-                    if abs(l_m_back) > 1e-10:
-                        q_line_back = rho * v * dS * L_f * f_scale / abs(l_m_back)
-                        T_back = integrate_line_source_trapz(
-                            xi, y_rel, z_field, z_s,
-                            xi_S_back, xi_L_back,
-                            v, D, lmbda, q_line_back, 20, R_min
-                        )
-                        T_sum += T_back
-                        T_corr_back[ix, iy_field, iz_field] += T_back
-                    
-                    # Front mushy zone (melting - heat SINK, negative)
-                    # This is AHEAD of the laser where material is melting
-                    if abs(l_m_front) > 1e-10:
-                        q_line_front = -rho * v * dS * L_f * f_scale / abs(l_m_front)
-                        T_front = integrate_line_source_trapz(
-                            xi, y_rel, z_field, z_s,
-                            xi_L_front, xi_S_front,
-                            v, D, lmbda, q_line_front, 20, R_min
-                        )
-                        T_sum += T_front
-                        T_corr_front[ix, iy_field, iz_field] += T_front
-                
-                T_corr[ix, iy_field, iz_field] += T_sum
+    for ie in prange(n_entries):
+        iy_src = int(isotherm_entries[ie, 0])
+        iz_src = int(isotherm_entries[ie, 1])
+        
+        # Check bounds
+        if iy_src < 0 or iy_src >= ny_box or iz_src < 0 or iz_src >= nz_box:
+            continue
+            
+        xi_S_back = isotherm_entries[ie, 2]
+        xi_L_back = isotherm_entries[ie, 3]
+        xi_L_front = isotherm_entries[ie, 4]
+        xi_S_front = isotherm_entries[ie, 5]
+        f_scale = isotherm_entries[ie, 6]
+        
+        Q_mag = Q_pre * f_scale
+        
+        # --- 1. Back Zone (Solidification -> Heat Source +) ---
+        # From xi_S_back to xi_L_back
+        # Convert to indices
+        ix_start_raw = int(round((xi_S_back + xi_box_offset) / dx))
+        ix_end_raw = int(round((xi_L_back + xi_box_offset) / dx))
+        
+        # Ensure start < end
+        if ix_start_raw > ix_end_raw: ix_start_raw, ix_end_raw = ix_end_raw, ix_start_raw
+        
+        n_pixels = ix_end_raw - ix_start_raw
+        if n_pixels == 0:
+            n_pixels = 1
+            ix_end_raw += 1
+            
+        Q_applied = Q_mag / n_pixels
+        
+        # Clamp to box
+        ix_start = max(0, ix_start_raw)
+        ix_end = min(nx_box, ix_end_raw)
+        
+        for ix in range(ix_start, ix_end):
+            Q_box[ix, iy_src, iz_src] += Q_applied
 
+        # --- 2. Front Zone (Melting -> Heat Sink -) ---
+        # From xi_L_front to xi_S_front
+        ix_start_raw = int(round((xi_L_front + xi_box_offset) / dx))
+        ix_end_raw = int(round((xi_S_front + xi_box_offset) / dx))
+        
+        if ix_start_raw > ix_end_raw: ix_start_raw, ix_end_raw = ix_end_raw, ix_start_raw
+        
+        n_pixels = ix_end_raw - ix_start_raw
+        if n_pixels == 0:
+            n_pixels = 1
+            ix_end_raw += 1
+            
+        Q_applied = Q_mag / n_pixels
+        
+        ix_start = max(0, ix_start_raw)
+        ix_end = min(nx_box, ix_end_raw)
+        
+        for ix in range(ix_start, ix_end):
+            Q_box[ix, iy_src, iz_src] -= Q_applied
 
-def compute_latent_heat_correction(T_corr, box_coords, isotherm_data, phys, laser, geom, verbose=False):
+def compute_latent_heat_source(Q_box, box_coords, isotherm_data, phys, laser, geom, verbose=False):
     """
-    High-level function to compute latent heat correction.
+    Compute volumetric latent heat source Q (W/m^3).
     
     Args:
-        T_corr: output array (nx, ny, nz) to fill
+        Q_box: output array (nx, ny, nz) to fill
         box_coords: (box_x, box_y, box_z) tuple
-        isotherm_data: list of tuples (iy, iz, i_S_back, i_L_back, i_L_front, i_S_front, f_scale, is_partial)
+        isotherm_data: list of tuples
         phys: PhysParams object
         laser: Laser object
         geom: GeomParams object
-        verbose: if True, print detailed statistics (default: False)
-    
-    Returns:
-        dict with T_corr_back, T_corr_front arrays and energy statistics
     """
     box_x, box_y, box_z = box_coords
-    
-    # Convert to moving frame: ξ = x - x_laser
     x_laser = laser.x
-    y_laser = laser.y
-    
-    # Relative coordinates (moving frame centered on laser)
-    box_xi = box_x - x_laser
-    box_y_rel = box_y - y_laser
     
     if len(isotherm_data) == 0:
-        if verbose:
-            print("  [WARN] No isotherm data, returning zero correction!")
-        return {'T_corr_back': np.zeros_like(T_corr), 'T_corr_front': np.zeros_like(T_corr)}
+        Q_box.fill(0.0)
+        return
     
     # Convert isotherm data to numpy array with PHYSICAL coordinates in moving frame
     n_entries = len(isotherm_data)
@@ -355,77 +199,30 @@ def compute_latent_heat_correction(T_corr, box_coords, isotherm_data, phys, lase
         isotherm_entries[i, :] = [iy, iz, xi_S_back, xi_L_back, xi_L_front, xi_S_front, f_scale, float(is_partial)]
     
     # Physical parameters
-    v = np.sqrt(laser.v[0]**2 + laser.v[1]**2)  # velocity magnitude
-    D = phys.k / (phys.rho * phys.Cp)  # thermal diffusivity
-    lmbda = phys.k
+    v = np.sqrt(laser.v[0]**2 + laser.v[1]**2)
     rho = phys.rho
     L_f = phys.L_f
     
-    # Cross-section area (tube area = dy * dz)
-    dy_box = box_y[1] - box_y[0] if len(box_y) > 1 else geom.dy
-    dz_box = box_z[1] - box_z[0] if len(box_z) > 1 else geom.dz
-    dS = dy_box * dz_box
+    # Grid spacing
+    dx = box_x[1] - box_x[0] if len(box_x) > 1 else geom.dx
+    dy = box_y[1] - box_y[0] if len(box_y) > 1 else geom.dy
+    dz = box_z[1] - box_z[0] if len(box_z) > 1 else geom.dz
+    dS = dy * dz
     
-    # Create arrays to track back and front contributions separately
-    T_corr_back = np.zeros_like(T_corr)
-    T_corr_front = np.zeros_like(T_corr)
+    nx_box, ny_box, nz_box = Q_box.shape
     
-    # Compute correction using MOVING FRAME coordinates
-    # compute_T_corr_for_box(
-    #     T_corr, 
-    #     T_corr_back,
-    #     T_corr_front,
-    #     box_xi.astype(np.float64),
-    #     box_y_rel.astype(np.float64),
-    #     box_z.astype(np.float64),
-    #     isotherm_entries,
-    #     v, D, lmbda, rho, L_f, dS
-    # )
-    
-    # Use Fast Kernel Method
-    if not hasattr(geom, 'kernel'):
-        geom.kernel = precompute_rosenthal_kernel(phys, geom, laser)
-        
-    apply_latent_heat_correction_fast(
-        T_corr, T_corr_back, T_corr_front,
-        geom.kernel, isotherm_entries,
-        geom.nx_box, geom.ny_box, geom.nz_box,
-        geom.dx_fine, geom.dy_fine, geom.dz_fine,
-        rho, L_f, dS, v
-    )
-    
-    # Compute energy statistics (integrate T * rho * Cp over volume)
-    # Energy = ∫ T * rho * Cp dV ≈ sum(T) * dx * dy * dz * rho * Cp
-    dx_box = box_x[1] - box_x[0] if len(box_x) > 1 else geom.dx
-    dV = dx_box * dy_box * dz_box
-    
-    # Energy in Joules (per unit time? Actually this is temperature field)
-    # More meaningful: total power = rho * Cp * dT/dt * V, but we have steady-state
-    # Let's report "heat content" change = rho * Cp * sum(T_corr) * dV
-    Cp = phys.Cp
-    E_back = rho * Cp * np.sum(T_corr_back) * dV   # J (heating from solidification)
-    E_front = rho * Cp * np.sum(T_corr_front) * dV  # J (cooling from melting)
-    E_total = rho * Cp * np.sum(T_corr) * dV
-    
-    # Also compute the theoretical power release rate
-    # P = rho * v * A_melt * L_f where A_melt is total cross-sectional area of melt pool
-    # Each tube has area dS, and we have n_entries tubes
-    P_latent = rho * v * n_entries * dS * L_f  # W (theoretical latent heat release rate)
-    
-    if verbose:
-        print(f"  [Latent Heat] {n_entries} source tubes")
-        print(f"    Back (solidification):  T_corr in [{T_corr_back.min():+.1f}, {T_corr_back.max():+.1f}] K, E_back = {E_back:+.3e} J")
-        print(f"    Front (melting):        T_corr in [{T_corr_front.min():+.1f}, {T_corr_front.max():+.1f}] K, E_front = {E_front:+.3e} J")
-        print(f"    Net correction:         T_corr in [{T_corr.min():+.1f}, {T_corr.max():+.1f}] K, E_net = {E_total:+.3e} J")
-        print(f"    Theoretical P_latent = {P_latent:.1f} W")
-    
-    return {'T_corr_back': T_corr_back, 'T_corr_front': T_corr_front, 'E_back': E_back, 'E_front': E_front}
+    # Offset for rasterization: maps xi (relative to laser) to box index
+    # ix = (xi + xi_box_offset) / dx
+    xi_box_offset = x_laser - box_x[0]
 
-import numpy as np
-from scipy.ndimage import shift as scipy_shift
-from pyfftw.interfaces.scipy_fft import dctn
-import pyfftw
-import os
+    # Rasterize
+    Q_box.fill(0.0)
+    rasterize_latent_heat(
+        Q_box, isotherm_entries,
+        nx_box, ny_box, nz_box,
+        dx, dy, dz,
+        rho, L_f, dS, v, xi_box_offset
+    )
 
 # ============================================================
 #   COSINE NORMALIZATION COEFFICIENTS
@@ -582,184 +379,6 @@ def find_isotherms_along_x(T_box, M_yz, mask_full, mask_partial, phys):
     
     return results
 
-# ============================================================
-#   FAST LATENT HEAT CORRECTION (PRECOMPUTED KERNEL)
-# ============================================================
-
-def precompute_rosenthal_kernel(phys, geom, laser):
-    """
-    Precompute the temperature field of a finite line source of length dx_fine
-    centered at (0,0,z_s) for all possible relative positions in the fine mesh box.
-    
-    Returns:
-        kernel: 4D array (nz_box, 2*nx_box+1, 2*ny_box+1, nz_box)
-                Indices: [iz_source, ix_rel, iy_rel, iz_field]
-                Values: Temperature contribution per unit linear power density (K / (W/m))
-    """
-    print("Precomputing Rosenthal Green's Function Kernel...")
-    
-    nx_box, ny_box, nz_box = geom.nx_box, geom.ny_box, geom.nz_box
-    dx, dy, dz = geom.dx_fine, geom.dy_fine, geom.dz_fine
-    
-    # Relative coordinate ranges
-    # ix_rel goes from -nx_box to +nx_box (size 2*nx_box + 1)
-    # iy_rel goes from -ny_box to +ny_box (size 2*ny_box + 1)
-    
-    xi_range = np.arange(-nx_box, nx_box + 1) * dx
-    y_range = np.arange(-ny_box, ny_box + 1) * dy
-    z_range = geom.box_z # Absolute z coordinates
-    
-    # Physical parameters
-    v = np.linalg.norm(laser.v)
-    D = phys.k / (phys.rho * phys.Cp)
-    lmbda = phys.k
-    
-    # Source segment: length dx, centered at 0
-    xi_start = -dx / 2.0
-    xi_end = dx / 2.0
-    q_unit = 1.0 # Unit power density W/m
-    
-    # Calculate R_min based on tube cross-section
-    R_min = np.sqrt(dy * dz / np.pi)
-    
-    # Allocate kernel
-    # Shape: (nz_source, nx_rel, ny_rel, nz_field)
-    # We use a list of 3D arrays to avoid one giant 4D block if memory is tight, 
-    # but here it's small enough.
-    kernel = np.zeros((nz_box, len(xi_range), len(y_range), nz_box), dtype=np.float32)
-    
-    # Compute kernel
-    # We can parallelize this loop or use the vectorized integration function if adapted.
-    # For simplicity and since it's precomputation, we loop over source depths.
-    
-    for iz_s in range(nz_box):
-        z_s = z_range[iz_s]
-        
-        # Create meshgrid for field points
-        # We compute for all relative x, y and all absolute z
-        XI, Y, Z = np.meshgrid(xi_range, y_range, z_range, indexing='ij')
-        
-        # Flatten for parallel computation
-        XI_flat = XI.ravel()
-        Y_flat = Y.ravel()
-        Z_flat = Z.ravel()
-        T_flat = np.zeros_like(XI_flat)
-        
-        # Use the Numba integrator
-        # We use a higher number of points for the kernel to be accurate
-        _compute_kernel_layer(T_flat, XI_flat, Y_flat, Z_flat, z_s, xi_start, xi_end, v, D, lmbda, q_unit, R_min)
-        
-        kernel[iz_s] = T_flat.reshape(XI.shape).astype(np.float32)
-        
-    return kernel
-
-@njit(parallel=True, fastmath=True)
-def _compute_kernel_layer(T_out, xi, y, z, z_s, xi_start, xi_end, v, D, lmbda, q_line, R_min):
-    n = len(xi)
-    for i in prange(n):
-        T_out[i] = integrate_line_source_trapz(xi[i], y[i], z[i], z_s, xi_start, xi_end, v, D, lmbda, q_line, 100, R_min)
-
-@njit(parallel=True, fastmath=True)
-def apply_latent_heat_correction_fast(T_corr, T_corr_back, T_corr_front, 
-                                      kernel, isotherm_entries, 
-                                      nx_box, ny_box, nz_box, 
-                                      dx, dy, dz, 
-                                      rho, L_f, dS, v):
-    """
-    Apply latent heat correction using precomputed kernel (Gather approach).
-    Parallelized over field points.
-    """
-    # Kernel center offsets
-    kc_x = nx_box
-    kc_y = ny_box
-    
-    # Box start position in relative coordinates (approx)
-    # box_xi goes from -Lx_box/2 to +Lx_box/2
-    # We assume the grid is centered on the laser
-    # ix=0 corresponds to xi = -nx_box*dx/2
-    xi_box_offset = (nx_box * dx) / 2.0
-    
-    # Parallel loop over field points (x, y, z)
-    for ix in prange(nx_box):
-        for iy in range(ny_box):
-            for iz in range(nz_box):
-                
-                val_back = 0.0
-                val_front = 0.0
-                
-                # Loop over all source tubes
-                for ie in range(isotherm_entries.shape[0]):
-                    iy_src = int(isotherm_entries[ie, 0])
-                    iz_src = int(isotherm_entries[ie, 1])
-                    
-                    # Relative y index for kernel lookup
-                    # ky = (iy_field - iy_source) + center_offset
-                    ky = (iy - iy_src) + kc_y
-                    
-                    # Quick bounds check for y
-                    if ky < 0 or ky >= 2*ny_box + 1: continue
-                    
-                    # Extract source parameters
-                    xi_S_back = isotherm_entries[ie, 2]
-                    xi_L_back = isotherm_entries[ie, 3]
-                    xi_L_front = isotherm_entries[ie, 4]
-                    xi_S_front = isotherm_entries[ie, 5]
-                    f_scale = isotherm_entries[ie, 6]
-                    
-                    # --- 1. Back Zone (Solidification) ---
-                    L_back = abs(xi_L_back - xi_S_back)
-                    if L_back > 1e-10:
-                        n_segs = int(round(L_back / dx))
-                        if n_segs < 1: n_segs = 1
-                        
-                        # Effective source strength per segment
-                        q_eff = (rho * v * dS * L_f * f_scale) / (n_segs * dx)
-                        
-                        # Center of the mushy zone
-                        xi_center = (xi_S_back + xi_L_back) / 2.0
-                        
-                        # Convert center to grid index
-                        # ix_s = (xi_center - (-offset)) / dx = (xi_center + offset) / dx
-                        ix_s_center = (xi_center + xi_box_offset) / dx
-                        
-                        # Loop over segments
-                        for s in range(n_segs):
-                            # Segment offset from center
-                            s_off = s - (n_segs - 1) / 2.0
-                            
-                            # Segment grid index
-                            ix_s = int(round(ix_s_center + s_off))
-                            
-                            # Kernel x index
-                            # kx = (ix_field - ix_source) + center_offset
-                            kx = (ix - ix_s) + kc_x
-                            
-                            if kx >= 0 and kx < 2*nx_box + 1:
-                                val_back += q_eff * kernel[iz_src, kx, ky, iz]
-
-                    # --- 2. Front Zone (Melting) ---
-                    L_front = abs(xi_S_front - xi_L_front)
-                    if L_front > 1e-10:
-                        n_segs = int(round(L_front / dx))
-                        if n_segs < 1: n_segs = 1
-                        
-                        q_eff = -(rho * v * dS * L_f * f_scale) / (n_segs * dx)
-                        
-                        xi_center = (xi_L_front + xi_S_front) / 2.0
-                        ix_s_center = (xi_center + xi_box_offset) / dx
-                        
-                        for s in range(n_segs):
-                            s_off = s - (n_segs - 1) / 2.0
-                            ix_s = int(round(ix_s_center + s_off))
-                            kx = (ix - ix_s) + kc_x
-                            
-                            if kx >= 0 and kx < 2*nx_box + 1:
-                                val_front += q_eff * kernel[iz_src, kx, ky, iz]
-                
-                # Write results
-                T_corr_back[ix, iy, iz] = val_back
-                T_corr_front[ix, iy, iz] = val_front
-                T_corr[ix, iy, iz] = val_back + val_front
 
 # ============================================================
 #   DCT-II 2D 
@@ -819,25 +438,12 @@ def reconstruct_temperature_box(a, num, geom, symmetrize=False):
     """
     Reconstructs temperature in a small ROI around the laser using 
     precomputed fine mesh cosine bases from geom.
-    
-    Args:
-        a: spectral coefficients (nz, ny, nx)
-        num: NumericalParams
-        geom: GeomParams (must have fine_mesh_initialized=True)
-        symmetrize: if True, use symmetric extension at boundaries (Neumann BC behavior)
-                    if False (default), set temperature to zero outside domain
-    
-    Returns:
-        T_box: temperature field on fine mesh, shape (nx_box, ny_box, nz_box)
-        box_coords: (box_x, box_y, box_z) coordinate arrays
     """
     if not geom.fine_mesh_initialized:
         raise RuntimeError("Fine mesh not initialized. Call geom.update_fine_mesh(laser) first.")
     
     # Tensor Contraction using precomputed bases
     # T(x,y,z) = sum_p sum_n sum_m  a[p,n,m] * Bz[p,z] * By[n,y] * Bx[m,x]
-    # a shape: (nz, ny, nx) = (p, n, m)
-    # Result shape: (nx_box, ny_box, nz_box)
     
     T_step1 = np.tensordot(a, geom.Bx_fine, axes=(2, 0))  # (nz, ny, nx_box)
     T_step2 = np.tensordot(T_step1, geom.By_fine, axes=(1, 0))  # (nz, nx_box, ny_box)
@@ -845,54 +451,236 @@ def reconstruct_temperature_box(a, num, geom, symmetrize=False):
     
     return T_box.astype(np.float32), (geom.box_x, geom.box_y, geom.box_z)
 
-def save_temp_profiles(a, num, geom, phys, laser, t=None):
-    """Save 1D temperature profiles."""
+
+def reconstruct_temperature_volume(a, num, geom):
+    """Reconstruct the temperature field on the full simulation grid."""
+    Bx = (geom.Cm[:, None] * geom.cos_mx).astype(np.float32)
+    By = (geom.Cn[:, None] * geom.cos_ny).astype(np.float32)
+    Bz = (geom.Cp[:, None] * geom.cos_pz).astype(np.float32)
+
+    T_step1 = np.tensordot(a, Bx, axes=(2, 0))  # (nz, ny, nx)
+    T_step2 = np.tensordot(T_step1, By, axes=(1, 0))  # (nz, nx, ny)
+    T_full = np.tensordot(T_step2, Bz, axes=(0, 0))  # (nx, ny, nz)
+
+    return T_full.astype(np.float32)
+
+
+def _cosine_basis_along_axis(n_modes, length, coords):
+    """Compute cosine basis values for given coordinates along one axis."""
+    indices = np.arange(n_modes, dtype=np.float64)
+    coords = np.asarray(coords, dtype=np.float64)
+    return np.cos(np.pi * indices[:, None] * coords[None, :] / length)
+
+
+def reconstruct_temperature_volume_at_points(a, num, geom, coords):
+    """Evaluate the temperature field at arbitrary points using modal expansion."""
+    coords = np.asarray(coords, dtype=np.float64)
+    if coords.ndim != 2 or coords.shape[1] != 3:
+        raise ValueError("coords must be of shape (N, 3)")
+
+    x_vals = np.clip(coords[:, 0], 0.0, geom.Lx)
+    y_vals = np.clip(coords[:, 1], 0.0, geom.Ly)
+    z_vals = np.clip(coords[:, 2], 0.0, geom.Lz)
+
+    Bx = (geom.Cm[:, None] * _cosine_basis_along_axis(num.nx, geom.Lx, x_vals)).astype(np.float64)
+    By = (geom.Cn[:, None] * _cosine_basis_along_axis(num.ny, geom.Ly, y_vals)).astype(np.float64)
+    Bz = (geom.Cp[:, None] * _cosine_basis_along_axis(num.nz, geom.Lz, z_vals)).astype(np.float64)
+
+    temps = np.einsum('pnm,pi,ni,mi->i', a.astype(np.float64), Bz, By, Bx, optimize=True)
+
+    return temps.astype(np.float32)
+
+def save_temp_profiles(a, num, geom, phys, laser, t=None, center="laser"):
+    """Save 1D temperature profiles.
+
+    Args:
+        center: "laser" uses the laser coordinates, "hotspot" tracks the peak temperature.
+    """
     t = num.t_final if t is None else t
     
     T_top = reconstruct_temperature_top(a, num, geom)
     x_vals, y_vals = geom.X[0, :], geom.Y[:, 0]
     
-      # Find location of maximum temperature
-    iy_max, ix_max = np.unravel_index(np.argmax(T_top), T_top.shape)
-    x_center = x_vals[ix_max]
-    y_center = y_vals[iy_max]
-    # Check work here
-    # Profiles through the hotspot
-    ix = ix_max
-    iy = iy_max
+    if center == "hotspot":
+        iy_idx, ix_idx = np.unravel_index(np.argmax(T_top), T_top.shape)
+    elif center == "laser":
+        ix_idx = int(np.argmin(np.abs(x_vals - laser.x)))
+        iy_idx = int(np.argmin(np.abs(y_vals - laser.y)))
+    else:
+        raise ValueError(f"Unknown center option: {center}")
 
-    # For XZ slice, we take the slice at y = y_center (max temp)
+    x_center = x_vals[ix_idx]
+    y_center = y_vals[iy_idx]
+
+    # Reconstruct XZ slice through selected center line
     x_xz, z_vals, T_xz = reconstruct_temperature_xz(a, num, geom, phys, laser, y0=y_center, mode='full_field')
     ix_xz = int(np.argmin(np.abs(x_xz - x_center)))
     
     for direction, coords, profile in [
-        ('x', x_vals, T_top[iy, :]),
-        ('y', y_vals, T_top[:, ix]),
+        ('x', x_vals, T_top[iy_idx, :]),
+        ('y', y_vals, T_top[:, ix_idx]),
         ('z', z_vals, T_xz[:, ix_xz])
     ]:
         fname = f"{OUT_DIR}/{direction}_spectral_latent_heat.txt"
         np.savetxt(fname, np.vstack([coords, profile]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
         print(f"Saved: {fname}")
 
-def T_corr_to_modes(T_corr, geom):
+
+def save_temp_profiles_from_hdf5(h5_path, center="laser", laser_position=None, output_dir=OUT_DIR):
+    """Re-sample temperature profiles from an HDF5 volume using tri-linear interpolation."""
+    with h5py.File(h5_path, "r") as f:
+        x = f["X"][:]
+        y = f["Y"][:]
+        z = f["Z"][:]
+        T = f["Temperature"][:]
+
+    interpolator = RegularGridInterpolator((z, y, x), T, bounds_error=False, fill_value=np.nan)
+
+    top_idx = int(np.argmin(np.abs(z)))
+    z_top = z[top_idx]
+
+    if center == "hotspot":
+        top_plane = T[top_idx, :, :]
+        iy_idx, ix_idx = np.unravel_index(np.nanargmax(top_plane), top_plane.shape)
+        y_center = y[iy_idx]
+        x_center = x[ix_idx]
+        print(
+            "Hotspot center detected at "
+            f"x={x_center:.6e} m, y={y_center:.6e} m, z={z_top:.6e} m"
+        )
+    elif center == "laser":
+        if laser_position is None:
+            raise ValueError("laser_position must be provided when center='laser'.")
+        x_center = float(np.clip(laser_position[0], x[0], x[-1]))
+        y_center = float(np.clip(laser_position[1], y[0], y[-1]))
+    else:
+        raise ValueError(f"Unknown center option: {center}")
+
+    line_x_points = np.column_stack((np.full(len(x), z_top, dtype=np.float64),
+                                     np.full(len(x), y_center, dtype=np.float64),
+                                     x.astype(np.float64)))
+    line_y_points = np.column_stack((np.full(len(y), z_top, dtype=np.float64),
+                                     y.astype(np.float64),
+                                     np.full(len(y), x_center, dtype=np.float64)))
+    line_z_points = np.column_stack((z.astype(np.float64),
+                                     np.full(len(z), y_center, dtype=np.float64),
+                                     np.full(len(z), x_center, dtype=np.float64)))
+
+    T_x = interpolator(line_x_points).astype(np.float32)
+    T_y = interpolator(line_y_points).astype(np.float32)
+    T_z = interpolator(line_z_points).astype(np.float32)
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    for direction, coords, profile in [
+        ('x', x, T_x),
+        ('y', y, T_y),
+        ('z', z, T_z)
+    ]:
+        fname = os.path.join(output_dir, f"{direction}_spectral_latent_heat.txt")
+        np.savetxt(fname, np.vstack([coords, profile]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
+        print(f"Saved: {fname}")
+        
+
+def save_temp_profiles_fine(
+    a=None,
+    num=None,
+    geom=None,
+    laser=None,
+    coords_x=None,
+    coords_y=None,
+    coords_z=None,
+    center="laser",
+    output_dir=OUT_DIR,
+    volume=None,
+    grid_coords=None,
+):
     """
-    Convert a local temperature correction field to spectral mode corrections.
+    Sample temperature along dense lines either from modal coefficients or a stored volume.
+
+    Provide either (a, num, geom) for exact modal evaluation or (volume, grid_coords).
+    """
+    if volume is None:
+        if any(v is None for v in (a, num, geom)):
+            raise ValueError("Provide modal data (a, num, geom) when volume is not supplied.")
+        x_axis, y_axis, z_axis = geom.x, geom.y, geom.z
+    else:
+        if grid_coords is None:
+            raise ValueError("grid_coords must be provided with volume data.")
+        x_axis, y_axis, z_axis = grid_coords
+
+    coords_x = np.asarray(coords_x if coords_x is not None else np.linspace(0.0, x_axis[-1], 1000, endpoint=False), dtype=np.float64)
+    coords_y = np.asarray(coords_y if coords_y is not None else np.linspace(0.0, y_axis[-1], 1000, endpoint=False), dtype=np.float64)
+    coords_z = np.asarray(coords_z if coords_z is not None else np.linspace(0.0, z_axis[-1], 1000), dtype=np.float64)
+
+    top_idx = int(np.argmin(np.abs(z_axis)))
+    z_top = z_axis[top_idx]
+
+    if center == "hotspot":
+        if volume is None:
+            T_top = reconstruct_temperature_top(a, num, geom)
+        else:
+            T_top = volume[top_idx, :, :]
+        iy_idx, ix_idx = np.unravel_index(np.nanargmax(T_top), T_top.shape)
+        x_center = x_axis[ix_idx]
+        y_center = y_axis[iy_idx]
+    elif center == "laser":
+        if laser is None:
+            raise ValueError("laser must be provided when center='laser'")
+        if hasattr(laser, "x"):
+            x_center, y_center = float(laser.x), float(laser.y)
+        else:
+            x_center, y_center = laser
+    else:
+        raise ValueError(f"Unknown center option: {center}")
+
+    x_center = float(np.clip(x_center, x_axis[0], x_axis[-1]))
+    y_center = float(np.clip(y_center, y_axis[0], y_axis[-1]))
+
+    points_x = np.column_stack((coords_x, np.full_like(coords_x, y_center), np.full_like(coords_x, z_top)))
+    points_y = np.column_stack((np.full_like(coords_y, x_center), coords_y, np.full_like(coords_y, z_top)))
+    points_z = np.column_stack((np.full_like(coords_z, x_center), np.full_like(coords_z, y_center), coords_z))
+
+    if volume is None:
+        T_x = reconstruct_temperature_volume_at_points(a, num, geom, points_x)
+        T_y = reconstruct_temperature_volume_at_points(a, num, geom, points_y)
+        T_z = reconstruct_temperature_volume_at_points(a, num, geom, points_z)
+    else:
+        interpolator = RegularGridInterpolator((z_axis, y_axis, x_axis), volume.astype(np.float64), bounds_error=False, fill_value=np.nan)
+        T_x = interpolator(points_x[:, [2, 1, 0]]).astype(np.float32)
+        T_y = interpolator(points_y[:, [2, 1, 0]]).astype(np.float32)
+        T_z = interpolator(points_z[:, [2, 1, 0]]).astype(np.float32)
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    for direction, coords, profile in [
+        ('x_fine', coords_x, T_x),
+        ('y_fine', coords_y, T_y),
+        ('z_fine', coords_z, T_z)
+    ]:
+        fname = os.path.join(output_dir, f"{direction}_spectral_latent_heat.txt")
+        np.savetxt(fname, np.vstack([coords, profile]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
+        print(f"Saved fine profile: {fname}")
+
+def box_field_to_modes(field_box, geom):
+    """
+    Convert a field defined in the fine box (e.g. Q_latent) to global spectral modes.
     Uses precomputed fine mesh cosine bases from geom.
     Optimized using explicit matrix multiplications.
     """
     if not geom.fine_mesh_initialized:
         raise RuntimeError("Fine mesh not initialized. Call geom.update_fine_mesh(laser) first.")
     
-    # T_corr shape: (nx_box, ny_box, nz_box)
-    nx_box, ny_box, nz_box = T_corr.shape
+    # field_box shape: (nx_box, ny_box, nz_box)
+    nx_box, ny_box, nz_box = field_box.shape
     nx, _ = geom.Bx_fine.shape
     ny, _ = geom.By_fine.shape
     nz, _ = geom.Bz_fine.shape
     
     # 1. Contract X: (nx, nx_box) @ (nx_box, ny_box*nz_box) -> (nx, ny_box*nz_box)
-    # Reshape T_corr to combine Y and Z
-    T_reshaped = T_corr.reshape(nx_box, ny_box * nz_box)
-    temp1 = geom.Bx_fine @ T_reshaped
+    # Reshape field to combine Y and Z
+    field_reshaped = field_box.reshape(nx_box, ny_box * nz_box)
+    temp1 = geom.Bx_fine @ field_reshaped
     
     # 2. Contract Y: (ny, ny_box) @ (ny_box, nx*nz_box) -> (ny, nx*nz_box)
     # Reshape temp1 to (nx, ny_box, nz_box) and transpose to (ny_box, nx, nz_box)
@@ -904,12 +692,27 @@ def T_corr_to_modes(T_corr, geom):
     # Reshape temp2 to (ny, nx, nz_box) and transpose to (nz_box, ny, nx)
     # Then flatten last two dims
     temp2 = temp2.reshape(ny, nx, nz_box).transpose(2, 0, 1).reshape(nz_box, ny * nx)
-    delta_a = geom.Bz_fine @ temp2
+    modes = geom.Bz_fine @ temp2
     
     # Final reshape to (nz, ny, nx)
-    delta_a = delta_a.reshape(nz, ny, nx)
+    modes = modes.reshape(nz, ny, nx)
     
     # Multiply by dV for the numerical integration
-    delta_a *= geom.dV_fine
+    modes *= geom.dV_fine
     
-    return delta_a.astype(np.float32)
+    return modes.astype(np.float32)
+
+def cell_to_node_reconstruction(T_cells):
+    """
+    Converts cell-centered data (nz, ny, nx) to node-centered data (nz+1, ny+1, nx+1)
+    by performing a 3D moving average.
+    """
+    # 1. Pad boundary (Neumann-like)
+    T_pad = np.pad(T_cells, pad_width=1, mode='edge')
+
+    # 2. Average successively along Z, Y, X to get to corners
+    T_z = 0.5 * (T_pad[:-1, :, :] + T_pad[1:, :, :])      # Avg Z
+    T_zy = 0.5 * (T_z[:, :-1, :] + T_z[:, 1:, :])         # Avg Y
+    T_nodes = 0.5 * (T_zy[:, :, :-1] + T_zy[:, :, 1:])    # Avg X
+    
+    return T_nodes

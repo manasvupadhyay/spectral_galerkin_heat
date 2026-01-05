@@ -5,7 +5,7 @@ import time
 from numba import njit, prange
 import os
 from types import SimpleNamespace
-import helpers_spectral as hp
+import helpers as hp
 
 pyfftw.config.NUM_THREADS = os.cpu_count()
 OUT_DIR = "out"
@@ -257,7 +257,7 @@ def time_step(a, phys, num, geom, laser, timers=None, epsilon=2e+1, iter_step=0)
         S_current = S_n.copy()
         if timers is not None: timers['linear'] += time.perf_counter() - t0
 
-        # 4. Latent Heat Correction (Volumetric Source) - MOVED BEFORE EVAPORATION
+        # 3. Latent Heat Correction (Volumetric Source) - MOVED BEFORE EVAPORATION
         t0 = time.perf_counter()
         
         t_mesh = time.perf_counter()
@@ -300,7 +300,7 @@ def time_step(a, phys, num, geom, laser, timers=None, epsilon=2e+1, iter_step=0)
         
         if timers is not None: timers['latent_heat'] += time.perf_counter() - t0
         
-        # 3. Nonlinear iteration for evaporation
+        # 4. Nonlinear iteration for evaporation
         t0 = time.perf_counter()
         T_temp = hp.reconstruct_temperature_top(num.a_temp, num, geom)
         for k in range(30):
