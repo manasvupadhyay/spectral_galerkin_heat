@@ -197,7 +197,7 @@ class NumericalParams:
         """Precompute spectral propagators and allocate buffers."""
         print(f"Precomputing K, KK... ({self.ETD})")
         self.K, self.KK, self.K_phi0, self.KK_phi1, self.KKK_phi2 = precompute_K_KK(phys, self, geom)
-        self.KK_by_Cp = (self.KK * geom.Cp[:, None, None]).astype(np.float32)
+        self.KK_by_Cp = (self.KK * geom.Cp[:, None, None]).astype(np.float32) # Projected on x,y plane
         self.KK_vol = self.KK.astype(np.float32)
         
         # Allocate working arrays
@@ -252,30 +252,12 @@ def time_step(a, phys, num, geom, laser, timers=None, epsilon=2e+1, iter_step=0)
         t0 = time.perf_counter()
         np.multiply(a, num.K, out=num.aK, casting='same_kind')
         S_n = geom.dct_scale * q_dct
-        np.multiply(geom.dct_scale, q_dct, out=num.B_buffer, casting='same_kind')
+        np.multiply(geom.dct_scale, q_dct, out=num.B_buffer, casting='same_kind') 
         compute_a_temp_numba(num.aK, num.KK_by_Cp, num.B_buffer, num.a_temp)
         S_current = S_n.copy()
         if timers is not None: timers['linear'] += time.perf_counter() - t0
-        
-        # 3. Nonlinear iteration for evaporation
-        t0 = time.perf_counter()
-        T_temp = hp.reconstruct_temperature_top(num.a_temp, num, geom)
-        for k in range(30):
-            q_evap = hp.q_evap_point(T_temp, phys)
-            np.subtract(q_las, q_evap, out=num.q_diff, casting='same_kind')
-            S_target = geom.dct_scale * hp.DCT_II(num.q_diff)
-            S_current = 0.1 * S_target + 0.9 * S_current # Relaxation
-            np.multiply(1.0, S_current, out=num.B_buffer, casting='same_kind')
-            compute_a_temp_numba(num.aK, num.KK_by_Cp, num.B_buffer, num.a_temp)
-            T_old = T_temp
-            T_temp = hp.reconstruct_temperature_top(num.a_temp, num, geom)
-            if np.max(np.abs(T_temp - T_old)) < epsilon: break
-        
-        num.S_n, num.q_evap_old = S_n.copy(), q_evap.astype(np.float32, copy=True)
-        P_laser = np.sum(q_las) * geom.dx * geom.dy
-        if timers is not None: timers['nonlinear'] += time.perf_counter() - t0
 
-        # 4. Latent Heat Correction (Volumetric Source)
+        # 4. Latent Heat Correction (Volumetric Source) - MOVED BEFORE EVAPORATION
         t0 = time.perf_counter()
         
         t_mesh = time.perf_counter()
@@ -310,10 +292,31 @@ def time_step(a, phys, num, geom, laser, timers=None, epsilon=2e+1, iter_step=0)
 
         # Add to temperature modes
         t_add = time.perf_counter()
+        # Update base state aK so that evaporation loop sees the latent heat
+        add_source_term_numba(num.aK, num.KK_vol, Q_modes)
+        # Update current a_temp so that the start of evaporation loop sees it
         add_source_term_numba(num.a_temp, num.KK_vol, Q_modes)
         if timers is not None: timers['lh_add_delta'] += time.perf_counter() - t_add
         
         if timers is not None: timers['latent_heat'] += time.perf_counter() - t0
+        
+        # 3. Nonlinear iteration for evaporation
+        t0 = time.perf_counter()
+        T_temp = hp.reconstruct_temperature_top(num.a_temp, num, geom)
+        for k in range(30):
+            q_evap = hp.q_evap_point(T_temp, phys)
+            np.subtract(q_las, q_evap, out=num.q_diff, casting='same_kind')
+            S_target = geom.dct_scale * hp.DCT_II(num.q_diff)
+            S_current = 0.1 * S_target + 0.9 * S_current # Relaxation
+            np.multiply(1.0, S_current, out=num.B_buffer, casting='same_kind')
+            compute_a_temp_numba(num.aK, num.KK_by_Cp, num.B_buffer, num.a_temp)
+            T_old = T_temp
+            T_temp = hp.reconstruct_temperature_top(num.a_temp, num, geom)
+            if np.max(np.abs(T_temp - T_old)) < epsilon: break
+        
+        num.S_n, num.q_evap_old = S_n.copy(), q_evap.astype(np.float32, copy=True)
+        P_laser = np.sum(q_las) * geom.dx * geom.dy
+        if timers is not None: timers['nonlinear'] += time.perf_counter() - t0
         
         # Debug output
         t0 = time.perf_counter()
@@ -383,7 +386,7 @@ def run_simulation(phys, num, geom, laser):
 if __name__ == "__main__":
     # Simulation parameters
     Lx, Ly, Lz = 0.01, 0.005, 0.0025
-    nx, ny, nz = 1000, 512, 1000
+    nx, ny, nz = 512, 256, 1000
     dt = 6.0e-6
     t_final = 1.2e-2
     
