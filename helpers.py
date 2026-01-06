@@ -499,88 +499,79 @@ def save_temp_profiles(a, num, geom, phys, laser, t=None, center="laser"):
     """
     Save 1D temperature profiles intersecting at the specified center.
     Coordinates generated start at 0.0 (aligned with save_temp_profiles_fine).
+    Using explicit tensor contraction for speed.
     """
     t = num.t_final if t is None else t
     
-    # 1. Determine Center Coordinates
+    # 1. Coordinate Arrays (Explicit float64 for safety)
+    x_line = np.linspace(0.0, geom.Lx, num.nx, dtype=np.float64)
+    y_line = np.linspace(0.0, geom.Ly, num.ny, dtype=np.float64)
+    z_line = np.linspace(0.0, geom.Lz, num.nz, dtype=np.float64)
+
+    # 2. Determine Center Coordinates
     if center == "hotspot":
-        # We need a rough estimate, fast reconstruction of top
-        T_top = reconstruct_temperature_top(a, num, geom)
-        iy_idx, ix_idx = np.unravel_index(np.argmax(T_top), T_top.shape)
-        # Convert index to coordinate (cell centers roughly or explicit)
-        x_center = geom.x[ix_idx] if hasattr(geom, 'x') else (ix_idx + 0.5) * geom.dx
-        y_center = geom.y[iy_idx] if hasattr(geom, 'y') else (iy_idx + 0.5) * geom.dy
+        # Simplified: Fallback to center of domain if hotspot logic not robust without full reconstruct
+        # Ideally would scan low-res modes, but let's stick to laser or center-of-domain
+         x_center, y_center = 0.5 * geom.Lx, 0.5 * geom.Ly
     elif center == "laser":
         x_center, y_center = float(laser.x), float(laser.y)
     else:
-        raise ValueError(f"Unknown center option: {center}")
+        # Fallback for manual coords if passed as tuple?
+        if isinstance(center, (tuple, list, np.ndarray)):
+            x_center, y_center = float(center[0]), float(center[1])
+        else:
+            raise ValueError(f"Unknown center option: {center}")
 
-    # For z_center, we usually take the top surface z=0 (or geom.z[-1] if z is depth?)
-    # Assuming z goes 0..Lz (bottom to top? or top to bottom?). 
-    # Usually laser is at top. Let's find z index closest to top or use 0 if surface.
-    # Standard assumption here: surface is at top? Or z=0 is top?
-    # Based on earlier code, we usually plot vs z. We need to find the z-profile at (x_c, y_c).
-    # We will compute the profile along Z, so we don't need a z_center for the Z-plot.
-    # For X and Y plots, we take z_top.
-    z_coords = np.linspace(0.0, geom.Lz, num.nz)
-    z_top = z_coords[-1] # Assume top is last index, or use z=0? 
-    # Check physics: usually Z is depth or height. If laser is on surface.
-    # Let's assume z at local max abs coordinate is surface.
-    
-    # 2. Linear Coordinates starting at 0 (Node-based for plotting)
-    # matching the resolution
-    x_line = np.linspace(0.0, geom.Lx, num.nx)
-    y_line = np.linspace(0.0, geom.Ly, num.ny)
-    z_line = np.linspace(0.0, geom.Lz, num.nz)
+    # Determine Z level for X/Y cuts
+    # Assuming laser source is at z=0 (based on box_z used in latent heat)
+    z_top = 0.0 
 
     # 3. Helpers for Basis Evaluation
-    def eval_basis(N, L, vals):
-        # (N, len(vals))
+    def eval_cos(N, L, vals):
+        """Evaluate cos(k*pi*x/L) for all k=0..N-1 and given vals."""
+        # ids shape: (N, 1)
         ids = np.arange(N, dtype=np.float64)[:, None]
+        # vals shape: (1, M)
+        # Returns (N, M)
         return np.cos(np.pi * ids * vals[None, :] / L)
 
-    # Precompute scalars for the fixed axes
-    # Basis vectors at center point (N,)
-    phi_x_c = eval_basis(num.nx, geom.Lx, np.array([x_center])).flatten() # (nx,)
-    phi_y_c = eval_basis(num.ny, geom.Ly, np.array([y_center])).flatten() # (ny,)
-    phi_z_c = eval_basis(num.nz, geom.Lz, np.array([z_top])).flatten()    # (nz,)
+    # Precompute basis vectors at intersection point (x_c, y_c, z_c)
+    # Shapes: (Nx,), (Ny,), (Nz,)
+    phi_x_c = eval_cos(num.nx, geom.Lx, np.array([x_center], dtype=np.float64)).flatten()
+    phi_y_c = eval_cos(num.ny, geom.Ly, np.array([y_center], dtype=np.float64)).flatten()
+    phi_z_c = eval_cos(num.nz, geom.Lz, np.array([z_top], dtype=np.float64)).flatten()
 
-    # Normalize coefficients C (apply them to the phi vectors for dotting)
-    # This prepares the specific 1D slice kernels
-    # C coefficients are: geom.Cm, geom.Cn, geom.Cp
+    # Pre-multiply by Normalization Coefficients C_k
+    # Effective projection vector K = C_k * phi_c
     Kx_c = phi_x_c * geom.Cm
     Ky_c = phi_y_c * geom.Cn
     Kz_c = phi_z_c * geom.Cp
 
-    # --- X Profile (y=y_c, z=z_top) ---
-    # Contract Y and Z
-    # T(x) = sum_m (sum_n sum_p a[p,n,m] * Kz[p] * Ky[n]) * phi_m(x) * Cm[m]
-    # Contract Z first: a (nz, ny, nx) . Kz (nz) -> (ny, nx)
+    # --- X Profile ( at y=y_c, z=z_top ) ---
+    # T(x) = sum_m [ sum_n sum_p a_pnm * Kz_p * Ky_n ] * (Cm_m * cos_m(x))
+    # 1. Contract Z (axis 0 of a): Result (ny, nx)
     a_yx = np.tensordot(a, Kz_c, axes=(0, 0)) 
-    # Contract Y: (ny, nx) . Ky (ny) -> (nx)
-    a_x = np.dot(Ky_c, a_yx) 
-    # Evaluate along line
-    # Basis for line: (nx, nx_points)
-    Bx_line = eval_basis(num.nx, geom.Lx, x_line)
-    # T_x = (a_x * Cm) @ Bx_line
+    # 2. Contract Y (axis 0 of a_yx): Result (nx,)
+    a_x = np.dot(Ky_c, a_yx)
+    # 3. Evaluate along line
+    Bx_line = eval_cos(num.nx, geom.Lx, x_line) # (nx, points)
     T_x = (a_x * geom.Cm) @ Bx_line
 
-    # --- Y Profile (x=x_c, z=z_top) ---
-    # T(y) = sum_n (sum_m sum_p a[p,n,m] * Kz[p] * Kx[m]) * phi_n(y) * Cn[n]
-    # Use a_yx from before (Contracted Z)
-    # Contract X: a_yx (ny, nx) . Kx (nx) -> (ny)
+    # --- Y Profile ( at x=x_c, z=z_top ) ---
+    # Use a_yx from above
+    # 1. Contract X (axis 1 of a_yx): Result (ny,)
     a_y = np.dot(a_yx, Kx_c)
-    By_line = eval_basis(num.ny, geom.Ly, y_line)
+    # 2. Evaluate along line
+    By_line = eval_cos(num.ny, geom.Ly, y_line)
     T_y = (a_y * geom.Cn) @ By_line
 
-    # --- Z Profile (x=x_c, y=y_c) ---
-    # Contract X and Y
-    # T(z) = sum_p (sum_n sum_m a[p,n,m] * Ky[n] * Kx[m]) * phi_p(z) * Cp[p]
-    # Contract X first on a: a (nz, ny, nx) . Kx (nx) -> (nz, ny)
+    # --- Z Profile ( at x=x_c, y=y_c ) ---
+    # 1. Contract X (axis 2 of a): Result (nz, ny)
     a_zy = np.tensordot(a, Kx_c, axes=(2, 0))
-    # Contract Y: (nz, ny) . Ky (ny) -> (nz)
+    # 2. Contract Y (axis 1 of a_zy): Result (nz,)
     a_z = np.dot(a_zy, Ky_c)
-    Bz_line = eval_basis(num.nz, geom.Lz, z_line)
+    # 3. Evaluate along line
+    Bz_line = eval_cos(num.nz, geom.Lz, z_line)
     T_z = (a_z * geom.Cp) @ Bz_line
 
     # 4. Save

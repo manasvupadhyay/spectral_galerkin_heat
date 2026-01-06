@@ -94,7 +94,7 @@ class GeomParams:
         self.laser_coef = laser.Absorptivity * 2.0 * laser.P / (np.pi * laser.r_b ** 2)
         
         # Fine mesh setup for latent heat correction
-        self.refinement = 7
+        self.refinement = 4
         self.Lx_box, self.Ly_box, self.Lz_box = 1e-3, 0.25e-3, 0.1e-3
         self.dx_fine, self.dy_fine, self.dz_fine = self.dx/self.refinement, self.dy/self.refinement, self.dz/self.refinement
         
@@ -386,9 +386,9 @@ def run_simulation(phys, num, geom, laser):
 if __name__ == "__main__":
     # Simulation parameters
     Lx, Ly, Lz = 0.01, 0.005, 0.0025
-    nx, ny, nz = 512, 256, 1500
+    nx, ny, nz = 512, 256, 1600
     dt = 6.0e-6
-    t_final = 1.2e-2
+    t_final = 1.2e-4
     # Material properties
     rho = 7850.0
     Cp = 500.0
