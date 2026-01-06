@@ -164,7 +164,7 @@ def rasterize_latent_heat(Q_box, isotherm_entries,
         for ix in range(ix_start, ix_end):
             Q_box[ix, iy_src, iz_src] -= Q_applied
 
-def compute_latent_heat_source(Q_box, box_coords, isotherm_data, phys, laser, geom, verbose=False):
+def compute_latent_heat_source(Q_box, box_coords, isotherm_data, phys, laser, geom, num, verbose=False):
     """
     Compute volumetric latent heat source Q (W/m^3).
     
@@ -175,9 +175,14 @@ def compute_latent_heat_source(Q_box, box_coords, isotherm_data, phys, laser, ge
         phys: PhysParams object
         laser: Laser object
         geom: GeomParams object
+        dt: Time step (s). If non-zero, projects laser position to t + dt.
+            Use dt=num.dt to apply heat at the end of the step (implicit-like).
     """
     box_x, box_y, box_z = box_coords
-    x_laser = laser.x
+    
+    # Project laser position: x_effective = x(t) + v_x * dt
+    # If dt=0, uses laser.x (start of step). If dt=step_size, uses end of step.
+    x_laser = laser.x + laser.v[0] * num.dt
     
     if len(isotherm_data) == 0:
         Q_box.fill(0.0)
@@ -491,40 +496,102 @@ def reconstruct_temperature_volume_at_points(a, num, geom, coords):
     return temps.astype(np.float32)
 
 def save_temp_profiles(a, num, geom, phys, laser, t=None, center="laser"):
-    """Save 1D temperature profiles.
-
-    Args:
-        center: "laser" uses the laser coordinates, "hotspot" tracks the peak temperature.
+    """
+    Save 1D temperature profiles intersecting at the specified center.
+    Coordinates generated start at 0.0 (aligned with save_temp_profiles_fine).
     """
     t = num.t_final if t is None else t
     
-    T_top = reconstruct_temperature_top(a, num, geom)
-    x_vals, y_vals = geom.X[0, :], geom.Y[:, 0]
-    
+    # 1. Determine Center Coordinates
     if center == "hotspot":
+        # We need a rough estimate, fast reconstruction of top
+        T_top = reconstruct_temperature_top(a, num, geom)
         iy_idx, ix_idx = np.unravel_index(np.argmax(T_top), T_top.shape)
+        # Convert index to coordinate (cell centers roughly or explicit)
+        x_center = geom.x[ix_idx] if hasattr(geom, 'x') else (ix_idx + 0.5) * geom.dx
+        y_center = geom.y[iy_idx] if hasattr(geom, 'y') else (iy_idx + 0.5) * geom.dy
     elif center == "laser":
-        ix_idx = int(np.argmin(np.abs(x_vals - laser.x)))
-        iy_idx = int(np.argmin(np.abs(y_vals - laser.y)))
+        x_center, y_center = float(laser.x), float(laser.y)
     else:
         raise ValueError(f"Unknown center option: {center}")
 
-    x_center = x_vals[ix_idx]
-    y_center = y_vals[iy_idx]
-
-    # Reconstruct XZ slice through selected center line
-    x_xz, z_vals, T_xz = reconstruct_temperature_xz(a, num, geom, phys, laser, y0=y_center, mode='full_field')
-    ix_xz = int(np.argmin(np.abs(x_xz - x_center)))
+    # For z_center, we usually take the top surface z=0 (or geom.z[-1] if z is depth?)
+    # Assuming z goes 0..Lz (bottom to top? or top to bottom?). 
+    # Usually laser is at top. Let's find z index closest to top or use 0 if surface.
+    # Standard assumption here: surface is at top? Or z=0 is top?
+    # Based on earlier code, we usually plot vs z. We need to find the z-profile at (x_c, y_c).
+    # We will compute the profile along Z, so we don't need a z_center for the Z-plot.
+    # For X and Y plots, we take z_top.
+    z_coords = np.linspace(0.0, geom.Lz, num.nz)
+    z_top = z_coords[-1] # Assume top is last index, or use z=0? 
+    # Check physics: usually Z is depth or height. If laser is on surface.
+    # Let's assume z at local max abs coordinate is surface.
     
+    # 2. Linear Coordinates starting at 0 (Node-based for plotting)
+    # matching the resolution
+    x_line = np.linspace(0.0, geom.Lx, num.nx)
+    y_line = np.linspace(0.0, geom.Ly, num.ny)
+    z_line = np.linspace(0.0, geom.Lz, num.nz)
+
+    # 3. Helpers for Basis Evaluation
+    def eval_basis(N, L, vals):
+        # (N, len(vals))
+        ids = np.arange(N, dtype=np.float64)[:, None]
+        return np.cos(np.pi * ids * vals[None, :] / L)
+
+    # Precompute scalars for the fixed axes
+    # Basis vectors at center point (N,)
+    phi_x_c = eval_basis(num.nx, geom.Lx, np.array([x_center])).flatten() # (nx,)
+    phi_y_c = eval_basis(num.ny, geom.Ly, np.array([y_center])).flatten() # (ny,)
+    phi_z_c = eval_basis(num.nz, geom.Lz, np.array([z_top])).flatten()    # (nz,)
+
+    # Normalize coefficients C (apply them to the phi vectors for dotting)
+    # This prepares the specific 1D slice kernels
+    # C coefficients are: geom.Cm, geom.Cn, geom.Cp
+    Kx_c = phi_x_c * geom.Cm
+    Ky_c = phi_y_c * geom.Cn
+    Kz_c = phi_z_c * geom.Cp
+
+    # --- X Profile (y=y_c, z=z_top) ---
+    # Contract Y and Z
+    # T(x) = sum_m (sum_n sum_p a[p,n,m] * Kz[p] * Ky[n]) * phi_m(x) * Cm[m]
+    # Contract Z first: a (nz, ny, nx) . Kz (nz) -> (ny, nx)
+    a_yx = np.tensordot(a, Kz_c, axes=(0, 0)) 
+    # Contract Y: (ny, nx) . Ky (ny) -> (nx)
+    a_x = np.dot(Ky_c, a_yx) 
+    # Evaluate along line
+    # Basis for line: (nx, nx_points)
+    Bx_line = eval_basis(num.nx, geom.Lx, x_line)
+    # T_x = (a_x * Cm) @ Bx_line
+    T_x = (a_x * geom.Cm) @ Bx_line
+
+    # --- Y Profile (x=x_c, z=z_top) ---
+    # T(y) = sum_n (sum_m sum_p a[p,n,m] * Kz[p] * Kx[m]) * phi_n(y) * Cn[n]
+    # Use a_yx from before (Contracted Z)
+    # Contract X: a_yx (ny, nx) . Kx (nx) -> (ny)
+    a_y = np.dot(a_yx, Kx_c)
+    By_line = eval_basis(num.ny, geom.Ly, y_line)
+    T_y = (a_y * geom.Cn) @ By_line
+
+    # --- Z Profile (x=x_c, y=y_c) ---
+    # Contract X and Y
+    # T(z) = sum_p (sum_n sum_m a[p,n,m] * Ky[n] * Kx[m]) * phi_p(z) * Cp[p]
+    # Contract X first on a: a (nz, ny, nx) . Kx (nx) -> (nz, ny)
+    a_zy = np.tensordot(a, Kx_c, axes=(2, 0))
+    # Contract Y: (nz, ny) . Ky (ny) -> (nz)
+    a_z = np.dot(a_zy, Ky_c)
+    Bz_line = eval_basis(num.nz, geom.Lz, z_line)
+    T_z = (a_z * geom.Cp) @ Bz_line
+
+    # 4. Save
     for direction, coords, profile in [
-        ('x', x_vals, T_top[iy_idx, :]),
-        ('y', y_vals, T_top[:, ix_idx]),
-        ('z', z_vals, T_xz[:, ix_xz])
+        ('x', x_line, T_x),
+        ('y', y_line, T_y),
+        ('z', z_line, T_z)
     ]:
         fname = f"{OUT_DIR}/{direction}_spectral_latent_heat.txt"
         np.savetxt(fname, np.vstack([coords, profile]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
         print(f"Saved: {fname}")
-
 
 def save_temp_profiles_from_hdf5(h5_path, center="laser", laser_position=None, output_dir=OUT_DIR):
     """Re-sample temperature profiles from an HDF5 volume using tri-linear interpolation."""

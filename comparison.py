@@ -13,9 +13,15 @@ import os
 import argparse
 
 
-def load_temperature_profiles(out_dir="out", validation_dir=".validation"):
+def load_temperature_profiles(out_dir="out", validation_dir=".validation", file_tag="spectral"):
     """Load temperature profiles from spectral and FE methods.
     
+    Args:
+        out_dir: Directory for simulation results.
+        validation_dir: Directory for validation data.
+        file_tag: Tag to construct filename (e.g., 'spectral' for *_spectral_latent_heat.txt 
+                  or 'fine' for *_fine_latent_heat.txt).
+
     Returns:
         dict: Dictionary containing loaded profiles with keys:
               'x_spectral', 'y_spectral', 'z_spectral',
@@ -24,11 +30,15 @@ def load_temperature_profiles(out_dir="out", validation_dir=".validation"):
     """
     profiles = {}
     
-    # Load spectral method results
+    # Load spectral/simulation method results
     for direction in ['x', 'y', 'z']:
-        filepath = os.path.join(out_dir, f"{direction}_spectral_latent_heat.txt")
+        # Construct filename based on tag, e.g., "x_fine_latent_heat.txt"
+        filename = f"{direction}_{file_tag}_latent_heat.txt"
+        filepath = os.path.join(out_dir, filename)
+        
         if os.path.exists(filepath):
             data = np.loadtxt(filepath)
+            # Store under '_spectral' key regardless of tag to maintain compatibility with plotting functions
             profiles[f'{direction}_spectral'] = (data[:, 0], data[:, 1])
             print(f"Loaded {filepath}: {len(data)} points")
         else:
@@ -51,12 +61,13 @@ def load_temperature_profiles(out_dir="out", validation_dir=".validation"):
     return profiles
 
 
-def plot_comparison(profiles, output_file="temperature_comparison.png"):
+def plot_comparison(profiles, output_file="temperature_comparison.png", label_sim="Simulation"):
     """Create comparison plots for all three directions with derivatives and error curves.
     
     Args:
         profiles: Dictionary returned by load_temperature_profiles
         output_file: Path to save the comparison figure (will be suffixed with _x, _y, _z)
+        label_sim: Label to use for the simulation data in the legend.
     """
     directions = ['x', 'y', 'z']
     labels = ['x (m)', 'y (m)', 'z (m)']
@@ -77,7 +88,7 @@ def plot_comparison(profiles, output_file="temperature_comparison.png"):
         
         # --- Top Plot: Temperature ---
         # Plot Spectral
-        ax1.plot(coords_spec * 1e3, T_spec, 'b-', label='Spectral', linewidth=2)
+        ax1.plot(coords_spec * 1e3, T_spec, 'b-', label=label_sim, linewidth=2)
         # Plot FE
         ax1.plot(coords_FE * 1e3, T_FE, 'r--', label='Finite Element', linewidth=2)
         
@@ -113,7 +124,7 @@ def plot_comparison(profiles, output_file="temperature_comparison.png"):
         # Compute derivatives (dT/dx)
         if len(coords_spec) > 1:
             dT_spec = np.gradient(T_spec, coords_spec)
-            ax2.plot(coords_spec * 1e3, dT_spec, 'b-', label='Spectral Deriv.', linewidth=2)
+            ax2.plot(coords_spec * 1e3, dT_spec, 'b-', label=f'{label_sim} Deriv.', linewidth=2)
         
         if len(coords_FE) > 1:
             dT_FE = np.gradient(T_FE, coords_FE)
@@ -273,11 +284,13 @@ if __name__ == "__main__":
                         help="Which dataset to invert sign for to match axis direction")
     parser.add_argument('--invert-axes', default='',
                         help='Comma-separated list of axes to invert (e.g. "x,y"). Empty = none')
+    parser.add_argument('--file-tag', default='spectral', 
+                        help='Tag within filename to switch data source. e.g. "spectral" -> x_spectral_latent_heat.txt, "fine" -> x_fine_latent_heat.txt')
 
     args = parser.parse_args()
 
-    print("Loading temperature profiles...")
-    profiles = load_temperature_profiles(out_dir=args.out_dir, validation_dir=args.validation_dir)
+    print(f"Loading temperature profiles (type: {args.file_tag})...")
+    profiles = load_temperature_profiles(out_dir=args.out_dir, validation_dir=args.validation_dir, file_tag=args.file_tag)
 
     # Parse invert axes
     invert_axes = tuple([s.strip().lower() for s in args.invert_axes.split(',') if s.strip()])
@@ -293,4 +306,6 @@ if __name__ == "__main__":
     metrics = compute_metrics(profiles)
 
     print("\nGenerating comparison plots...")
-    plot_comparison(profiles, output_file=args.output_figure)
+    # Capitalize tag for plotting label (e.g., "Spectral" or "Fine")
+    label_sim = args.file_tag.capitalize()
+    plot_comparison(profiles, output_file=args.output_figure, label_sim=label_sim)
