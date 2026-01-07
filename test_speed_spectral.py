@@ -388,7 +388,7 @@ if __name__ == "__main__":
     Lx, Ly, Lz = 0.01, 0.005, 0.0025
     nx, ny, nz = 512, 256, 1600
     dt = 6.0e-6
-    t_final = 1.2e-4
+    t_final = 1.2e-2
     # Material properties
     rho = 7850.0
     Cp = 500.0
