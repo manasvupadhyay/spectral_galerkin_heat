@@ -83,7 +83,7 @@ class GeomParams:
         
         # Fine mesh setup for latent heat correction
         self.refinement = 3
-        self.Lx_box, self.Ly_box, self.Lz_box = 0.6e-3, 0.25e-3, 0.1e-3
+        self.Lx_box, self.Ly_box, self.Lz_box = 0.3e-3, 0.3e-3, 0.05e-3
         self.dx_fine, self.dy_fine, self.dz_fine = self.dx/self.refinement, self.dy/self.refinement, self.dz/self.refinement
         
         self.nx_fine_total = int(np.ceil(self.Lx / self.dx_fine))
@@ -232,7 +232,7 @@ def apply_latent_heat(T_box_prev, T_box_base, num, phys, geom, laser, epsilon=2e
         mask_partial = (M_yz > phys.T_solidus) & (M_yz < phys.T_liquidus)
         
         # Compute correction field
-        isotherm_data = hp.find_isotherms_along_x(T_box_current, M_yz, mask_full, mask_partial, phys)
+        isotherm_data = hp.find_isotherms_along_x(T_box_current, M_yz, mask_full, mask_partial, phys, ix_start=ix_mid)
         num.T_corr_buffer.fill(0.0)
         hp.compute_latent_heat_correction(num.T_corr_buffer, box_coords, isotherm_data, phys, laser, geom)
         

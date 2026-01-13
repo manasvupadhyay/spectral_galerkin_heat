@@ -61,6 +61,175 @@ def save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", ge
 
 
 # ============================================================
+#   LATENT HEAT SOURCE RASTERIZATION
+# ============================================================
+
+@njit(parallel=True, fastmath=True)
+def rasterize_latent_heat(Q_box, isotherm_entries, 
+                          nx_box, ny_box, nz_box, 
+                          dx, dy, dz, 
+                          rho, L_f, dS, v, xi_box_offset):
+    """
+    Rasterize latent heat source onto the fine grid.
+    
+    Args:
+        Q_box: output array (nx, ny, nz) - volumetric heat source W/m^3
+        isotherm_entries: array of shape (n_entries, 8)
+        nx_box, ny_box, nz_box: dimensions
+        dx, dy, dz: cell sizes
+        rho, L_f: material properties
+        dS: cross-section area of the tube (dy*dz)
+        v: velocity magnitude
+        xi_box_offset: offset to convert relative coordinate xi to box index
+    """
+    # Box start position in relative coordinates (approx)
+    # box_xi goes from -Lx_box/2 to +Lx_box/2
+    # ix=0 corresponds to xi = -nx_box*dx/2
+    # xi_box_offset passed as argument now
+    
+    # Volumetric source magnitude base: Power / Volume
+    # Power = rho * v * dS * L_f * f_scale
+    # Volume = dx * dy * dz
+    # Q_vol = (rho * v * dS * L_f * f_scale) / (dx * dy * dz)
+    # Since dS = dy * dz (usually), Q_vol = rho * v * L_f * f_scale / dx
+    
+    # Precompute constant part
+    # We use dS explicitly in case the tube area is different from voxel face
+    Q_pre = (rho * v * dS * L_f) / (dx * dy * dz)
+    
+    n_entries = isotherm_entries.shape[0]
+    
+    # We iterate over entries and fill the grid
+    # Since multiple entries might map to the same voxel (unlikely if 1-to-1 map), 
+    # or we just want to parallelize over entries.
+    # Parallelizing over entries is safer if we write to different y,z lines.
+    # Isotherm entries are distinct in (y,z).
+    
+    for ie in prange(n_entries):
+        iy_src = int(isotherm_entries[ie, 0])
+        iz_src = int(isotherm_entries[ie, 1])
+        
+        # Check bounds
+        if iy_src < 0 or iy_src >= ny_box or iz_src < 0 or iz_src >= nz_box:
+            continue
+            
+        xi_S_back = isotherm_entries[ie, 2]
+        xi_L_back = isotherm_entries[ie, 3]
+        xi_L_front = isotherm_entries[ie, 4]
+        xi_S_front = isotherm_entries[ie, 5]
+        f_scale = isotherm_entries[ie, 6]
+        
+        Q_mag = Q_pre * f_scale
+        
+        # --- 1. Back Zone (Solidification -> Heat Source +) ---
+        # From xi_S_back to xi_L_back
+        # Convert to indices
+        ix_start_raw = int(round((xi_S_back + xi_box_offset) / dx))
+        ix_end_raw = int(round((xi_L_back + xi_box_offset) / dx))
+        
+        # Ensure start < end
+        if ix_start_raw > ix_end_raw: ix_start_raw, ix_end_raw = ix_end_raw, ix_start_raw
+        
+        n_pixels = ix_end_raw - ix_start_raw
+        if n_pixels == 0:
+            n_pixels = 1
+            ix_end_raw += 1
+            
+        Q_applied = Q_mag / n_pixels
+        
+        # Clamp to box
+        ix_start = max(0, ix_start_raw)
+        ix_end = min(nx_box, ix_end_raw)
+        
+        for ix in range(ix_start, ix_end):
+            Q_box[ix, iy_src, iz_src] += Q_applied
+
+        # --- 2. Front Zone (Melting -> Heat Sink -) ---
+        # From xi_L_front to xi_S_front
+        ix_start_raw = int(round((xi_L_front + xi_box_offset) / dx))
+        ix_end_raw = int(round((xi_S_front + xi_box_offset) / dx))
+        
+        if ix_start_raw > ix_end_raw: ix_start_raw, ix_end_raw = ix_end_raw, ix_start_raw
+        
+        n_pixels = ix_end_raw - ix_start_raw
+        if n_pixels == 0:
+            n_pixels = 1
+            ix_end_raw += 1
+            
+        Q_applied = Q_mag / n_pixels
+        
+        ix_start = max(0, ix_start_raw)
+        ix_end = min(nx_box, ix_end_raw)
+        
+        for ix in range(ix_start, ix_end):
+            Q_box[ix, iy_src, iz_src] -= Q_applied
+
+def compute_latent_heat_source(Q_box, box_coords, isotherm_data, phys, laser, geom, num, verbose=False):
+    """
+    Compute volumetric latent heat source Q (W/m^3).
+    
+    Args:
+        Q_box: output array (nx, ny, nz) to fill
+        box_coords: (box_x, box_y, box_z) tuple
+        isotherm_data: list of tuples
+        phys: PhysParams object
+        laser: Laser object
+        geom: GeomParams object
+        dt: Time step (s). If non-zero, projects laser position to t + dt.
+            Use dt=num.dt to apply heat at the end of the step (implicit-like).
+    """
+    box_x, box_y, box_z = box_coords
+    
+    # Project laser position: x_effective = x(t) + v_x * dt
+    # If dt=0, uses laser.x (start of step). If dt=step_size, uses end of step.
+    x_laser = laser.x + laser.v[0] * num.dt
+    
+    if len(isotherm_data) == 0:
+        Q_box.fill(0.0)
+        return
+    
+    # Convert isotherm data to numpy array with PHYSICAL coordinates in moving frame
+    n_entries = len(isotherm_data)
+    isotherm_entries = np.zeros((n_entries, 8), dtype=np.float64)
+    
+    for i, entry in enumerate(isotherm_data):
+        iy, iz, i_S_back, i_L_back, i_L_front, i_S_front, f_scale, is_partial = entry
+        
+        # Convert indices to physical x coordinates, then to moving frame
+        xi_S_back = box_x[i_S_back] - x_laser
+        xi_L_back = box_x[i_L_back] - x_laser
+        xi_L_front = box_x[i_L_front] - x_laser
+        xi_S_front = box_x[i_S_front] - x_laser
+        
+        isotherm_entries[i, :] = [iy, iz, xi_S_back, xi_L_back, xi_L_front, xi_S_front, f_scale, float(is_partial)]
+    
+    # Physical parameters
+    v = np.sqrt(laser.v[0]**2 + laser.v[1]**2)
+    rho = phys.rho
+    L_f = phys.L_f
+    
+    # Grid spacing
+    dx = box_x[1] - box_x[0] if len(box_x) > 1 else geom.dx
+    dy = box_y[1] - box_y[0] if len(box_y) > 1 else geom.dy
+    dz = box_z[1] - box_z[0] if len(box_z) > 1 else geom.dz
+    dS = dy * dz
+    
+    nx_box, ny_box, nz_box = Q_box.shape
+    
+    # Offset for rasterization: maps xi (relative to laser) to box index
+    # ix = (xi + xi_box_offset) / dx
+    xi_box_offset = x_laser - box_x[0]
+
+    # Rasterize
+    Q_box.fill(0.0)
+    rasterize_latent_heat(
+        Q_box, isotherm_entries,
+        nx_box, ny_box, nz_box,
+        dx, dy, dz,
+        rho, L_f, dS, v, xi_box_offset
+    )
+
+# ============================================================
 #   COSINE NORMALIZATION COEFFICIENTS
 # ============================================================
 
@@ -117,6 +286,104 @@ def shift_flux(field: np.ndarray, shift: tuple, geom) -> np.ndarray:
     shift_pixels = (dy / geom.dy, dx / geom.dx)
     return scipy_shift(field, shift_pixels, order=1, mode='constant', cval=0.0).astype(np.float32) 
 
+def find_isotherms_along_x(T_box, M_yz, mask_full, mask_partial, phys):
+    """
+    Find isotherm indices for all (y,z) points requiring latent heat correction.
+    Vectorized implementation - no Python loops over mask indices.
+    
+    Returns list of tuples:
+        (iy, iz, i_S_back, i_L_back, i_L_front, i_S_front, f_scale, is_partial)
+    For partial melt: i_L_back = i_L_front = index of peak temperature along x
+    """
+    T_S, T_L = phys.T_solidus, phys.T_liquidus
+    nx = T_box.shape[0]
+    
+    results = []
+    
+    # ===== FULL MELT POINTS (vectorized) =====
+    iy_full, iz_full = np.where(mask_full)
+    n_full = len(iy_full)
+    
+    if n_full > 0:
+        # Extract all temperature lines at once: shape (n_full, nx)
+        T_lines_full = T_box[:, iy_full, iz_full].T  # (n_full, nx)
+        
+        # Boolean masks for solidus and liquidus
+        above_S = T_lines_full >= T_S  # (n_full, nx)
+        above_L = T_lines_full >= T_L  # (n_full, nx)
+        
+        # Count how many points are above each threshold per line
+        count_S = above_S.sum(axis=1)  # (n_full,)
+        count_L = above_L.sum(axis=1)  # (n_full,)
+        
+        # Valid lines have at least 2 points above both thresholds
+        valid_full = (count_S >= 2) & (count_L >= 2)
+        
+        if np.any(valid_full):
+            # Get indices of valid lines
+            valid_idx = np.where(valid_full)[0]
+            iy_valid = iy_full[valid_idx]
+            iz_valid = iz_full[valid_idx]
+            above_S_valid = above_S[valid_idx]  # (n_valid, nx)
+            above_L_valid = above_L[valid_idx]  # (n_valid, nx)
+            
+            # First index where True: argmax on boolean array
+            i_S_back = np.argmax(above_S_valid, axis=1)  # (n_valid,)
+            i_L_back = np.argmax(above_L_valid, axis=1)  # (n_valid,)
+            
+            # Last index where True: nx - 1 - argmax(flipped)
+            i_S_front = nx - 1 - np.argmax(above_S_valid[:, ::-1], axis=1)  # (n_valid,)
+            i_L_front = nx - 1 - np.argmax(above_L_valid[:, ::-1], axis=1)  # (n_valid,)
+            
+            # Build results for full melt
+            for i in range(len(valid_idx)):
+                results.append((
+                    iy_valid[i], iz_valid[i],
+                    i_S_back[i], i_L_back[i], i_L_front[i], i_S_front[i],
+                    1.0, False
+                ))
+    
+    # ===== PARTIAL MELT POINTS (vectorized) =====
+    iy_partial, iz_partial = np.where(mask_partial)
+    n_partial = len(iy_partial)
+    
+    if n_partial > 0:
+        # Extract all temperature lines at once: shape (n_partial, nx)
+        T_lines_partial = T_box[:, iy_partial, iz_partial].T  # (n_partial, nx)
+        
+        # Boolean mask for solidus
+        above_S = T_lines_partial >= T_S  # (n_partial, nx)
+        count_S = above_S.sum(axis=1)  # (n_partial,)
+        
+        # Valid lines have at least 2 points above solidus
+        valid_partial = count_S >= 2
+        
+        if np.any(valid_partial):
+            valid_idx = np.where(valid_partial)[0]
+            iy_valid = iy_partial[valid_idx]
+            iz_valid = iz_partial[valid_idx]
+            T_lines_valid = T_lines_partial[valid_idx]  # (n_valid, nx)
+            above_S_valid = above_S[valid_idx]  # (n_valid, nx)
+            
+            # First and last solidus indices
+            i_S_back = np.argmax(above_S_valid, axis=1)
+            i_S_front = nx - 1 - np.argmax(above_S_valid[:, ::-1], axis=1)
+            
+            # Peak location and temperature
+            i_peak = np.argmax(T_lines_valid, axis=1)  # (n_valid,)
+            T_peak = np.max(T_lines_valid, axis=1)  # (n_valid,)
+            f_scale = (T_peak - T_S) / (T_L - T_S)
+            
+            # Build results for partial melt
+            for i in range(len(valid_idx)):
+                results.append((
+                    iy_valid[i], iz_valid[i],
+                    i_S_back[i], i_peak[i], i_peak[i], i_S_front[i],
+                    f_scale[i], True
+                ))
+    
+    return results
+
 
 # ============================================================
 #   DCT-II 2D 
@@ -126,67 +393,51 @@ def DCT_II(q):
     return dctn(q.astype(np.float32, copy=False), type=2, norm='ortho', workers=-1).astype(np.float32, copy=False)
 
 # ============================================================
-#   LATENT HEAT SOURCE HELPERS
+#   RECONSTRUCT TEMPERATURE FIELD
 # ============================================================
 
+def reconstruct_temperature_top(a, num, geom):
+    """Reconstruct top surface temperature from modal coefficients."""
+    A = (geom.Cp32[:, None, None] * a).sum(axis=0)
+    return (geom.recon_scale * dctn(A, type=3, norm='ortho', axes=(0, 1), workers=-1)).astype(np.float32, copy=False)
 
-@njit(parallel=True, fastmath=True)
-def _compute_latent_heat_gradient(Q_box, T_box, dx, rho, L, v, T_S, T_L):
+def reconstruct_temperature_xz(a, num, geom, phys, laser, y0=None, mode='full_field'):
     """
-    Compute latent heat source from temperature gradient.
-    Q = rho * L * v * d(f_solid)/dT * dT/dx
-    Assumes arrays are (nz, ny, nx) [ZYX layout].
+    Optimized reconstruction of X-Z temperature slice using FFTW/DCT.
+    Returns (x_vals, z_vals, T_xz).
     """
-    nz, ny, nx = T_box.shape
+    y0 = laser.y0
+    nx, ny, nz = num.nx, num.ny, num.nz
+    # Evaluate cosine basis at specific y0 (ny,)
+    cos_y = geom.Cn * np.cos(np.pi * np.arange(ny) * y0 / geom.Ly)
     
-    # dfs/dT = -1 / (TL - TS) in the mushy zone
-    dfs_dT = -1.0 / (T_L - T_S)
-    
-    # Central difference factor: 1/(2*dx)
-    # Total factor
-    factor = rho * L * v * dfs_dT / (2.0 * dx)
-    
-    for z in prange(nz):
-        for y in range(ny):
-            # Boundaries X: set to 0
-            if nx > 0:
-                Q_box[z, y, 0] = 0.0
-                Q_box[z, y, nx-1] = 0.0
-            
-            # Interior X
-            for x in range(1, nx-1):
-                T = T_box[z, y, x]
-                if T >= T_S and T <= T_L:
-                    dTdx = T_box[z, y, x+1] - T_box[z, y, x-1]
-                    Q_box[z, y, x] = factor * dTdx
-                else:
-                    Q_box[z, y, x] = 0.0
+    # Contract Y axis: (nz, ny, nx) dot (ny,)
+    A_xz = np.tensordot(a, cos_y, axes=(1, 0)) 
 
-def compute_latent_heat_source(Q_buffer, box_coords, phys, laser, geom, num):
-    """
-    Compute volumetric latent heat source Q (W/m^3) based on the temperature gradient.
-    Formula: Q = rho * L * v * d(f_solid)/dT * dT/dx
-    """
-    # 1. Reconstruct Temperature on Fine Mesh
-    # T_box should be returned in (nz, ny, nx) layout to match Q_buffer
-    T_box, _ = reconstruct_temperature_box(num.a_temp, num, geom)
+    # Reconstruct X-Z field using 2D IDCT (Type 3)
+    scale_xz = np.sqrt(nx * nz / (geom.Lx * geom.Lz))
+    T_xz = scale_xz * dctn(A_xz, type=3, norm='ortho', axes=(0, 1))
     
-    # 2. Physics Parameters
-    v = np.linalg.norm(laser.v)
-    dx = geom.dx_fine
+    # 4. Early exit if full field requested
+    if mode != 'meltpool':
+        return geom.x, geom.z, T_xz.astype(np.float32)
+
+    mask = T_xz >= phys.T_liquidus
+    if not np.any(mask):
+        print("Warning: No melt pool detected.")
+        return geom.x, geom.z, T_xz.astype(np.float32)
+
+    z_idx, x_idx = np.where(mask)       # Get bounding box indices directly from mask
+    z0, z1 = z_idx.min(), z_idx.max()
+    x0, x1 = x_idx.min(), x_idx.max()
+    w_pad = int((x1 - x0) * 0.25) # Crop window adds 0.25 on each side -> 1.5x total
+    ix0, ix1 = max(0, x0 - w_pad), min(nx, x1 + w_pad)
     
-    # 3. Compute Gradient and Source
-    # Q_buffer is (nz, ny, nx)
-    _compute_latent_heat_gradient(
-        Q_buffer, T_box, 
-        dx, phys.rho, phys.L_f, v, 
-        phys.T_solidus, phys.T_liquidus
-    )
+    d_depth = z1 - z0
+    zc = (z0 + z1) // 2
+    iz0, iz1 = max(0, zc - d_depth), min(nz, zc + d_depth)
 
-
-# ============================================================
-#   RECONSTRUCT TEMPERATURE FIELDS HELPER FUNCTIONS
-# ============================================================
+    return geom.x[ix0:ix1], geom.z[iz0:iz1], T_xz[iz0:iz1, ix0:ix1].astype(np.float32)
 
 def reconstruct_temperature_box(a, num, geom, symmetrize=False):
     """
@@ -199,40 +450,11 @@ def reconstruct_temperature_box(a, num, geom, symmetrize=False):
     # Tensor Contraction using precomputed bases
     # T(x,y,z) = sum_p sum_n sum_m  a[p,n,m] * Bz[p,z] * By[n,y] * Bx[m,x]
     
-    # 1. Contract Z: (nz, ny, nx) . (nz, nz_box) -> (ny, nx, nz_box)
-    T_step1 = np.tensordot(a, geom.Bz_fine, axes=(0, 0))
-    
-    # 2. Contract Y: (ny, nx, nz_box) . (ny, ny_box) -> (nx, nz_box, ny_box)
-    T_step2 = np.tensordot(T_step1, geom.By_fine, axes=(0, 0))
-    
-    # 3. Contract X: (nx, nz_box, ny_box) . (nx, nx_box) -> (nz_box, ny_box, nx_box)
-    T_box = np.tensordot(T_step2, geom.Bx_fine, axes=(0, 0))
+    T_step1 = np.tensordot(a, geom.Bx_fine, axes=(2, 0))  # (nz, ny, nx_box)
+    T_step2 = np.tensordot(T_step1, geom.By_fine, axes=(1, 0))  # (nz, nx_box, ny_box)
+    T_box = np.tensordot(T_step2, geom.Bz_fine, axes=(0, 0))  # (nx_box, ny_box, nz_box)
     
     return T_box.astype(np.float32), (geom.box_x, geom.box_y, geom.box_z)
-
-
-def reconstruct_temperature_top(a, num, geom):
-    """Reconstruct top surface temperature from modal coefficients."""
-    A = (geom.Cp32[:, None, None] * a).sum(axis=0)
-    return (geom.recon_scale * dctn(A, type=3, norm='ortho', axes=(0, 1), workers=-1)).astype(np.float32, copy=False)
-
-def reconstruct_temperature_xz(a, num, geom, phys, laser, y0=None):
-    """
-    Optimized reconstruction of X-Z temperature slice using FFTW/DCT.
-    Returns (x_vals, z_vals, T_xz).
-    """
-    y0 = laser.y0
-    nx, ny, nz = num.nx, num.ny, num.nz
-    # Evaluate cosine basis at specific y0 (ny,)
-    cos_y = geom.Cn * np.cos(np.pi * np.arange(ny) * y0 / geom.Ly)
-    # Contract Y axis: (nz, ny, nx) dot (ny,)
-    A_xz = np.tensordot(a, cos_y, axes=(1, 0)) 
-    # Reconstruct X-Z field using 2D IDCT (Type 3)
-    scale_xz = np.sqrt(nx * nz / (geom.Lx * geom.Lz))
-    T_xz = scale_xz * dctn(A_xz, type=3, norm='ortho', axes=(0, 1))
-    
-    return geom.x, geom.z, T_xz.astype(np.float32)
-
 
 
 def reconstruct_temperature_volume(a, num, geom):
@@ -295,9 +517,15 @@ def save_temp_profiles(a, num, geom, phys, laser, t=None, center="laser"):
     elif center == "laser":
         x_center, y_center = float(laser.x), float(laser.y)
     else:
-        x_center, y_center = float(center[0]), float(center[1])
+        # Fallback for manual coords if passed as tuple?
+        if isinstance(center, (tuple, list, np.ndarray)):
+            x_center, y_center = float(center[0]), float(center[1])
+        else:
+            raise ValueError(f"Unknown center option: {center}")
 
-    z_top = 0.0 # default 
+    # Determine Z level for X/Y cuts
+    # Assuming laser source is at z=0 (based on box_z used in latent heat)
+    z_top = 0.0 
 
     # 3. Helpers for Basis Evaluation
     def eval_cos(N, L, vals):
@@ -496,24 +724,54 @@ def save_temp_profiles_fine(
 def box_field_to_modes(field_box, geom):
     """
     Convert a field defined in the fine box (e.g. Q_latent) to global spectral modes.
-    Input field_box is (nz_box, ny_box, nx_box) [ZYX layout].
-    Returns modes in (nz, ny, nx).
+    Uses precomputed fine mesh cosine bases from geom.
+    Optimized using explicit matrix multiplications.
     """
     if not geom.fine_mesh_initialized:
         raise RuntimeError("Fine mesh not initialized. Call geom.update_fine_mesh(laser) first.")
     
-    # Direct tensor contraction avoiding intermediate reshapes/transposes
+    # field_box shape: (nx_box, ny_box, nz_box)
+    nx_box, ny_box, nz_box = field_box.shape
+    nx, _ = geom.Bx_fine.shape
+    ny, _ = geom.By_fine.shape
+    nz, _ = geom.Bz_fine.shape
     
-    # 1. Contract Z_box: (nz_box, ny_box, nx_box) . (nz, nz_box) -> (ny_box, nx_box, nz)
-    temp1 = np.tensordot(field_box, geom.Bz_fine, axes=(0, 1))
+    # 1. Contract X: (nx, nx_box) @ (nx_box, ny_box*nz_box) -> (nx, ny_box*nz_box)
+    # Reshape field to combine Y and Z
+    field_reshaped = field_box.reshape(nx_box, ny_box * nz_box)
+    temp1 = geom.Bx_fine @ field_reshaped
     
-    # 2. Contract Y_box: (ny_box, nx_box, nz) . (ny, ny_box) -> (nx_box, nz, ny)
-    temp2 = np.tensordot(temp1, geom.By_fine, axes=(0, 1))
+    # 2. Contract Y: (ny, ny_box) @ (ny_box, nx*nz_box) -> (ny, nx*nz_box)
+    # Reshape temp1 to (nx, ny_box, nz_box) and transpose to (ny_box, nx, nz_box)
+    # Then flatten last two dims
+    temp1 = temp1.reshape(nx, ny_box, nz_box).transpose(1, 0, 2).reshape(ny_box, nx * nz_box)
+    temp2 = geom.By_fine @ temp1
     
-    # 3. Contract X_box: (nx_box, nz, ny) . (nx, nx_box) -> (nz, ny, nx)
-    modes = np.tensordot(temp2, geom.Bx_fine, axes=(0, 1))
+    # 3. Contract Z: (nz, nz_box) @ (nz_box, ny*nx) -> (nz, ny*nx)
+    # Reshape temp2 to (ny, nx, nz_box) and transpose to (nz_box, ny, nx)
+    # Then flatten last two dims
+    temp2 = temp2.reshape(ny, nx, nz_box).transpose(2, 0, 1).reshape(nz_box, ny * nx)
+    modes = geom.Bz_fine @ temp2
+    
+    # Final reshape to (nz, ny, nx)
+    modes = modes.reshape(nz, ny, nx)
     
     # Multiply by dV for the numerical integration
     modes *= geom.dV_fine
     
     return modes.astype(np.float32)
+
+def cell_to_node_reconstruction(T_cells):
+    """
+    Converts cell-centered data (nz, ny, nx) to node-centered data (nz+1, ny+1, nx+1)
+    by performing a 3D moving average.
+    """
+    # 1. Pad boundary (Neumann-like)
+    T_pad = np.pad(T_cells, pad_width=1, mode='edge')
+
+    # 2. Average successively along Z, Y, X to get to corners
+    T_z = 0.5 * (T_pad[:-1, :, :] + T_pad[1:, :, :])      # Avg Z
+    T_zy = 0.5 * (T_z[:, :-1, :] + T_z[:, 1:, :])         # Avg Y
+    T_nodes = 0.5 * (T_zy[:, :, :-1] + T_zy[:, :, 1:])    # Avg X
+    
+    return T_nodes

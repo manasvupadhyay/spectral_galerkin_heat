@@ -95,7 +95,8 @@ class GeomParams:
         
         # Fine mesh setup for latent heat correction
         self.refinement = 4
-        self.Lx_box, self.Ly_box, self.Lz_box = 1e-3, 0.25e-3, 0.1e-3
+        self.Lx_box, self.Ly_box, self.Lz_box = 0.5e-3, 0.4e-3, 0.1e-3
+        # To be implemented later, some time ni the future, check that melpool fits in box
         self.dx_fine, self.dy_fine, self.dz_fine = self.dx/self.refinement, self.dy/self.refinement, self.dz/self.refinement
         
         self.nx_fine_total = int(np.ceil(self.Lx / self.dx_fine))
@@ -128,7 +129,7 @@ class GeomParams:
         self.box_y = np.zeros(self.ny_box, dtype=np.float32)
         self.box_z = np.linspace(0.0, self.Lz_box, self.nz_box, dtype=np.float32)
         self.fine_mesh_initialized = False
-        self.ix_laser_box = max(0, min(self.nx_box - 1, int(round(0.75 * (self.nx_box - 1)))))
+        self.ix_laser_box = max(0, min(self.nx_box - 1, int(round(0.5 * (self.nx_box - 1)))))
         self.check_resolution(phys, laser, num)
 
     def check_resolution(self, phys, laser, num):
@@ -143,8 +144,8 @@ class GeomParams:
         if v_crit > 1.0: print("WARNING: Laser moves too fast for time step!")
 
     def update_fine_mesh(self, laser):
-        """Update fine mesh box so the laser sits 25% from the front."""
-        target_ix = int(round(0.75 * (self.nx_box - 1)))
+        """Update fine mesh box so the laser sits in the middle."""
+        target_ix = int(round(0.5 * (self.nx_box - 1)))
         laser_ix_global = int(round(np.clip(laser.x / self.dx_fine, 0.0, self.nx_fine_total - 1)))
         ix_start = laser_ix_global - target_ix
         max_ix_start = max(0, self.nx_fine_total - self.nx_box)
@@ -207,7 +208,8 @@ class NumericalParams:
         self.aK = np.empty((self.nz, self.ny, self.nx), dtype=np.float32)
         self.S_n = np.zeros((self.ny, self.nx), dtype=np.float32)
         self.q_evap_old = np.zeros((self.ny, self.nx), dtype=np.float32)
-        self.Q_latent_buffer = np.zeros((geom.nx_box, geom.ny_box, geom.nz_box), dtype=np.float32)
+        # ZYX layout for contiguous X-scanning
+        self.Q_latent_buffer = np.zeros((geom.nz_box, geom.ny_box, geom.nx_box), dtype=np.float32)
 
 # ============================================================
 #   FUNCTIONS
@@ -264,25 +266,10 @@ def time_step(a, phys, num, geom, laser, timers=None, epsilon=2e+1, iter_step=0)
         geom.update_fine_mesh(laser)
         if timers is not None: timers['lh_update_mesh'] += time.perf_counter() - t_mesh
         
-        t_box = time.perf_counter()
-        T_box_target, _ = hp.reconstruct_temperature_box(num.a_temp, num, geom)
-        if timers is not None: timers['lh_reconstruct_box'] += time.perf_counter() - t_box
-
-        # Find isotherms
-        t_iso = time.perf_counter()
-        ix_mid = geom.ix_laser_box if hasattr(geom, 'ix_laser_box') else int(round(0.75 * (geom.nx_box - 1)))
-        ix_mid = max(0, min(ix_mid, geom.nx_box - 1))
-        
-        M_yz = T_box_target[ix_mid, :, :]
-        mask_full = M_yz >= phys.T_liquidus
-        mask_partial = (M_yz > phys.T_solidus) & (M_yz < phys.T_liquidus)
-        isotherm_data = hp.find_isotherms_along_x(T_box_target, M_yz, mask_full, mask_partial, phys)
-        if timers is not None: timers['lh_find_isotherms'] += time.perf_counter() - t_iso
-
         # Compute volumetric source
         t_src = time.perf_counter()
         num.Q_latent_buffer.fill(0.0)
-        hp.compute_latent_heat_source(num.Q_latent_buffer, (geom.box_x, geom.box_y, geom.box_z), isotherm_data, phys, laser, geom, num)
+        hp.compute_latent_heat_source(num.Q_latent_buffer, (geom.box_x, geom.box_y, geom.box_z), phys, laser, geom, num)
         if timers is not None: timers['lh_compute_correction'] += time.perf_counter() - t_src
 
         # Convert to modes
@@ -323,21 +310,21 @@ def time_step(a, phys, num, geom, laser, timers=None, epsilon=2e+1, iter_step=0)
         if iter_step % 200 == 0:
             hp.save_field_to_hdf5(
                 f"{OUT_DIR}/T_box_step_{laser.t:.5f}",
-                T_box_target.transpose(2, 1, 0),
+                T_box_target, # Already (nz, ny, nx)
                 (geom.box_x, geom.box_y, geom.box_z),
                 value_name="Temperature",
                 geom=geom,
             )
             hp.save_field_to_hdf5(
                 f"{OUT_DIR}/Q_latent_step_{laser.t:.5f}",
-                num.Q_latent_buffer.transpose(2, 1, 0),
+                num.Q_latent_buffer, # Already (nz, ny, nx)
                 (geom.box_x, geom.box_y, geom.box_z),
                 value_name="LatentHeat",
                 geom=geom,
             )
         if timers is not None: timers['io'] += time.perf_counter() - t0
         
-        return num.a_temp, T_temp, P_laser, k+1, len(isotherm_data)
+        return num.a_temp, T_temp, P_laser, k+1, 0 # 0 LH points (deprecated)
     
     else:
         raise NotImplementedError("Only ETD1 is supported for latent heat source method.")
@@ -386,7 +373,7 @@ def run_simulation(phys, num, geom, laser):
 if __name__ == "__main__":
     # Simulation parameters
     Lx, Ly, Lz = 0.01, 0.005, 0.0025
-    nx, ny, nz = 512, 256, 1600
+    nx, ny, nz = 512, 256, 1000
     dt = 6.0e-6
     t_final = 1.2e-2
     # Material properties
