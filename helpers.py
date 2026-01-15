@@ -1,5 +1,6 @@
 import h5py
 import os
+import time
 import numpy as np
 from scipy.ndimage import shift as scipy_shift
 from scipy.interpolate import RegularGridInterpolator
@@ -131,7 +132,7 @@ def DCT_II(q):
 
 
 @njit(parallel=True, fastmath=True)
-def _compute_latent_heat_gradient(Q_box, T_box, dx, rho, L, v, T_S, T_L):
+def _compute_latent_heat_gradient(Q_box, T_box, dx, dy, dz, rho, L, v, T_S, T_L, dt):
     """
     Compute latent heat source from temperature gradient.
     Q = rho * L * v * d(f_solid)/dT * dT/dx
@@ -146,49 +147,62 @@ def _compute_latent_heat_gradient(Q_box, T_box, dx, rho, L, v, T_S, T_L):
     # Total factor
     factor = rho * L * v * dfs_dT / (2.0 * dx)
     
+    # Physical limit (Maximum tolerated power corresponding to full phase change)
+    Q_max = rho *  L / dt
+
     for z in prange(nz):
+        Q_box[z, :, :] = 0.0
         for y in range(ny):
-            # Boundaries X: set to 0
-            if nx > 0:
-                Q_box[z, y, 0] = 0.0
-                Q_box[z, y, nx-1] = 0.0
-            
             # Interior X
-            for x in range(1, nx-1):
+            # Fix: range must prevent out-of-bounds access at T_box[..., x+1]. 
+            # Max valid index is nx-1, so max x is nx-2.
+            for x in range(nx - 2, 0, -1):
                 T = T_box[z, y, x]
                 if T >= T_S and T <= T_L:
                     dTdx = T_box[z, y, x+1] - T_box[z, y, x-1]
-                    Q_box[z, y, x] = factor * dTdx
-                else:
-                    Q_box[z, y, x] = 0.0
+                    val = -factor * dTdx
+                    # Clamp to physical limit
+                    if abs(val) + abs(sum(Q_box[z, y, x:x+10])) > Q_max:
+                        if val > 0:
+                            #print("Latent heat limit reached (+):", val, ">", Q_max)
+                            val = Q_max - abs(sum(Q_box[z, y, x:x+10]))
+                        if val < 0:
+                            #print("Latent heat limit reached (-):", val, "<", -Q_max)
+                            val = -Q_max + abs(sum(Q_box[z, y, x:x+10]))
+                    Q_box[z, y, x] = val
 
-def compute_latent_heat_source(Q_buffer, box_coords, phys, laser, geom, num):
+def compute_latent_heat_source(Q_buffer, box_coords, phys, laser, geom, num, timers=None):
     """
     Compute volumetric latent heat source Q (W/m^3) based on the temperature gradient.
     Formula: Q = rho * L * v * d(f_solid)/dT * dT/dx
     """
     # 1. Reconstruct Temperature on Fine Mesh
     # T_box should be returned in (nz, ny, nx) layout to match Q_buffer
-    T_box, _ = reconstruct_temperature_box(num.a_temp, num, geom)
+    T_box, _ = reconstruct_temperature_box(num.a_temp, num, geom, timers=timers)
     
     # 2. Physics Parameters
     v = np.linalg.norm(laser.v)
     dx = geom.dx_fine
+    dy = geom.dy_fine
+    dz = geom.dz_fine
     
     # 3. Compute Gradient and Source
     # Q_buffer is (nz, ny, nx)
+    t0 = time.perf_counter()
     _compute_latent_heat_gradient(
         Q_buffer, T_box, 
-        dx, phys.rho, phys.L_f, v, 
-        phys.T_solidus, phys.T_liquidus
+        dx, dy, dz, phys.rho, phys.L_f, v, 
+        phys.T_solidus, phys.T_liquidus,
+        num.dt
     )
+    if timers is not None: timers['lh_gradient'] += time.perf_counter() - t0
 
 
 # ============================================================
 #   RECONSTRUCT TEMPERATURE FIELDS HELPER FUNCTIONS
 # ============================================================
 
-def reconstruct_temperature_box(a, num, geom, symmetrize=False):
+def reconstruct_temperature_box(a, num, geom, symmetrize=False, timers=None):
     """
     Reconstructs temperature in a small ROI around the laser using 
     precomputed fine mesh cosine bases from geom.
@@ -200,13 +214,19 @@ def reconstruct_temperature_box(a, num, geom, symmetrize=False):
     # T(x,y,z) = sum_p sum_n sum_m  a[p,n,m] * Bz[p,z] * By[n,y] * Bx[m,x]
     
     # 1. Contract Z: (nz, ny, nx) . (nz, nz_box) -> (ny, nx, nz_box)
+    t0 = time.perf_counter()
     T_step1 = np.tensordot(a, geom.Bz_fine, axes=(0, 0))
+    if timers is not None: timers['lh_recon_step1'] += time.perf_counter() - t0
     
     # 2. Contract Y: (ny, nx, nz_box) . (ny, ny_box) -> (nx, nz_box, ny_box)
+    t0 = time.perf_counter()
     T_step2 = np.tensordot(T_step1, geom.By_fine, axes=(0, 0))
+    if timers is not None: timers['lh_recon_step2'] += time.perf_counter() - t0
     
     # 3. Contract X: (nx, nz_box, ny_box) . (nx, nx_box) -> (nz_box, ny_box, nx_box)
+    t0 = time.perf_counter()
     T_box = np.tensordot(T_step2, geom.Bx_fine, axes=(0, 0))
+    if timers is not None: timers['lh_recon_step3'] += time.perf_counter() - t0
     
     return T_box.astype(np.float32), (geom.box_x, geom.box_y, geom.box_z)
 
@@ -493,7 +513,7 @@ def save_temp_profiles_fine(
         np.savetxt(fname, np.vstack([coords, profile]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
         print(f"Saved fine profile: {fname}")
 
-def box_field_to_modes(field_box, geom):
+def box_field_to_modes(field_box, geom, timers=None):
     """
     Convert a field defined in the fine box (e.g. Q_latent) to global spectral modes.
     Input field_box is (nz_box, ny_box, nx_box) [ZYX layout].
@@ -505,13 +525,19 @@ def box_field_to_modes(field_box, geom):
     # Direct tensor contraction avoiding intermediate reshapes/transposes
     
     # 1. Contract Z_box: (nz_box, ny_box, nx_box) . (nz, nz_box) -> (ny_box, nx_box, nz)
+    t0 = time.perf_counter()
     temp1 = np.tensordot(field_box, geom.Bz_fine, axes=(0, 1))
+    if timers is not None: timers['lh_modes_step1'] += time.perf_counter() - t0
     
-    # 2. Contract Y_box: (ny_box, nx_box, nz) . (ny, ny_box) -> (nx_box, nz, ny)
+    # 2. Contract Y_box: (ny_box, nx_box, nz) . (ny, ny_box) -> (nx, nz_box, ny_box)
+    t0 = time.perf_counter()
     temp2 = np.tensordot(temp1, geom.By_fine, axes=(0, 1))
+    if timers is not None: timers['lh_modes_step2'] += time.perf_counter() - t0
     
     # 3. Contract X_box: (nx_box, nz, ny) . (nx, nx_box) -> (nz, ny, nx)
+    t0 = time.perf_counter()
     modes = np.tensordot(temp2, geom.Bx_fine, axes=(0, 1))
+    if timers is not None: timers['lh_modes_step3'] += time.perf_counter() - t0
     
     # Multiply by dV for the numerical integration
     modes *= geom.dV_fine

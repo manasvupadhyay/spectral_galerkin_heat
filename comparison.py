@@ -101,11 +101,18 @@ def plot_comparison(profiles, output_file="temperature_comparison.png", label_si
             T_FE_sorted = T_FE[sort_idx]
             
             T_FE_interp = np.interp(coords_spec, coords_FE_sorted, T_FE_sorted, left=np.nan, right=np.nan)
-            error_T = np.abs(T_spec - T_FE_interp)
             
+            # Compute Relative Error (%)
+            # Add small epsilon to avoid division by zero if T approaches 0 (unlikely for K, but safe)
+            denom = np.abs(T_FE_interp)
+            safe_mask = denom > 1e-6
+            error_T = np.zeros_like(T_FE_interp)
+            error_T[safe_mask] = np.abs(T_spec[safe_mask] - T_FE_interp[safe_mask]) / denom[safe_mask] * 100.0
+            error_T[~safe_mask] = np.nan # Or 0, but NaN is safer for plotting
+
             ax1_err = ax1.twinx()
-            ax1_err.plot(coords_spec * 1e3, error_T, 'g-', label='Error', linewidth=1.5, alpha=0.7)
-            ax1_err.set_ylabel('Abs. Error (K)', color='g')
+            ax1_err.plot(coords_spec * 1e3, error_T, 'g-', label='Rel. Error (%)', linewidth=1.5, alpha=0.7)
+            ax1_err.set_ylabel('Rel. Error (%)', color='g')
             ax1_err.tick_params(axis='y', labelcolor='g')
             
             # Combine legends
@@ -195,16 +202,32 @@ def compute_metrics(profiles):
         # Compute metrics
         max_T_spec = np.max(T_spec_valid)
         max_T_FE = np.max(T_FE_valid)
-        mae = np.mean(np.abs(T_spec_valid - T_FE_valid))
-        rmse = np.sqrt(np.mean((T_spec_valid - T_FE_valid)**2))
-        max_diff = np.max(np.abs(T_spec_valid - T_FE_valid))
         
+        abs_diff = np.abs(T_spec_valid - T_FE_valid)
+        mae = np.mean(abs_diff)
+        rmse = np.sqrt(np.mean((T_spec_valid - T_FE_valid)**2))
+        max_diff = np.max(abs_diff)
+        
+        # relative errors (%)
+        denom = np.abs(T_FE_valid)
+        # avoid division by zero
+        safe_mask = denom > 1e-6
+        if np.any(safe_mask):
+            rel_diff = abs_diff[safe_mask] / denom[safe_mask] * 100.0
+            mean_rel_err = np.mean(rel_diff)
+            max_rel_err = np.max(rel_diff)
+        else:
+            mean_rel_err = np.nan
+            max_rel_err = np.nan
+
         metrics[direction] = {
             'max_T_spectral': max_T_spec,
             'max_T_FE': max_T_FE,
             'mae': mae,
             'rmse': rmse,
             'max_diff': max_diff,
+            'mean_rel_err': mean_rel_err,
+            'max_rel_err': max_rel_err,
             'n_points': len(T_spec_valid)
         }
         
@@ -214,6 +237,8 @@ def compute_metrics(profiles):
         print(f"  MAE:              {mae:.2f} K")
         print(f"  RMSE:             {rmse:.2f} K")
         print(f"  Max difference:   {max_diff:.2f} K")
+        print(f"  Mean Rel. Error:  {mean_rel_err:.2f} %")
+        print(f"  Max Rel. Error:   {max_rel_err:.2f} %")
         print(f"  Comparison points: {len(T_spec_valid)}")
     
     return metrics
