@@ -108,6 +108,7 @@ def plot_comparison(profiles, output_file="temperature_comparison.png", label_si
             safe_mask = denom > 1e-6
             error_T = np.zeros_like(T_FE_interp)
             error_T[safe_mask] = np.abs(T_spec[safe_mask] - T_FE_interp[safe_mask]) / denom[safe_mask] * 100.0
+            error_T[error_T > 100.0] = 100.0  # Cap error at 100%
             error_T[~safe_mask] = np.nan # Or 0, but NaN is safer for plotting
 
             ax1_err = ax1.twinx()
@@ -141,11 +142,18 @@ def plot_comparison(profiles, output_file="temperature_comparison.png", label_si
         if len(coords_spec) > 1 and len(coords_FE) > 1:
             # Interpolate FE derivative to spectral grid
             dT_FE_interp = np.interp(coords_spec, coords_FE_sorted, dT_FE, left=np.nan, right=np.nan)
-            error_dT = np.abs(dT_spec - dT_FE_interp)
+            
+            # Compute Relative Error for derivatives
+            denom_dT = np.abs(dT_FE_interp)
+            safe_mask_dT = denom_dT > 1e-6
+            error_dT = np.zeros_like(dT_FE_interp)
+            error_dT[safe_mask_dT] = np.abs(dT_spec[safe_mask_dT] - dT_FE_interp[safe_mask_dT]) / denom_dT[safe_mask_dT] * 100.0
+            error_dT[error_dT > 100.0] = 100.0  # Cap error at 100%
+            error_dT[~safe_mask_dT] = np.nan
             
             ax2_err = ax2.twinx()
-            ax2_err.plot(coords_spec * 1e3, error_dT, 'g-', label='Deriv. Error', linewidth=1.5, alpha=0.7)
-            ax2_err.set_ylabel('Abs. Error (K/m)', color='g')
+            ax2_err.plot(coords_spec * 1e3, error_dT, 'g-', label='Rel. Error (%)', linewidth=1.5, alpha=0.7)
+            ax2_err.set_ylabel('Rel. Error (%)', color='g')
             ax2_err.tick_params(axis='y', labelcolor='g')
             
             # Combine legends
