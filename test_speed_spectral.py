@@ -1,7 +1,5 @@
 import numpy as np
 import pyfftw
-import matplotlib.pyplot as plt
-import time
 from numba import njit, prange
 import os
 from types import SimpleNamespace
@@ -21,15 +19,6 @@ def compute_a_temp_numba(aK, KK_by_Cp, B_scaled, a_temp_out):
     nz = aK.shape[0]
     for p in prange(nz):
         a_temp_out[p, :, :] = aK[p, :, :] + KK_by_Cp[p, :, :] * B_scaled
-
-@njit(parallel=True, fastmath=True)
-def add_arrays_numba(a, b):
-    """Add two 3D arrays in place: a += b."""
-    nz = a.shape[0]
-    for p in prange(nz):
-        for i in range(a.shape[1]):
-            for j in range(a.shape[2]):
-                a[p, i, j] += b[p, i, j]
 
 @njit(parallel=True, fastmath=True)
 def add_source_term_numba(a_temp, KK, Q_modes):
@@ -54,7 +43,7 @@ class Laser:
         self.x0, self.y0 = x0, y0
         self.v = np.array(v, dtype=np.float64)
         self.Absorptivity = Absorptivity
-        self.x, self.y, self.t = x0, y0, 0
+        self.x, self.y, self.t = x0, y0, 0.0
         
     def update(self, dt):
         """Update laser position."""
@@ -188,29 +177,24 @@ class PhysParams:
         print(f"Material: Cp={Cp}, L_f={L_f}, T_S={T_solidus}, T_L={T_liquidus}")
 
 class NumericalParams:
-    def __init__(self, dt, t_final, nx, ny, nz, ETD='ETD1'):
+    def __init__(self, dt, t_final, nx, ny, nz):
         self.dt, self.t_final = dt, t_final
         self.nx, self.ny, self.nz = nx, ny, nz
-        self.ETD, self.iter = ETD, 0
+        self.iter =  0
         self.Q_latent_buffer = None
 
     def prepare_K_buffers(self, phys, geom):
         """Precompute spectral propagators and allocate buffers."""
-        print(f"Precomputing K, KK... ({self.ETD})")
+        print(f"Precomputing K, KK... ")
         self.K, self.KK, self.K_phi0, self.KK_phi1, self.KKK_phi2 = precompute_K_KK(phys, self, geom)
         self.KK_by_Cp = (self.KK * geom.Cp[:, None, None]).astype(np.float32) # Projected on x,y plane
         self.KK_vol = self.KK.astype(np.float32)
-        
-        # Precompute C_factor for surface reconstruction optimization
-        # C_factor = sum_p (KK_pnm * Cp_p) -> This factor multiplies B_nm to get contributions to A_nm
-        self.C_factor = (self.KK_by_Cp * geom.Cp32[:, None, None]).sum(axis=0).astype(np.float32)
         
         # Allocate working arrays
         self.q_diff = np.empty((self.ny, self.nx), dtype=np.float32)
         self.B_buffer = np.empty((self.ny, self.nx), dtype=np.float32)
         self.a_temp = np.empty((self.nz, self.ny, self.nx), dtype=np.float32)
         self.aK = np.empty((self.nz, self.ny, self.nx), dtype=np.float32)
-        self.S_n = np.zeros((self.ny, self.nx), dtype=np.float32)
         self.q_evap_old = np.zeros((self.ny, self.nx), dtype=np.float32)
         # ZYX layout for contiguous X-scanning
         self.Q_latent_buffer = np.zeros((geom.nz_box, geom.ny_box, geom.nx_box), dtype=np.float32)
@@ -233,106 +217,73 @@ def precompute_K_KK(phys, num, geom):
     KK[~mask] = num.dt / (phys.rho * phys.Ceff) # Limit for lambda -> 0
 
     K_phi0, KK_phi1, KKK_phi2 = None, None, None
-    if num.ETD == 'ETD2':
-        z = -lambda_j * num.dt
-        phi_0, phi_1, phi_2 = hp.phi_functions(z)
-        dt_rhoCp = num.dt / (phys.rho * phys.Ceff)
-        Cp = hp.C_coef(num.nz, geom.Lz)[:, None, None]
-        K_phi0 = phi_0.astype(np.float32)
-        KK_phi1 = (dt_rhoCp * phi_1 * Cp).astype(np.float32)
-        KKK_phi2 = (dt_rhoCp * phi_2 * Cp).astype(np.float32)
-    
+      
     return K.astype(np.float32), KK.astype(np.float32), K_phi0, KK_phi1, KKK_phi2
 
-def time_step(a, phys, num, geom, laser, timers=None, epsilon=2e+1, iter_step=0):
-    """Perform one time step of the simulation."""
-    if num.ETD == 'ETD1':
-        # 1. Compute source terms (Laser + Evaporation)
-        t0 = time.perf_counter()
-        q_las = hp.q_laser(geom, laser)
-        q_evap = hp.shift_flux(num.q_evap_old, (laser.v[0]*num.dt, laser.v[1]*num.dt), geom)
-        q_dct = hp.DCT_II(q_las - q_evap)
-        if timers is not None: timers['source'] += time.perf_counter() - t0
-        
-        # 2. Linear step (ETD1)
-        t0 = time.perf_counter()
-        np.multiply(a, num.K, out=num.aK, casting='same_kind')
-        S_n = geom.dct_scale * q_dct
-        np.multiply(geom.dct_scale, q_dct, out=num.B_buffer, casting='same_kind') 
-        compute_a_temp_numba(num.aK, num.KK_by_Cp, num.B_buffer, num.a_temp) # Updated coefficient, temporary
-        S_current = S_n.copy()
-        if timers is not None: timers['linear'] += time.perf_counter() - t0
-
-        # 3. Latent Heat Correction (Volumetric Source) - MOVED BEFORE EVAPORATION
-        t0 = time.perf_counter()
-        
-        t_mesh = time.perf_counter()
-        geom.update_fine_mesh(laser)
-        if timers is not None: timers['lh_update_mesh'] += time.perf_counter() - t_mesh
-        
-        # Compute volumetric source
-        t_src = time.perf_counter()
-        num.Q_latent_buffer.fill(0.0)
-        hp.compute_latent_heat_source(num.Q_latent_buffer, (geom.box_x, geom.box_y, geom.box_z), phys, laser, geom, num, timers=timers)
-        if timers is not None: timers['lh_compute_correction'] += time.perf_counter() - t_src
-
-        # Convert to modes
-        t_modes = time.perf_counter()
-        Q_modes = hp.box_field_to_modes(num.Q_latent_buffer, geom, timers=timers)
-        if timers is not None: timers['lh_modes_conversion'] += time.perf_counter() - t_modes
-
-        # Add to temperature modes
-        t_add = time.perf_counter()
-        # Update base state aK so that evaporation loop sees the latent heat
-        add_source_term_numba(num.aK, num.KK_vol, Q_modes)
-        # Update current a_temp so that the start of evaporation loop sees it
-        add_source_term_numba(num.a_temp, num.KK_vol, Q_modes)
-        if timers is not None: timers['lh_add_delta'] += time.perf_counter() - t_add
-        
-        if timers is not None: timers['latent_heat'] += time.perf_counter() - t0
-        
-        # 4. Nonlinear iteration for evaporation
-        t0 = time.perf_counter()
-        T_temp = hp.reconstruct_temperature_top(num.a_temp, num, geom)
-        for k in range(30):
-            q_evap = hp.q_evap_point(T_temp, phys)
-            np.subtract(q_las, q_evap, out=num.q_diff, casting='same_kind')
-            S_target = geom.dct_scale * hp.DCT_II(num.q_diff)
-            S_current = 0.1 * S_target + 0.9 * S_current # Relaxation
-            np.multiply(1.0, S_current, out=num.B_buffer, casting='same_kind')
-            compute_a_temp_numba(num.aK, num.KK_by_Cp, num.B_buffer, num.a_temp)
-            T_old = T_temp
-            T_temp = hp.reconstruct_temperature_top(num.a_temp, num, geom)
-            if np.max(np.abs(T_temp - T_old)) < epsilon: break
-        
-        num.S_n, num.q_evap_old = S_n.copy(), q_evap.astype(np.float32, copy=True)
-        P_laser = np.sum(q_las) * geom.dx * geom.dy
-        if timers is not None: timers['nonlinear'] += time.perf_counter() - t0
-        
-        # Debug output
-        t0 = time.perf_counter()
-        if iter_step % 200 == 0:
-            T_box, box_coords = hp.reconstruct_temperature_box(num.a_temp, num, geom)
-            hp.save_field_to_hdf5(
-                f"{OUT_DIR}/T_box_step_{laser.t:.5f}",
-                T_box, # Already (nz, ny, nx)
-                box_coords,
-                value_name="Temperature",
-                geom=geom,
-            )
-            hp.save_field_to_hdf5(
-                f"{OUT_DIR}/Q_latent_step_{laser.t:.5f}",
-                num.Q_latent_buffer, # Already (nz, ny, nx)
-                box_coords,
-                value_name="LatentHeat",
-                geom=geom,
-            )
-        if timers is not None: timers['io'] += time.perf_counter() - t0
-        
-        return num.a_temp, T_temp, P_laser, k+1, 0 # 0 LH points (deprecated)
+def time_step(a, phys, num, geom, laser, epsilon=2e+1, iter_step=0):
+    # 1. Compute source terms (Laser + Evaporation)
+    q_las = hp.q_laser(geom, laser)
+    q_evap = hp.shift_flux(num.q_evap_old, (laser.v[0]*num.dt, laser.v[1]*num.dt), geom)
+    q_dct = hp.DCT_II(q_las - q_evap)
     
-    else:
-        raise NotImplementedError("Only ETD1 is supported for latent heat source method.")
+    # 2. Linear step (ETD1)
+    np.multiply(a, num.K, out=num.aK, casting='same_kind')
+    S_n = geom.dct_scale * q_dct
+    np.multiply(geom.dct_scale, q_dct, out=num.B_buffer, casting='same_kind') 
+    compute_a_temp_numba(num.aK, num.KK_by_Cp, num.B_buffer, num.a_temp) # Updated coefficient, temporary
+    S_current = S_n.copy()
+
+    # 3. Latent Heat Correction (Volumetric Source) - MOVED BEFORE EVAPORATION
+    geom.update_fine_mesh(laser)
+    
+    # Compute volumetric source
+    num.Q_latent_buffer.fill(0.0)
+    hp.compute_latent_heat_source(num.Q_latent_buffer, (geom.box_x, geom.box_y, geom.box_z), phys, laser, geom, num)
+
+    # Convert to modes
+    Q_modes = hp.box_field_to_modes(num.Q_latent_buffer, geom)
+
+    # Add to temperature modes
+    # Update base state aK so that evaporation loop sees the latent heat
+    add_source_term_numba(num.aK, num.KK_vol, Q_modes)
+    # Update current a_temp so that the start of evaporation loop sees it
+    add_source_term_numba(num.a_temp, num.KK_vol, Q_modes)
+    
+    # 4. Nonlinear iteration for evaporation
+    T_temp = hp.reconstruct_temperature_top(num.a_temp, num, geom)
+    for k in range(30):
+        q_evap = hp.q_evap_point(T_temp, phys)
+        np.subtract(q_las, q_evap, out=num.q_diff, casting='same_kind')
+        S_target = geom.dct_scale * hp.DCT_II(num.q_diff)
+        S_current = 0.1 * S_target + 0.9 * S_current # Relaxation
+        np.multiply(1.0, S_current, out=num.B_buffer, casting='same_kind')
+        compute_a_temp_numba(num.aK, num.KK_by_Cp, num.B_buffer, num.a_temp)
+        T_old = T_temp
+        T_temp = hp.reconstruct_temperature_top(num.a_temp, num, geom)
+        if np.max(np.abs(T_temp - T_old)) < epsilon: break
+    
+    num.q_evap_old = q_evap.astype(np.float32, copy=True)
+    P_laser = np.sum(q_las) * geom.dx * geom.dy
+    
+    # Debug output
+    if iter_step % 200 == 0:
+        T_box, box_coords = hp.reconstruct_temperature_box(num.a_temp, num, geom)
+        hp.save_field_to_hdf5(
+            f"{OUT_DIR}/T_box_step_{laser.t:.5f}",
+            T_box, # Already (nz, ny, nx)
+            box_coords,
+            value_name="Temperature",
+            geom=geom,
+        )
+        hp.save_field_to_hdf5(
+            f"{OUT_DIR}/Q_latent_step_{laser.t:.5f}",
+            num.Q_latent_buffer, # Already (nz, ny, nx)
+            box_coords,
+            value_name="LatentHeat",
+            geom=geom,
+        )
+    
+    return num.a_temp, T_temp, P_laser, k+1
 
 def run_simulation(phys, num, geom, laser):
     """Main simulation loop."""
@@ -343,34 +294,13 @@ def run_simulation(phys, num, geom, laser):
     nsteps = int(np.ceil(num.t_final / num.dt))
     T_top_hist, P_laser_hist = [], []
     
-    timers = {
-        'source': 0.0, 'linear': 0.0, 'nonlinear': 0.0, 'latent_heat': 0.0, 'io': 0.0,
-        'lh_reconstruct_box': 0.0, 'lh_find_isotherms': 0.0, 'lh_compute_correction': 0.0, 'lh_modes_conversion': 0.0,
-        'lh_update_mesh': 0.0, 'lh_add_delta': 0.0,
-        'lh_recon_step1': 0.0, 'lh_recon_step2': 0.0, 'lh_recon_step3': 0.0,
-        'lh_modes_step1': 0.0, 'lh_modes_step2': 0.0, 'lh_modes_step3': 0.0,
-        'lh_gradient': 0.0,
-        'total': 0.0
-    }
-    
-    start = time.perf_counter()
-    
     for step in range(nsteps + 1):
-        t_step_start = time.perf_counter()
-        a, T_top, P_laser, n_evap, n_LH_pts = time_step(a, phys, num, geom, laser, timers=timers, iter_step=step)
+        a, T_top, P_laser, n_evap = time_step(a, phys, num, geom, laser, iter_step=step)
         laser.update(num.dt)
-        timers['total'] += time.perf_counter() - t_step_start
-        print(f"Step {step}/{nsteps} | t={step*num.dt:.6e}s | T_laser: {T_top[int(laser.y / geom.dy), int(laser.x / geom.dx)]:.2f} K  | P: {P_laser:.3f} W | Evap: {n_evap} | LH_pts: {n_LH_pts}")
+        print(f"Step {step}/{nsteps} | t={step*num.dt:.6e}s | T_laser: {T_top[int(laser.y / geom.dy), int(laser.x / geom.dx)]:.2f} K  | P: {P_laser:.3f} W | Evap: {n_evap} ")
         T_top_hist.append(T_top)
         P_laser_hist.append(P_laser)
 
-    total_time = time.perf_counter() - start
-    
-    print(f"\nTotal: {total_time:.3f}s")
-    print("=== Timing Recap ===")
-    for k, v in timers.items():
-        print(f"{k:<20}: {v:.4f} s ({v/timers['total']*100:.1f}%)")
-        
     return a, T_top_hist, P_laser_hist
 
 # ============================================================
@@ -381,7 +311,7 @@ def run_simulation(phys, num, geom, laser):
 if __name__ == "__main__":
     # Simulation parameters
     Lx, Ly, Lz = 0.01, 0.005, 0.0025
-    nx, ny, nz = 512, 256, 1800
+    nx, ny, nz = 512, 256, 2000
     dt = 6.0e-6
     t_final = 1.2e-2
     # Material properties

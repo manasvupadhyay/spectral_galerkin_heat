@@ -308,7 +308,7 @@ def apply_transforms(profiles, align_target='none', invert_target='none', invert
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compare spectral and FE temperature profiles.")
     parser.add_argument('--out-dir', default='out', help='Directory with spectral outputs')
-    parser.add_argument('--validation-dir', default='.validation', help='Directory with FE outputs')
+    parser.add_argument('--validation-dir', default='out', help='Directory with FE outputs')
     parser.add_argument('--output-figure', default='temperature_comparison.png', help='Output figure file')
     parser.add_argument('--align-start', action='store_true', help='Translate one or both profiles so their starts align')
     parser.add_argument('--align-target', choices=['none', 'FE', 'spectral', 'both'], default='FE',

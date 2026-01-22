@@ -137,7 +137,7 @@ def load_data(xdmf_path):
 # 2. INTERPOLATION ENGINE
 # ==========================================
 
-def get_slice(data, normal, center, width, height, reverse_axes=(), resolution=500):
+def get_slice(data, normal, center, width, height, reverse_axes=(), resolution=400, method='linear'):
     """
     Interpolates 3D data onto a 2D plane defined by a center point and dimensions.
     normal: 'x', 'y', or 'z' axis normal to the plane
@@ -145,6 +145,7 @@ def get_slice(data, normal, center, width, height, reverse_axes=(), resolution=5
     width: dimension of the slice along the horizontal axis of the plot
     height: dimension of the slice along the vertical axis of the plot
     reverse_axes: list of axes ('x', 'y', 'z') to invert sign for data querying
+    method: 'linear' or 'nearest' interpolation
     """
     print(f"Interpolating slice Normal={normal} at Center={center}, W={width}, H={height}...")
     
@@ -205,16 +206,51 @@ def get_slice(data, normal, center, width, height, reverse_axes=(), resolution=5
         rgi_query = np.column_stack((query_points[:,2], query_points[:,1], query_points[:,0]))
         
         rgi = RegularGridInterpolator((data['z'], data['y'], data['x']), data['T'], 
-                                      bounds_error=False, fill_value=np.nan)
+                                      method=method, bounds_error=False, fill_value=np.nan)
         slice_vals = rgi(rgi_query)
 
     else: # Unstructured
         points = data['xyz'] # (N, 3)
         values = data['T']   # (N,)
         
+        # --- OPTIMIZATION START ---
+        # Filter points to only those near the query slice to speed up 'griddata'
+        # Calculate bounding box of query slice
+        q_min = query_points.min(axis=0)
+        q_max = query_points.max(axis=0)
+        
+        # Add a safety margin to ensure we capture enclosing elements for linear interpolation
+        # Using 50% of the view width/height as margin is usually safe and generous enough
+        scale = max(width, height)
+        margin = scale * 0.5 
+        
+        box_min = q_min - margin
+        box_max = q_max + margin
+        
+        # Create mask for points roughly inside the volume 
+        # (This is fast vectorised numpy comparison)
+        mask = (
+            (points[:,0] >= box_min[0]) & (points[:,0] <= box_max[0]) &
+            (points[:,1] >= box_min[1]) & (points[:,1] <= box_max[1]) &
+            (points[:,2] >= box_min[2]) & (points[:,2] <= box_max[2])
+        )
+        
+        p_sub = points[mask]
+        v_sub = values[mask]
+        
+        # Fallback if filtering removes too much (unlikely unless margin is tiny)
+        if len(p_sub) < 10: 
+            print("Warning: Optimization filter removed too many points. Falling back to full mesh.")
+            p_sub = points
+            v_sub = values
+        else:
+            print(f"Optimization: Reduced mesh from {len(points)} to {len(p_sub)} nodes for interpolation.")
+            
+        # --- OPTIMIZATION END ---
+        
         # griddata expects (N, D) points and (M, D) xi.
         # Our interpolation points are (M, 3) in X,Y,Z order.
-        slice_vals = griddata(points, values, query_points, method='linear')
+        slice_vals = griddata(p_sub, v_sub, query_points, method=method)
 
     slice_data = slice_vals.reshape(U.shape)
     
@@ -323,11 +359,70 @@ def plot_meltpool(U, V, T_grid, xlabel, ylabel, liquidus, solidus, title, output
         plt.savefig(output_file, dpi=300)
         print(f"Plot saved to {output_file}")
     else:
-        plt.show()
+        plt.show() # Blocking show if no output file
+        
+    # Close figures to avoid memory leaks when running in batches (but keep open for UI if plt.show() blocks)
+    # If show() was called, it blocks until closed. If savefig, we should close.
+    if output_file:
+        plt.close(fig)
 
 # ==========================================
-# 4. MAIN EXECUTION
+# 4. MAIN FUNCTIONS AND EXECUTION
 # ==========================================
+
+def generate_plots(xdmf_path, output_dir=None, show_ui=True, save_images=False,
+                   normal='y', center=(0.0, 0.0, 0.0), width=2e-3, height=1e-3,
+                   reverse=(), liquidus=1800, solidus=1700, interp='linear',
+                   specific_output_filename=None):
+    """
+    Main function to generate plots from an XDMF file.
+    """
+    if not os.path.exists(xdmf_path):
+        print(f"Error: XDMF file not found: {xdmf_path}")
+        return
+
+    # 1. Load Data
+    try:
+        data = load_data(xdmf_path)
+    except Exception as e:
+        print(f"Error loading XDMF: {e}")
+        import traceback
+        traceback.print_exc()
+        return
+
+    # 2. Interpolate Slice
+    try:
+        # data['T'] might be on device if using cupy in other parts, but here we likely loaded from disk as numpy
+        # If helpers or other modules monkey-patched things, we should ensure we work with numpy for matplotlib
+        
+        U, V, T_grid, xlabel, ylabel = get_slice(data, normal, center, width, height, reverse_axes=reverse, method=interp)
+    except Exception as e:
+        print(f"Error extracting slice: {e}")
+        import traceback
+        traceback.print_exc()
+        return
+
+    # 3. Plot
+    output_file = None
+    if save_images:
+        if specific_output_filename:
+             output_file = specific_output_filename
+             # Ensure directory exists for specific file
+             os.makedirs(os.path.dirname(output_file) or '.', exist_ok=True)
+        else:
+            # Determine output directory
+            if output_dir is None:
+                # Default to same folder as XDMF
+                output_dir = os.path.dirname(os.path.abspath(xdmf_path))
+            
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+                
+            base_name = os.path.splitext(os.path.basename(xdmf_path))[0]
+            output_file = os.path.join(output_dir, f"{base_name}_cut_{normal}.png")
+
+    plot_meltpool(U, V, T_grid, xlabel, ylabel, liquidus, solidus, 
+                  f"Section Normal-{normal.upper()} @ {center}", output_file)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot Meltpool X-Sections from XDMF.")
@@ -341,27 +436,30 @@ if __name__ == "__main__":
     
     parser.add_argument("--liquidus", type=float, default=1800, help="Liquidus temperature (K)")
     parser.add_argument("--solidus", type=float, default=1700, help="Solidus temperature (K)")
-    parser.add_argument("--out", default=None, help="Output image filename")
+    parser.add_argument("--interp", default="linear", choices=['linear', 'nearest'], help="Interpolation method (linear or nearest)")
+    parser.add_argument("--out", default=None, help="Output image filename (overrides auto-generation)")
+    parser.add_argument("--no-show", action="store_true", help="Do not display the plot window")
     
     args = parser.parse_args()
 
-    # 1. Load
-    try:
-        data = load_data(args.xdmf_file)
-    except Exception as e:
-        print(f"Error loading XDMF: {e}")
-        sys.exit(1)
-
-    # 2. Interpolate Slice
-    try:
-        # Convert args.reverse to list if it's not already (argparse nargs='*' creates a list)
-        reverse_axes = args.reverse if isinstance(args.reverse, list) else []
-        
-        U, V, T_grid, xlabel, ylabel = get_slice(data, args.normal, args.center, args.width, args.height, reverse_axes=reverse_axes)
-    except Exception as e:
-        print(f"Error extracting slice: {e}")
-        sys.exit(1)
-
-    # 3. Plot
-    plot_meltpool(U, V, T_grid, xlabel, ylabel, args.liquidus, args.solidus, 
-                  f"Section Normal-{args.normal.upper()} @ {args.center}, Reversed: {args.reverse}", args.out)
+    save_images = args.out is not None
+    show_ui = not args.no_show
+    
+    # If args.out is provided, it is a specific filename. 
+    # We pass it as specific_output_filename to generate_plots.
+    
+    generate_plots(
+        xdmf_path=args.xdmf_file,
+        output_dir=None, # Not used if specific_output_filename is set or save_images is False (mostly)
+        show_ui=show_ui,
+        save_images=save_images, 
+        normal=args.normal,
+        center=tuple(args.center),
+        width=args.width,
+        height=args.height,
+        reverse=args.reverse if isinstance(args.reverse, list) else [],
+        liquidus=args.liquidus,
+        solidus=args.solidus,
+        interp=args.interp,
+        specific_output_filename=args.out
+    )

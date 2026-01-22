@@ -1,12 +1,25 @@
 import h5py
 import os
-import time
 import numpy as np
 from scipy.ndimage import shift as scipy_shift
 from scipy.interpolate import RegularGridInterpolator
 from pyfftw.interfaces.scipy_fft import dctn
 import pyfftw
 from numba import njit, prange
+
+try:
+    import cupy as cp
+    import cupyx.scipy.fft as cupy_fft
+    import cupyx.scipy.ndimage as cupy_ndimage
+except ImportError:
+    cp = None
+    cupy_fft = None
+    cupy_ndimage = None
+
+def get_array_module(arr):
+    if cp is not None:
+        return cp.get_array_module(arr)
+    return np
 
 OUT_DIR = "out"
 
@@ -65,9 +78,9 @@ def save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", ge
 #   COSINE NORMALIZATION COEFFICIENTS
 # ============================================================
 
-def C_coef(N, L):
-    C = np.sqrt(2.0 / L) * np.ones(N)
-    C[0] = np.sqrt(1.0 / L)
+def C_coef(N, L, xp=np):
+    C = xp.sqrt(2.0 / L) * xp.ones(N)
+    C[0] = xp.sqrt(1.0 / L)
     return C
 
 
@@ -77,16 +90,17 @@ def C_coef(N, L):
 
 def phi_functions(z):
     """ Functions used for the time stepping, taking into account exponential decay"""
+    xp = get_array_module(z)
     small_threshold = 1e-6
-    phi_0 = np.exp(z)
+    phi_0 = xp.exp(z)
     
-    mask_small = np.abs(z) < small_threshold
-    phi_1 = np.zeros_like(z)
-    phi_1[~mask_small] = (np.exp(z[~mask_small]) - 1.0) / z[~mask_small]
+    mask_small = xp.abs(z) < small_threshold
+    phi_1 = xp.zeros_like(z)
+    phi_1[~mask_small] = (xp.exp(z[~mask_small]) - 1.0) / z[~mask_small]
     phi_1[mask_small] = 1.0 + z[mask_small] / 2.0 + z[mask_small]**2 / 6.0
     
-    phi_2 = np.zeros_like(z)
-    phi_2[~mask_small] = (np.exp(z[~mask_small]) - 1.0 - z[~mask_small]) / (z[~mask_small]**2)
+    phi_2 = xp.zeros_like(z)
+    phi_2[~mask_small] = (xp.exp(z[~mask_small]) - 1.0 - z[~mask_small]) / (z[~mask_small]**2)
     phi_2[mask_small] = 0.5 + z[mask_small] / 6.0 + z[mask_small]**2 / 24.0
     
     return phi_0, phi_1, phi_2
@@ -98,24 +112,31 @@ def phi_functions(z):
 
 def q_laser(geom, laser):
     """Gaussian laser heat flux using current Laser position (laser.x, laser.y)."""
+    xp = get_array_module(geom.X)
     r_sq = (geom.X - laser.x) ** 2 + (geom.Y - laser.y) ** 2
-    return (geom.laser_coef * np.exp(-2.0 * r_sq / laser.r_b ** 2)).astype(np.float32)
+    return (geom.laser_coef * xp.exp(-2.0 * r_sq / laser.r_b ** 2)).astype(np.float32)
 
 
 def q_evap_point(T: np.ndarray, phys) -> np.ndarray:
     """Evaporative heat flux."""
-    q = 0.82 * phys.DeltaH_LV * phys.Pa/ np.sqrt(2 * np.pi * phys.R_v * T) * \
-        np.exp((phys.DeltaH_LV / (phys.R_v * phys.T_boil)) * (1.0 - phys.T_boil / T))
+    xp = get_array_module(T)
+    q = 0.82 * phys.DeltaH_LV * phys.Pa/ xp.sqrt(2 * np.pi * phys.R_v * T) * \
+        xp.exp((phys.DeltaH_LV / (phys.R_v * phys.T_boil)) * (1.0 - phys.T_boil / T))
     q[T < phys.T_liquidus] = 0.0
     return q.astype(np.float32)
 
 
 def shift_flux(field: np.ndarray, shift: tuple, geom) -> np.ndarray:
     """Translate a surface flux field by ``shift=(dx, dy)`` meters."""
+    xp = get_array_module(field)
     if field is None or field.size == 0:
-        return np.zeros((geom.ny, geom.nx), dtype=np.float32)
+        return xp.zeros((geom.ny, geom.nx), dtype=np.float32)
     dx, dy = shift
     shift_pixels = (dy / geom.dy, dx / geom.dx)
+    
+    if cp is not None and xp == cp:
+        return cupy_ndimage.shift(field, shift_pixels, order=1, mode='constant', cval=0.0).astype(np.float32)
+    
     return scipy_shift(field, shift_pixels, order=1, mode='constant', cval=0.0).astype(np.float32) 
 
 
@@ -124,85 +145,94 @@ def shift_flux(field: np.ndarray, shift: tuple, geom) -> np.ndarray:
 # ============================================================
 
 def DCT_II(q):
+    xp = get_array_module(q)
+    if cp is not None and xp == cp:
+        # Cupy DCT does not support 'workers' argument
+        return cupy_fft.dctn(q, type=2, norm='ortho').astype(np.float32, copy=False)
     return dctn(q.astype(np.float32, copy=False), type=2, norm='ortho', workers=-1).astype(np.float32, copy=False)
 
 # ============================================================
 #   LATENT HEAT SOURCE HELPERS
 # ============================================================
 
-
 @njit(parallel=True, fastmath=True)
-def _compute_latent_heat_gradient(Q_box, T_box, dx, dy, dz, rho, L, v, T_S, T_L, dt):
+def _compute_source_term_from_temperature(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
     """
-    Compute latent heat source from temperature gradient.
-    Q = rho * L * v * d(f_solid)/dT * dT/dx
-    Assumes arrays are (nz, ny, nx) [ZYX layout].
+    Compute Q = - rho * L * (1 / (TL - TS)) * (dT/dt) * Indicator(TS <= T <= TL)
     """
-    nz, ny, nx = T_box.shape
-    
-    # dfs/dT = -1 / (TL - TS) in the mushy zone
-    dfs_dT = -1.0 / (T_L - T_S)
-    
-    # Central difference factor: 1/(2*dx)
-    # Total factor
-    factor = rho * L * v * dfs_dT / (2.0 * dx)
-    
-    # Physical limit (Maximum tolerated power corresponding to full phase change)
-    Q_max = rho *  L / dt
-
-    for z in prange(nz):
-        Q_box[z, :, :] = 0.0
-        for y in range(ny):
-            # Interior X
-            # Fix: range must prevent out-of-bounds access at T_box[..., x+1]. 
-            # Max valid index is nx-1, so max x is nx-2.
-            for x in range(nx - 2, 0, -1):
-                T = T_box[z, y, x]
+    factor = - rho * L / ( (T_L - T_S) * dt )
+    nz, ny, nx = T_curr.shape
+    for k in prange(nz):
+        for j in range(ny):
+            for i in range(nx):
+                T = T_curr[k, j, i]
+                # Indicator function for mushy zone (inclusive)
                 if T >= T_S and T <= T_L:
-                    dTdx = T_box[z, y, x+1] - T_box[z, y, x-1]
-                    val = -factor * dTdx
-                    # Clamp to physical limit
-                    if abs(val) + abs(sum(Q_box[z, y, x:x+10])) > Q_max:
-                        if val > 0:
-                            #print("Latent heat limit reached (+):", val, ">", Q_max)
-                            val = Q_max - abs(sum(Q_box[z, y, x:x+10]))
-                        if val < 0:
-                            #print("Latent heat limit reached (-):", val, "<", -Q_max)
-                            val = -Q_max + abs(sum(Q_box[z, y, x:x+10]))
-                    Q_box[z, y, x] = val
+                    dT = T - T_prev[k, j, i]
+                    out[k, j, i] = factor * dT
+                else:
+                    out[k, j, i] = 0.0
 
-def compute_latent_heat_source(Q_buffer, box_coords, phys, laser, geom, num, timers=None):
+def compute_latent_heat_source(Q_buffer, box_coords, phys, laser, geom, num, alpha=0.4):
     """
-    Compute volumetric latent heat source Q (W/m^3) based on the temperature gradient.
-    Formula: Q = rho * L * v * d(f_solid)/dT * dT/dx
+    Compute volumetric latent heat source Q (W/m^3) using temperature derivative.
+    Equation: Q = - rho * L * (1/DeltaT) * (dT/dt) * Indicator
+    Applies under-relaxation: Q_applied = alpha * Q_new + (1-alpha) * Q_old
     """
     # 1. Reconstruct Temperature on Fine Mesh
-    # T_box should be returned in (nz, ny, nx) layout to match Q_buffer
-    T_box, _ = reconstruct_temperature_box(num.a_temp, num, geom, timers=timers)
+    T_box, _ = reconstruct_temperature_box(num.a_temp, num, geom)
     
-    # 2. Physics Parameters
-    v = np.linalg.norm(laser.v)
-    dx = geom.dx_fine
-    dy = geom.dy_fine
-    dz = geom.dz_fine
+    # 2. Initialize/Retrieve State buffers
+    if not hasattr(num, 'T_prev'):
+        num.T_prev = np.zeros_like(T_box)
+        num.T_prev[:] = T_box[:] # Initialize with current T
+        
+        # Initialize Previous Q for relaxation
+        num.Q_prev = np.zeros_like(Q_buffer)
+        
+        num.laser_x_prev = laser.x
+        num.laser_y_prev = laser.y
+        Q_buffer.fill(0.0)
+        return
+
+    # 3. Shift Previous Fields to Current Frame
+    # The grid has moved by (dx_shift, dy_shift)
+    shift_x = laser.x - num.laser_x_prev
+    shift_y = laser.y - num.laser_y_prev
     
-    # 3. Compute Gradient and Source
-    # Q_buffer is (nz, ny, nx)
-    t0 = time.perf_counter()
-    _compute_latent_heat_gradient(
-        Q_buffer, T_box, 
-        dx, dy, dz, phys.rho, phys.L_f, v, 
-        phys.T_solidus, phys.T_liquidus,
-        num.dt
-    )
-    if timers is not None: timers['lh_gradient'] += time.perf_counter() - t0
+    # Calculate shift in pixels (shift > 0 means grid moved right, so we look left into old array)
+    shift_pixels = (0, -shift_y / geom.dy_fine, -shift_x / geom.dx_fine)
+    
+    # Shift Temperature (continuous field, use order=1)
+    T_prev_aligned = scipy_shift(num.T_prev, shift_pixels, order=1, mode='nearest')
+    
+    # Shift Previous Q (source term, use constant fill for outside)
+    if not hasattr(num, 'Q_prev'): num.Q_prev = np.zeros_like(Q_buffer)
+    Q_prev_aligned = scipy_shift(num.Q_prev, shift_pixels, order=1, mode='constant', cval=0.0)
+    
+    # 4. Compute Source Term (New)
+    _compute_source_term_from_temperature(T_box, T_prev_aligned, 
+                                          phys.T_solidus, phys.T_liquidus, 
+                                          phys.rho, phys.L_f, num.dt, 
+                                          Q_buffer)
+    
+    # 5. Apply Relaxation
+    # Q_applied = alpha * Q_new + (1 - alpha) * Q_old
+    if alpha < 1.0:
+        Q_buffer[:] = alpha * Q_buffer + (1.0 - alpha) * Q_prev_aligned
+    
+    # 6. Update History
+    num.T_prev[:] = T_box[:]
+    num.Q_prev[:] = Q_buffer[:] # Store the applied Q
+    num.laser_x_prev = laser.x
+    num.laser_y_prev = laser.y
 
 
 # ============================================================
 #   RECONSTRUCT TEMPERATURE FIELDS HELPER FUNCTIONS
 # ============================================================
 
-def reconstruct_temperature_box(a, num, geom, symmetrize=False, timers=None):
+def reconstruct_temperature_box(a, num, geom, symmetrize=False):
     """
     Reconstructs temperature in a small ROI around the laser using 
     precomputed fine mesh cosine bases from geom.
@@ -210,23 +240,19 @@ def reconstruct_temperature_box(a, num, geom, symmetrize=False, timers=None):
     if not geom.fine_mesh_initialized:
         raise RuntimeError("Fine mesh not initialized. Call geom.update_fine_mesh(laser) first.")
     
+    xp = get_array_module(a)
+    
     # Tensor Contraction using precomputed bases
     # T(x,y,z) = sum_p sum_n sum_m  a[p,n,m] * Bz[p,z] * By[n,y] * Bx[m,x]
     
     # 1. Contract Z: (nz, ny, nx) . (nz, nz_box) -> (ny, nx, nz_box)
-    t0 = time.perf_counter()
-    T_step1 = np.tensordot(a, geom.Bz_fine, axes=(0, 0))
-    if timers is not None: timers['lh_recon_step1'] += time.perf_counter() - t0
+    T_step1 = xp.tensordot(a, geom.Bz_fine, axes=(0, 0))
     
     # 2. Contract Y: (ny, nx, nz_box) . (ny, ny_box) -> (nx, nz_box, ny_box)
-    t0 = time.perf_counter()
-    T_step2 = np.tensordot(T_step1, geom.By_fine, axes=(0, 0))
-    if timers is not None: timers['lh_recon_step2'] += time.perf_counter() - t0
+    T_step2 = xp.tensordot(T_step1, geom.By_fine, axes=(0, 0))
     
     # 3. Contract X: (nx, nz_box, ny_box) . (nx, nx_box) -> (nz_box, ny_box, nx_box)
-    t0 = time.perf_counter()
-    T_box = np.tensordot(T_step2, geom.Bx_fine, axes=(0, 0))
-    if timers is not None: timers['lh_recon_step3'] += time.perf_counter() - t0
+    T_box = xp.tensordot(T_step2, geom.Bx_fine, axes=(0, 0))
     
     return T_box.astype(np.float32), (geom.box_x, geom.box_y, geom.box_z)
 
@@ -257,14 +283,15 @@ def reconstruct_temperature_xz(a, num, geom, phys, laser, y0=None):
 
 def reconstruct_temperature_volume(a, num, geom):
     """Reconstruct the temperature field on the full simulation grid."""
+    xp = get_array_module(a)
     # To be implemented later, proper DCT-based reconstruction for full volume
     Bx = (geom.Cm[:, None] * geom.cos_mx).astype(np.float32)
     By = (geom.Cn[:, None] * geom.cos_ny).astype(np.float32)
     Bz = (geom.Cp[:, None] * geom.cos_pz).astype(np.float32)
 
-    T_step1 = np.tensordot(a, Bx, axes=(2, 0))  # (nz, ny, nx)
-    T_step2 = np.tensordot(T_step1, By, axes=(1, 0))  # (nz, nx, ny)
-    T_full = np.tensordot(T_step2, Bz, axes=(0, 0))  # (nx, ny, nz)
+    T_step1 = xp.tensordot(a, Bx, axes=(2, 0))  # (nz, ny, nx)
+    T_step2 = xp.tensordot(T_step1, By, axes=(1, 0))  # (nz, nx, ny)
+    T_full = xp.tensordot(T_step2, Bz, axes=(0, 0))  # (nx, ny, nz)
 
     return T_full.astype(np.float32)
 
@@ -376,61 +403,6 @@ def save_temp_profiles(a, num, geom, phys, laser, t=None, center="laser"):
         fname = f"{OUT_DIR}/{direction}_spectral_latent_heat.txt"
         np.savetxt(fname, np.vstack([coords, profile]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
         print(f"Saved: {fname}")
-
-def save_temp_profiles_from_hdf5(h5_path, center="laser", laser_position=None, output_dir=OUT_DIR):
-    """Re-sample temperature profiles from an HDF5 volume using tri-linear interpolation."""
-    with h5py.File(h5_path, "r") as f:
-        x = f["X"][:]
-        y = f["Y"][:]
-        z = f["Z"][:]
-        T = f["Temperature"][:]
-
-    interpolator = RegularGridInterpolator((z, y, x), T, bounds_error=False, fill_value=np.nan)
-
-    top_idx = int(np.argmin(np.abs(z)))
-    z_top = z[top_idx]
-
-    if center == "hotspot":
-        top_plane = T[top_idx, :, :]
-        iy_idx, ix_idx = np.unravel_index(np.nanargmax(top_plane), top_plane.shape)
-        y_center = y[iy_idx]
-        x_center = x[ix_idx]
-        print(
-            "Hotspot center detected at "
-            f"x={x_center:.6e} m, y={y_center:.6e} m, z={z_top:.6e} m"
-        )
-    elif center == "laser":
-        if laser_position is None:
-            raise ValueError("laser_position must be provided when center='laser'.")
-        x_center = float(np.clip(laser_position[0], x[0], x[-1]))
-        y_center = float(np.clip(laser_position[1], y[0], y[-1]))
-    else:
-        raise ValueError(f"Unknown center option: {center}")
-
-    line_x_points = np.column_stack((np.full(len(x), z_top, dtype=np.float64),
-                                     np.full(len(x), y_center, dtype=np.float64),
-                                     x.astype(np.float64)))
-    line_y_points = np.column_stack((np.full(len(y), z_top, dtype=np.float64),
-                                     y.astype(np.float64),
-                                     np.full(len(y), x_center, dtype=np.float64)))
-    line_z_points = np.column_stack((z.astype(np.float64),
-                                     np.full(len(z), y_center, dtype=np.float64),
-                                     np.full(len(z), x_center, dtype=np.float64)))
-
-    T_x = interpolator(line_x_points).astype(np.float32)
-    T_y = interpolator(line_y_points).astype(np.float32)
-    T_z = interpolator(line_z_points).astype(np.float32)
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    for direction, coords, profile in [
-        ('x', x, T_x),
-        ('y', y, T_y),
-        ('z', z, T_z)
-    ]:
-        fname = os.path.join(output_dir, f"{direction}_spectral_latent_heat.txt")
-        np.savetxt(fname, np.vstack([coords, profile]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
-        print(f"Saved: {fname}")
         
 
 def save_temp_profiles_fine(
@@ -513,7 +485,7 @@ def save_temp_profiles_fine(
         np.savetxt(fname, np.vstack([coords, profile]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
         print(f"Saved fine profile: {fname}")
 
-def box_field_to_modes(field_box, geom, timers=None):
+def box_field_to_modes(field_box, geom):
     """
     Convert a field defined in the fine box (e.g. Q_latent) to global spectral modes.
     Input field_box is (nz_box, ny_box, nx_box) [ZYX layout].
@@ -522,24 +494,65 @@ def box_field_to_modes(field_box, geom, timers=None):
     if not geom.fine_mesh_initialized:
         raise RuntimeError("Fine mesh not initialized. Call geom.update_fine_mesh(laser) first.")
     
+    xp = get_array_module(field_box)
+    
     # Direct tensor contraction avoiding intermediate reshapes/transposes
     
     # 1. Contract Z_box: (nz_box, ny_box, nx_box) . (nz, nz_box) -> (ny_box, nx_box, nz)
-    t0 = time.perf_counter()
-    temp1 = np.tensordot(field_box, geom.Bz_fine, axes=(0, 1))
-    if timers is not None: timers['lh_modes_step1'] += time.perf_counter() - t0
+    temp1 = xp.tensordot(field_box, geom.Bz_fine, axes=(0, 1))
     
     # 2. Contract Y_box: (ny_box, nx_box, nz) . (ny, ny_box) -> (nx, nz_box, ny_box)
-    t0 = time.perf_counter()
-    temp2 = np.tensordot(temp1, geom.By_fine, axes=(0, 1))
-    if timers is not None: timers['lh_modes_step2'] += time.perf_counter() - t0
+    temp2 = xp.tensordot(temp1, geom.By_fine, axes=(0, 1))
     
     # 3. Contract X_box: (nx_box, nz, ny) . (nx, nx_box) -> (nz, ny, nx)
-    t0 = time.perf_counter()
-    modes = np.tensordot(temp2, geom.Bx_fine, axes=(0, 1))
-    if timers is not None: timers['lh_modes_step3'] += time.perf_counter() - t0
+    modes = xp.tensordot(temp2, geom.Bx_fine, axes=(0, 1))
     
     # Multiply by dV for the numerical integration
     modes *= geom.dV_fine
     
     return modes.astype(np.float32)
+
+# ============================================================
+#   KERNEL ABSTRACTIONS
+#   (These handle CPU/GPU dispatch for loop-heavy operations)
+# ============================================================
+
+@njit(parallel=True, fastmath=True)
+def _compute_a_temp_numba(aK, KK_by_Cp, B_scaled, a_temp_out):
+    nz = aK.shape[0]
+    for p in prange(nz):
+        a_temp_out[p, :, :] = aK[p, :, :] + KK_by_Cp[p, :, :] * B_scaled
+
+@njit(parallel=True, fastmath=True)
+def _add_source_term_numba(a_temp, KK, Q_modes):
+    nz = a_temp.shape[0]
+    for p in prange(nz):
+        for i in range(a_temp.shape[1]):
+            for j in range(a_temp.shape[2]):
+                a_temp[p, i, j] += KK[p, i, j] * Q_modes[p, i, j]
+
+def compute_a_temp(aK, KK_by_Cp, B_scaled, a_temp_out):
+    """
+    Update spectral coefficients for ETD1 scheme.
+    a_temp_out = aK + KK_by_Cp * B_scaled (with appropriate broadcasting)
+    """
+    xp = get_array_module(aK)
+    if xp is np:
+        _compute_a_temp_numba(aK, KK_by_Cp, B_scaled, a_temp_out)
+    else:
+        # GPU / CuPy: Generic broadcasting logic
+        # B_scaled is 2D (ny, nx), needs to broadcast over Z axis (dim 0)
+        # aK and KK_by_Cp are 3D (nz, ny, nx)
+        xp.add(aK, KK_by_Cp * B_scaled[None, :, :], out=a_temp_out)
+
+def add_source_term(a_temp, KK, Q_modes):
+    """
+    Add volumetric source term to temperature modes.
+    a_temp += KK * Q_modes
+    """
+    xp = get_array_module(a_temp)
+    if xp is np:
+        _add_source_term_numba(a_temp, KK, Q_modes)
+    else:
+        # Element-wise addition for GPU
+        xp.add(a_temp, KK * Q_modes, out=a_temp)
