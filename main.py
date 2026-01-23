@@ -27,9 +27,13 @@ def load_config(path: str) -> Dict[str, Any]:
 def build_context(cfg: Dict[str, Any]) -> SimulationContext:
     """Construct the SimulationContext object from dictionary configuration."""
     
-    # 1. Numerical Parameters
+    # 1. Numerical & Simulation Meta-Parameters
     sim_cfg = cfg.get('simulation', {})
     domain_cfg = cfg.get('domain', {})
+    
+    # Capture Method and Backend from config
+    sim_method = sim_cfg.get('method', 'spectral').lower()
+    sim_backend = sim_cfg.get('backend', 'cpu').lower()
     
     # Calculate mesh geometry
     Lx, Ly, Lz = domain_cfg['size']
@@ -92,29 +96,47 @@ def build_context(cfg: Dict[str, Any]) -> SimulationContext:
         geom=geom_params,
         laser=laser_params,
         laser_path=laser_path,
-        io=io_params
+        io=io_params,
+        method=sim_method,   # New Field
+        backend=sim_backend  # New Field
     )
     
     return ctx
 
-def get_factory(backend: str, context: SimulationContext):
-    """Factory Selector."""
-    if backend.lower() == 'gpu':
+def get_factory(context: SimulationContext):
+    """
+    Select and instantiate the appropriate SimulationFactory based on context.
+    Dispatches between Spectral (CPU/GPU) and FEM implementations.
+    """
+    method = context.method
+    backend = context.backend
+    
+    logger.info(f"Factory Selector: Method='{method}', Backend='{backend}'")
+
+    if method == "fem":
+        # Import local to avoid loading dependencies if not used
         try:
-            from implementations.factories.gpu_factory import GPUSimulationFactory
-            return GPUSimulationFactory(context)
+            from implementations.factories.fem_factory import FEMSimulationFactory
+            return FEMSimulationFactory(context)
         except ImportError as e:
-            logger.error(f"Failed to import GPU Factory. Ensure 'implementations/factories/gpu_factory.py' exists and dependencies (cupy) are installed.")
-            raise e
-    elif backend.lower() == 'cpu':
-        try:
+            logger.error(f"Failed to import FEM factory: {e}")
+            raise
+
+    elif method == "spectral":
+        if backend == "gpu":
+            try:
+                from implementations.factories.gpu_factory import GPUSimulationFactory
+                return GPUSimulationFactory(context)
+            except ImportError as e:
+                logger.error(f"Failed to import GPU factory (check cupy installation): {e}")
+                raise
+        else:
+            # Default to CPU Spectral
             from implementations.factories.cpu_factory import CPUSimulationFactory
             return CPUSimulationFactory(context)
-        except ImportError as e:
-            logger.error(f"Failed to import CPU Factory. Ensure 'implementations/factories/cpu_factory.py' exists.")
-            raise e
+            
     else:
-        raise ValueError(f"Unknown backend: {backend}. Supported: 'cpu', 'gpu'")
+        raise ValueError(f"Unknown simulation method: {method}")
 
 def main():
     parser = argparse.ArgumentParser(description="FastHeatSolv: Spectral Heat Equation Solver")
@@ -141,7 +163,8 @@ def main():
 
     # 3. Instantiate Factory & Workflow
     try:
-        factory = get_factory(backend, context)
+        # get_factory now only needs context, as it contains method/backend info
+        factory = get_factory(context) 
         workflow = SimulationWorkflow(context, factory)
         
         # 4. Run Simulation

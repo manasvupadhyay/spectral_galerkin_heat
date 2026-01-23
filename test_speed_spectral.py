@@ -1,37 +1,16 @@
 import numpy as np
 import pyfftw
-from numba import njit, prange
 import os
 from types import SimpleNamespace
-import helpers as hp
 from dataclasses import dataclass
+
+import helpers as hp
+# Import the new CPU kernels
+import implementations.physics.spectral_cpu_kernels as kernels
 
 pyfftw.config.NUM_THREADS = os.cpu_count()
 OUT_DIR = "out"
-os.makedirs(OUT_DIR, exist_ok=True)
 
-# ============================================================
-#  NUMBA KERNELS
-# ============================================================
-
-@njit(parallel=True, fastmath=True)
-def compute_a_temp_numba(aK, KK_by_Cp, B_scaled, a_temp_out):
-    """Update spectral coefficients for ETD1 scheme."""
-    nz = aK.shape[0]
-    for p in prange(nz):
-        a_temp_out[p, :, :] = aK[p, :, :] + KK_by_Cp[p, :, :] * B_scaled
-
-@njit(parallel=True, fastmath=True)
-def add_source_term_numba(a_temp, KK, Q_modes):
-    """
-    Add volumetric source term to temperature modes.
-    a_temp += KK * Q_modes
-    """
-    nz = a_temp.shape[0]
-    for p in prange(nz):
-        for i in range(a_temp.shape[1]):
-            for j in range(a_temp.shape[2]):
-                a_temp[p, i, j] += KK[p, i, j] * Q_modes[p, i, j]
 
 # ============================================================
 #  CLASSES
@@ -58,10 +37,6 @@ class GeomParams:
         self.Lx, self.Ly, self.Lz = float(Lx), float(Ly), float(Lz)
         self.nx, self.ny, self.nz = num.nx, num.ny, num.nz
         self.dx, self.dy, self.dz = Lx/num.nx, Ly/num.ny, Lz/num.nz
-
-        
-        
-
 
 class PhysParams:
     def __init__(self, rho, Cp, k, L_f=267700.0, DeltaH_LV=7.41e6, R_v=150.774, T0=293.0, 
@@ -198,7 +173,7 @@ class SpectralSolverState:
         """
 
         print(f"Precomputing K, KK... ")
-        self.K, self.KK = precompute_K_KK(phys, num, geom)
+        self.K, self.KK = hp.precompute_K_KK(phys, num, geom)
         self.KK_by_Cp = (self.KK * self.Cp[:, None, None]).astype(np.float32) # Projected on x,y plane
         nx, ny, nz = num.nx, num.ny, num.nz
         # Allocate working arrays
@@ -211,30 +186,19 @@ class SpectralSolverState:
         # ZYX layout for contiguous X-scanning
         self.Q_latent_buffer = np.zeros((self.nz_box, self.ny_box, self.nx_box), dtype=np.float32)
 
-
-
 # ============================================================
 #   FUNCTIONS
 # ============================================================
 
-def precompute_K_KK(phys, num, geom):
-    """Compute spectral propagators (K, KK) for heat equation."""
-    m, n, p = np.arange(num.nx)[None, None, :], np.arange(num.ny)[None, :, None], np.arange(num.nz)[:, None, None]
-    mu = (m * np.pi / geom.Lx)**2 + (n * np.pi / geom.Ly)**2 + (p * np.pi / geom.Lz)**2
-    lambda_j = (phys.k / (phys.rho * phys.Ceff)) * mu
-
-    K = np.exp(-lambda_j * num.dt)
-    K[0, 0, 0] = 1.0
-    KK = np.zeros_like(K)
-    mask = lambda_j > 0
-    KK[mask] = (1 - K[mask]) / (phys.rho * phys.Ceff * lambda_j[mask])
-    KK[~mask] = num.dt / (phys.rho * phys.Ceff) # Limit for lambda -> 0
-      
-    return K.astype(np.float32), KK.astype(np.float32)
 
 def time_step(a, phys, num, geom, laser, SsState, epsilon=2e+1, iter_step=0):
     # 1. Compute source terms (Laser + Evaporation)
     q_las = hp.q_laser(SsState, laser)
+    
+    # Initialize buffers if not exist
+    if not hasattr(SsState, 'q_evap_buffer'):
+        SsState.q_evap_buffer = np.zeros_like(q_las)
+        
     q_evap = hp.shift_flux(SsState.q_evap_old, (laser.v[0]*num.dt, laser.v[1]*num.dt), geom)
     q_dct = hp.DCT_II(q_las - q_evap)
     
@@ -242,34 +206,49 @@ def time_step(a, phys, num, geom, laser, SsState, epsilon=2e+1, iter_step=0):
     np.multiply(a, SsState.K, out=SsState.aK, casting='same_kind')
     S_n = SsState.dct_scale * q_dct
     np.multiply(SsState.dct_scale, q_dct, out=SsState.B_buffer, casting='same_kind') 
-    compute_a_temp_numba(SsState.aK, SsState.KK_by_Cp, SsState.B_buffer, SsState.a_temp) # Updated coefficient, temporary
+    
+    # [KERNEL SUBCALL] Replaced hp.compute_a_temp_numba
+    kernels.update_modes_etd1(SsState.aK, SsState.KK_by_Cp, SsState.B_buffer, SsState.a_temp)
+    
     S_current = S_n.copy()
 
     # 3. Latent Heat Correction (Volumetric Source) - MOVED BEFORE EVAPORATION
-    hp.update_fine_mesh(SsState, laser) # Call in-place, do not overwrite variable with None
+    hp.update_fine_mesh(SsState, laser) 
     
     # Compute volumetric source
     SsState.Q_latent_buffer.fill(0.0)
-    hp.compute_latent_heat_source(SsState.Q_latent_buffer, phys, laser, geom, num, SsState)
+    
+    # [KERNEL Call] High-level orchestrator for latent heat
+    kernels.compute_latent_heat_source(SsState.Q_latent_buffer, phys, laser, geom, num, SsState)
 
     # Convert to modes
     Q_modes = hp.box_field_to_modes(SsState.Q_latent_buffer, SsState)
 
     # Add to temperature modes
-    # Update base state aK so that evaporation loop sees the latent heat
-    add_source_term_numba(SsState.aK, SsState.KK, Q_modes)
+    kernels.add_source_term_modes(SsState.aK, SsState.KK, Q_modes)
     # Update current a_temp so that the start of evaporation loop sees it
-    add_source_term_numba(SsState.a_temp, SsState.KK, Q_modes)
+    kernels.add_source_term_modes(SsState.a_temp, SsState.KK, Q_modes)
     
     # 4. Nonlinear iteration for evaporation
     T_temp = hp.reconstruct_temperature_top(SsState.a_temp, SsState)
     for k in range(30):
-        q_evap = hp.q_evap_point(T_temp, phys)
+        
+        # compute_evaporation_flux (IN-PLACE)
+        # We use the buffer created earlier
+        kernels.compute_evaporation_flux(
+            T_temp, SsState.q_evap_buffer,
+            phys.Pa, phys.R_v, phys.T_boil, phys.DeltaH_LV, phys.R_v, phys.T_liquidus
+        )
+        q_evap = SsState.q_evap_buffer # Alias for readability
+        
         np.subtract(q_las, q_evap, out=SsState.q_diff, casting='same_kind')
         S_target = SsState.dct_scale * hp.DCT_II(SsState.q_diff)
         S_current = 0.1 * S_target + 0.9 * S_current # Relaxation
         np.multiply(1.0, S_current, out=SsState.B_buffer, casting='same_kind')
-        compute_a_temp_numba(SsState.aK, SsState.KK_by_Cp, SsState.B_buffer, SsState.a_temp)
+        
+        # [KERNEL SUBCALL]
+        kernels.update_modes_etd1(SsState.aK, SsState.KK_by_Cp, SsState.B_buffer, SsState.a_temp)
+        
         T_old = T_temp
         T_temp = hp.reconstruct_temperature_top(SsState.a_temp, SsState)
         if np.max(np.abs(T_temp - T_old)) < epsilon: break
@@ -323,7 +302,7 @@ def run_simulation(phys, num, geom, laser, SsState):
 if __name__ == "__main__":
     # Simulation parameters
     Lx, Ly, Lz = 0.01, 0.005, 0.0025
-    nx, ny, nz = 10,10,10 #512, 256, 1000
+    nx, ny, nz =  512, 256, 1000
     dt = 6.0e-6
     t_final = 1.2e-2
     # Material properties

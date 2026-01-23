@@ -86,12 +86,14 @@ class IOParams:
 
 @dataclass
 class SimulationContext:
-    """Unified context object holding all simulation configurations."""
-    num: NumParams
-    mat: MaterialParams
-    geom: GeomParams
-    laser: LaserParams
-    io: IOParams  # Added IO configuration
-
-    # laser_path will be injected separately or added here if it's a strongly typed object
+    """Aggregate context holding all simulation parameters."""
+    num: 'NumParams'
+    mat: 'MaterialParams'
+    geom: 'GeomParams'
+    laser: 'LaserParams'
+    io: 'IOParams'
     laser_path: Any = None
+    
+    # Execution configuration
+    method: str = "spectral"  # "spectral" or "fem"
+    backend: str = "cpu"      # "cpu" or "gpu"

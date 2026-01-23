@@ -3,11 +3,11 @@ A semi analytical solution for the heat equation
 
 ## Proposed Architecture (Refactoring)
 
-The project is moving towards a modular architecture based on the **Abstract Factory** pattern to decouple the high-level workflow from the specific implementations (CPU/GPU backends, different solver strategies).
+The project is moving towards a modular architecture based on the **Abstract Factory** pattern to decouple the high-level workflow from the specific implementations (CPU/GPU backends, distinct numerical methods like Spectral or FEM).
 
 ### File Structure
 
-The proposed directory structure separates core interfaces, strategies, and backend-specific implementations, along with dedicated folders for configuration and path data:
+The layout separates core logic, concrete implementations, and simulation data/outputs:
 
 ```
 fastHeatSolv/
@@ -34,16 +34,20 @@ fastHeatSolv/
 │   └── solver.py               # [Abstract Product] Interface for HeatSolver.
 ├── implementations/
 │   ├── factories/
-│   │   ├── cpu_factory.py      # [Concrete Factory] Creates CPUSimulationFactory.
+│   │ ├── cpu_factory.py        # [Concrete Factory] Creates SpectralSolverCPU and LocalFSIOManager.
+│   │ ├── gpu_factory.py        # [Concrete Factory] Creates SpectralSolverGPU and LocalFSIOManager.
+│   │ └── fem_factory.py        # [Concrete Factory] Creates FEMSolver and LocalFSIOManager.
 │   ├── solvers/
-│   │   ├── spectral_cpu.py     # [Concrete Product] CPU-based Spectral Solver.
+│   │ ├── spectral_cpu.py       # [Concrete Product] CPU-based Spectral Solver (numba).
+│   │ ├── spectral_gpu.py       # [Concrete Product] GPU-based Spectral Solver (cupy).
+│   │ └── fem_solver.py         # [Concrete Product] FEM Wrapper (FEniCS/Ansys) adhering to HeatSolver interface.
 │   ├── file_io/                # Concrete IO implementations
 │   │   └── fs_io.py            # [Concrete Product] Local file system IO manager.
 │   └── physics/
 │       └── kernels.py          # Low-level physical laws (Latent heat, evaporation)
 |                                 implementation agnostic or specific.
 └── utils/
-    └── helpers.py              # Shared mathematical utilities (DCT, grid          
+    └── spectral_helpers.py     # Shared mathematical utilities (DCT, grid          
     |                           #   manipulation).
     └── visualisation.py        # Viz utilities to be used standalone or defined in YAML
 ```
@@ -79,14 +83,21 @@ To clean up parameter passing and enable complex laser paths (like those defined
 
 ### 1. Configuration Structure (YAML Example)
 
-Instead of hardcoding values in python scripts, a job is defined by a config file:
+Jobs are defined by a config file where you can now select the simulation **method** (algorithm) and **backend** (hardware).
 
 ```yaml
 simulation:
   name: "single_track_test"
-  duration: auto               # or explicit seconds. "auto" implies deriving from G-code path
+  method: "spectral"          # Options: "spectral", "fem"
+  backend: "cpu"              # Options: "cpu", "gpu" (only compatible with spectral)
+  duration: auto              # or explicit seconds
   dt: 1.0e-5
   output_interval: 1.0e-3
+  
+  # IO Settings
+  output_root: "./out"
+  run_tag: "validation_run"
+  save_full_fields: false      # Set to true to dump heavy .h5 files
 
 domain:
   size: [0.02, 0.01, 0.005]    # [Lx, Ly, Lz] in meters
@@ -147,11 +158,15 @@ All configuration sections are deserialized into a unified `SimulationContext` o
 ```python
 @dataclass
 class SimulationContext:
-    num: NumericalParams
+    num: NumParams
     geom: GeomParams
     mat: MaterialParams
     laser_path: LaserPath  # The initialized path strategy object
     io: IOParams # Configuration for output behavior
+    
+    # Execution Config
+    method: str = "spectral"
+    backend: str = "cpu"
 ```
 
 This ensures that the Solver (Product) logic remains pure:

@@ -83,31 +83,8 @@ def C_coef(N, L, xp=np):
     C[0] = xp.sqrt(1.0 / L)
     return C
 
-
 # ============================================================
-#   ETD PHI FUNCTIONS
-# ============================================================
-
-def phi_functions(z):
-    """ Functions used for the time stepping, taking into account exponential decay"""
-    xp = get_array_module(z)
-    small_threshold = 1e-6
-    phi_0 = xp.exp(z)
-    
-    mask_small = xp.abs(z) < small_threshold
-    phi_1 = xp.zeros_like(z)
-    phi_1[~mask_small] = (xp.exp(z[~mask_small]) - 1.0) / z[~mask_small]
-    phi_1[mask_small] = 1.0 + z[mask_small] / 2.0 + z[mask_small]**2 / 6.0
-    
-    phi_2 = xp.zeros_like(z)
-    phi_2[~mask_small] = (xp.exp(z[~mask_small]) - 1.0 - z[~mask_small]) / (z[~mask_small]**2)
-    phi_2[mask_small] = 0.5 + z[mask_small] / 6.0 + z[mask_small]**2 / 24.0
-    
-    return phi_0, phi_1, phi_2
-
-
-# ============================================================
-#   HEAT FLUX
+#   PHYSICAL HEAT FLUX HELPERS
 # ============================================================
 
 def q_laser(SsState, laser):
@@ -117,27 +94,15 @@ def q_laser(SsState, laser):
     return (laser.laser_coef * xp.exp(-2.0 * r_sq / laser.r_b ** 2)).astype(np.float32)
 
 
-def q_evap_point(T: np.ndarray, phys) -> np.ndarray:
+def compute_evaporation_flux(T_surface, q_out, P0, R, T_boil, DeltaH_LV, R_v, T_liquidus) -> np.ndarray:
     """Evaporative heat flux."""
-    xp = get_array_module(T)
-    q = 0.82 * phys.DeltaH_LV * phys.Pa/ xp.sqrt(2 * np.pi * phys.R_v * T) * \
-        xp.exp((phys.DeltaH_LV / (phys.R_v * phys.T_boil)) * (1.0 - phys.T_boil / T))
-    q[T < phys.T_liquidus] = 0.0
+    xp = get_array_module(T_surface)
+    q = 0.82 * DeltaH_LV * P0 / xp.sqrt(2 * np.pi * R_v * T_surface) * \
+        xp.exp((DeltaH_LV / (R_v * T_boil)) * (1.0 - T_boil / T_surface))
+    q[T_surface < T_liquidus] = 0.0
     return q.astype(np.float32)
 
 
-def shift_flux(field: np.ndarray, shift: tuple, geom) -> np.ndarray:
-    """Translate a surface flux field by ``shift=(dx, dy)`` meters."""
-    xp = get_array_module(field)
-    if field is None or field.size == 0:
-        return xp.zeros((geom.ny, geom.nx), dtype=np.float32)
-    dx, dy = shift
-    shift_pixels = (dy / geom.dy, dx / geom.dx)
-    
-    if cp is not None and xp == cp:
-        return cupy_ndimage.shift(field, shift_pixels, order=1, mode='constant', cval=0.0).astype(np.float32)
-    
-    return scipy_shift(field, shift_pixels, order=1, mode='constant', cval=0.0).astype(np.float32) 
 
 
 # ============================================================
@@ -218,9 +183,54 @@ def compute_latent_heat_source(Q_buffer, phys, laser, geom, num, SsState, alpha=
     SsState.laser_x_prev = laser.x
     SsState.laser_y_prev = laser.y
 
+
 # ============================================================
 #   SPECTRAL SPECIFIC HELPERS
 # ============================================================
+
+# ============================================================
+#   SPECTRAL PROPAGATOR PRECOMPUTE
+# ============================================================
+
+
+def precompute_K_KK(phys, num, geom):
+    """Compute spectral propagators (K, KK) for heat equation."""
+    m, n, p = np.arange(num.nx)[None, None, :], np.arange(num.ny)[None, :, None], np.arange(num.nz)[:, None, None]
+    mu = (m * np.pi / geom.Lx)**2 + (n * np.pi / geom.Ly)**2 + (p * np.pi / geom.Lz)**2
+    lambda_j = (phys.k / (phys.rho * phys.Ceff)) * mu
+
+    K = np.exp(-lambda_j * num.dt)
+    K[0, 0, 0] = 1.0
+    KK = np.zeros_like(K)
+    mask = lambda_j > 0
+    KK[mask] = (1 - K[mask]) / (phys.rho * phys.Ceff * lambda_j[mask])
+    KK[~mask] = num.dt / (phys.rho * phys.Ceff) # Limit for lambda -> 0
+      
+    return K.astype(np.float32), KK.astype(np.float32)
+
+
+# ============================================================
+#  NUMBA KERNELS
+# ============================================================
+
+@njit(parallel=True, fastmath=True)
+def compute_a_temp_numba(aK, KK_by_Cp, B_scaled, a_temp_out):
+    """Update spectral coefficients for ETD1 scheme."""
+    nz = aK.shape[0]
+    for p in prange(nz):
+        a_temp_out[p, :, :] = aK[p, :, :] + KK_by_Cp[p, :, :] * B_scaled
+
+@njit(parallel=True, fastmath=True)
+def add_source_term_numba(a_temp, KK, Q_modes):
+    """
+    Add volumetric source term to temperature modes.
+    a_temp += KK * Q_modes
+    """
+    nz = a_temp.shape[0]
+    for p in prange(nz):
+        for i in range(a_temp.shape[1]):
+            for j in range(a_temp.shape[2]):
+                a_temp[p, i, j] += KK[p, i, j] * Q_modes[p, i, j]
 
 # ============================================================
 #   GEOMETRY HELPERS
@@ -269,6 +279,22 @@ def update_fine_mesh(SsState, laser):
     SsState.By_fine[:, :] = SsState.By_fine_full[:, iy_start:iy_end]
     SsState.dV_fine = SsState.dx_fine * SsState.dy_fine * SsState.dz_fine
     SsState.fine_mesh_initialized = True
+
+
+def shift_flux(field: np.ndarray, shift: tuple, geom) -> np.ndarray:
+    """Translate a surface flux field by ``shift=(dx, dy)`` meters."""
+    xp = get_array_module(field)
+    if field is None or field.size == 0:
+        return xp.zeros((geom.ny, geom.nx), dtype=np.float32)
+    dx, dy = shift
+    shift_pixels = (dy / geom.dy, dx / geom.dx)
+    
+    if cp is not None and xp == cp:
+        return cupy_ndimage.shift(field, shift_pixels, order=1, mode='constant', cval=0.0).astype(np.float32)
+    
+    return scipy_shift(field, shift_pixels, order=1, mode='constant', cval=0.0).astype(np.float32) 
+
+
 
 # ============================================================
 #  TEMPERATURE HELPER FUNCTIONS
@@ -553,47 +579,3 @@ def box_field_to_modes(field_box, SsState):
     modes *= SsState.dV_fine
     return modes.astype(np.float32)
 
-# ============================================================
-#   KERNEL ABSTRACTIONS
-#   (These handle CPU/GPU dispatch for loop-heavy operations)
-# ============================================================
-
-@njit(parallel=True, fastmath=True)
-def _compute_a_temp_numba(aK, KK_by_Cp, B_scaled, a_temp_out):
-    nz = aK.shape[0]
-    for p in prange(nz):
-        a_temp_out[p, :, :] = aK[p, :, :] + KK_by_Cp[p, :, :] * B_scaled
-
-@njit(parallel=True, fastmath=True)
-def _add_source_term_numba(a_temp, KK, Q_modes):
-    nz = a_temp.shape[0]
-    for p in prange(nz):
-        for i in range(a_temp.shape[1]):
-            for j in range(a_temp.shape[2]):
-                a_temp[p, i, j] += KK[p, i, j] * Q_modes[p, i, j]
-
-def compute_a_temp(aK, KK_by_Cp, B_scaled, a_temp_out):
-    """
-    Update spectral coefficients for ETD1 scheme.
-    a_temp_out = aK + KK_by_Cp * B_scaled (with appropriate broadcasting)
-    """
-    xp = get_array_module(aK)
-    if xp is np:
-        _compute_a_temp_numba(aK, KK_by_Cp, B_scaled, a_temp_out)
-    else:
-        # GPU / CuPy: Generic broadcasting logic
-        # B_scaled is 2D (ny, nx), needs to broadcast over Z axis (dim 0)
-        # aK and KK_by_Cp are 3D (nz, ny, nx)
-        xp.add(aK, KK_by_Cp * B_scaled[None, :, :], out=a_temp_out)
-
-def add_source_term(a_temp, KK, Q_modes):
-    """
-    Add volumetric source term to temperature modes.
-    a_temp += KK * Q_modes
-    """
-    xp = get_array_module(a_temp)
-    if xp is np:
-        _add_source_term_numba(a_temp, KK, Q_modes)
-    else:
-        # Element-wise addition for GPU
-        xp.add(a_temp, KK * Q_modes, out=a_temp)
