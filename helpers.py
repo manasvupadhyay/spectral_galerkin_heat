@@ -110,11 +110,11 @@ def phi_functions(z):
 #   HEAT FLUX
 # ============================================================
 
-def q_laser(geom, laser):
+def q_laser(SsState, laser):
     """Gaussian laser heat flux using current Laser position (laser.x, laser.y)."""
-    xp = get_array_module(geom.X)
-    r_sq = (geom.X - laser.x) ** 2 + (geom.Y - laser.y) ** 2
-    return (geom.laser_coef * xp.exp(-2.0 * r_sq / laser.r_b ** 2)).astype(np.float32)
+    xp = get_array_module(SsState.X)
+    r_sq = (SsState.X - laser.x) ** 2 + (SsState.Y - laser.y) ** 2
+    return (laser.laser_coef * xp.exp(-2.0 * r_sq / laser.r_b ** 2)).astype(np.float32)
 
 
 def q_evap_point(T: np.ndarray, phys) -> np.ndarray:
@@ -141,17 +141,6 @@ def shift_flux(field: np.ndarray, shift: tuple, geom) -> np.ndarray:
 
 
 # ============================================================
-#   DCT-II 2D 
-# ============================================================
-
-def DCT_II(q):
-    xp = get_array_module(q)
-    if cp is not None and xp == cp:
-        # Cupy DCT does not support 'workers' argument
-        return cupy_fft.dctn(q, type=2, norm='ortho').astype(np.float32, copy=False)
-    return dctn(q.astype(np.float32, copy=False), type=2, norm='ortho', workers=-1).astype(np.float32, copy=False)
-
-# ============================================================
 #   LATENT HEAT SOURCE HELPERS
 # ============================================================
 
@@ -173,42 +162,44 @@ def _compute_source_term_from_temperature(T_curr, T_prev, T_S, T_L, rho, L, dt, 
                 else:
                     out[k, j, i] = 0.0
 
-def compute_latent_heat_source(Q_buffer, box_coords, phys, laser, geom, num, alpha=0.4):
+
+
+def compute_latent_heat_source(Q_buffer, phys, laser, geom, num, SsState, alpha=0.4):
     """
     Compute volumetric latent heat source Q (W/m^3) using temperature derivative.
     Equation: Q = - rho * L * (1/DeltaT) * (dT/dt) * Indicator
     Applies under-relaxation: Q_applied = alpha * Q_new + (1-alpha) * Q_old
     """
     # 1. Reconstruct Temperature on Fine Mesh
-    T_box, _ = reconstruct_temperature_box(num.a_temp, num, geom)
+    T_box, _ = reconstruct_temperature_box(SsState.a_temp, SsState)
     
     # 2. Initialize/Retrieve State buffers
-    if not hasattr(num, 'T_prev'):
-        num.T_prev = np.zeros_like(T_box)
-        num.T_prev[:] = T_box[:] # Initialize with current T
+    if not hasattr(SsState, 'T_prev'):
+        SsState.T_prev = np.zeros_like(T_box)
+        SsState.T_prev[:] = T_box[:] # Initialize with current T
         
         # Initialize Previous Q for relaxation
-        num.Q_prev = np.zeros_like(Q_buffer)
+        SsState.Q_prev = np.zeros_like(Q_buffer)
         
-        num.laser_x_prev = laser.x
-        num.laser_y_prev = laser.y
+        SsState.laser_x_prev = laser.x
+        SsState.laser_y_prev = laser.y
         Q_buffer.fill(0.0)
         return
 
     # 3. Shift Previous Fields to Current Frame
     # The grid has moved by (dx_shift, dy_shift)
-    shift_x = laser.x - num.laser_x_prev
-    shift_y = laser.y - num.laser_y_prev
+    shift_x = laser.x - SsState.laser_x_prev
+    shift_y = laser.y - SsState.laser_y_prev
     
     # Calculate shift in pixels (shift > 0 means grid moved right, so we look left into old array)
-    shift_pixels = (0, -shift_y / geom.dy_fine, -shift_x / geom.dx_fine)
+    shift_pixels = (0, -shift_y / SsState.dy_fine, -shift_x / SsState.dx_fine)
     
     # Shift Temperature (continuous field, use order=1)
-    T_prev_aligned = scipy_shift(num.T_prev, shift_pixels, order=1, mode='nearest')
+    T_prev_aligned = scipy_shift(SsState.T_prev, shift_pixels, order=1, mode='nearest')
     
     # Shift Previous Q (source term, use constant fill for outside)
-    if not hasattr(num, 'Q_prev'): num.Q_prev = np.zeros_like(Q_buffer)
-    Q_prev_aligned = scipy_shift(num.Q_prev, shift_pixels, order=1, mode='constant', cval=0.0)
+    if not hasattr(SsState, 'Q_prev'): SsState.Q_prev = np.zeros_like(Q_buffer)
+    Q_prev_aligned = scipy_shift(SsState.Q_prev, shift_pixels, order=1, mode='constant', cval=0.0)
     
     # 4. Compute Source Term (New)
     _compute_source_term_from_temperature(T_box, T_prev_aligned, 
@@ -222,22 +213,80 @@ def compute_latent_heat_source(Q_buffer, box_coords, phys, laser, geom, num, alp
         Q_buffer[:] = alpha * Q_buffer + (1.0 - alpha) * Q_prev_aligned
     
     # 6. Update History
-    num.T_prev[:] = T_box[:]
-    num.Q_prev[:] = Q_buffer[:] # Store the applied Q
-    num.laser_x_prev = laser.x
-    num.laser_y_prev = laser.y
-
+    SsState.T_prev[:] = T_box[:]
+    SsState.Q_prev[:] = Q_buffer[:] # Store the applied Q
+    SsState.laser_x_prev = laser.x
+    SsState.laser_y_prev = laser.y
 
 # ============================================================
-#   RECONSTRUCT TEMPERATURE FIELDS HELPER FUNCTIONS
+#   SPECTRAL SPECIFIC HELPERS
 # ============================================================
 
-def reconstruct_temperature_box(a, num, geom, symmetrize=False):
+# ============================================================
+#   GEOMETRY HELPERS
+# ============================================================
+
+def check_resolution(laser, num, geom):
+    """Check if spatial and temporal resolutions are sufficient."""
+    dx_rb, dy_rb = geom.dx / laser.r_b, geom.dy / laser.r_b
+    v_mag = np.linalg.norm(laser.v)
+    v_crit = v_mag / (10 * geom.dx / num.dt) if v_mag > 0 else 0
+    
+    print(f"Resolution: dx/rb={dx_rb:.2f}, dy/rb={dy_rb:.2f}, v_crit={v_crit:.2f}")
+    if dx_rb > 0.4 or dy_rb > 0.4: print("WARNING: Spatial resolution insufficient!")
+    if v_crit > 1.0: print("WARNING: Laser moves too fast for time step!")
+
+def update_fine_mesh(SsState, laser):
+    """Update fine mesh box so the laser sits in the middle."""
+    target_ix = int(round(0.5 * (SsState.nx_box - 1)))
+    laser_ix_global = int(round(np.clip(laser.x / SsState.dx_fine, 0.0, SsState.nx_fine_total - 1)))
+    ix_start = laser_ix_global - target_ix
+    max_ix_start = max(0, SsState.nx_fine_total - SsState.nx_box)
+    if ix_start < 0:
+        ix_start = 0
+    elif ix_start > max_ix_start:
+        ix_start = max_ix_start
+    ix_end = ix_start + SsState.nx_box
+
+    SsState.box_x[:] = SsState.x_fine[ix_start:ix_end]
+    SsState.Bx_fine.fill(0.0)
+    SsState.Bx_fine[:, :] = SsState.Bx_fine_full[:, ix_start:ix_end]
+    SsState.ix_laser_box = laser_ix_global - ix_start
+    SsState.ix_laser_box = max(0, min(SsState.ix_laser_box, SsState.nx_box - 1))
+
+    half_box = SsState.ny_box // 2
+    laser_iy_global = int(round(np.clip(laser.y / SsState.dy_fine, 0.0, SsState.ny_fine_total - 1)))
+    iy_start = laser_iy_global - half_box
+    max_iy_start = max(0, SsState.ny_fine_total - SsState.ny_box)
+    if iy_start < 0:
+        iy_start = 0
+    elif iy_start > max_iy_start:
+        iy_start = max_iy_start
+    iy_end = iy_start + SsState.ny_box
+
+    SsState.box_y[:] = SsState.y_fine[iy_start:iy_end]
+    SsState.By_fine.fill(0.0)
+    SsState.By_fine[:, :] = SsState.By_fine_full[:, iy_start:iy_end]
+    SsState.dV_fine = SsState.dx_fine * SsState.dy_fine * SsState.dz_fine
+    SsState.fine_mesh_initialized = True
+
+# ============================================================
+#  TEMPERATURE HELPER FUNCTIONS
+# ============================================================
+
+def DCT_II(q):
+    xp = get_array_module(q)
+    if cp is not None and xp == cp:
+        # Cupy DCT does not support 'workers' argument
+        return cupy_fft.dctn(q, type=2, norm='ortho').astype(np.float32, copy=False)
+    return dctn(q.astype(np.float32, copy=False), type=2, norm='ortho', workers=-1).astype(np.float32, copy=False)
+
+def reconstruct_temperature_box(a, SsState):
     """
     Reconstructs temperature in a small ROI around the laser using 
     precomputed fine mesh cosine bases from geom.
     """
-    if not geom.fine_mesh_initialized:
+    if not SsState.fine_mesh_initialized:
         raise RuntimeError("Fine mesh not initialized. Call geom.update_fine_mesh(laser) first.")
     
     xp = get_array_module(a)
@@ -246,23 +295,21 @@ def reconstruct_temperature_box(a, num, geom, symmetrize=False):
     # T(x,y,z) = sum_p sum_n sum_m  a[p,n,m] * Bz[p,z] * By[n,y] * Bx[m,x]
     
     # 1. Contract Z: (nz, ny, nx) . (nz, nz_box) -> (ny, nx, nz_box)
-    T_step1 = xp.tensordot(a, geom.Bz_fine, axes=(0, 0))
-    
+    T_step1 = xp.tensordot(a, SsState.Bz_fine, axes=(0, 0))
     # 2. Contract Y: (ny, nx, nz_box) . (ny, ny_box) -> (nx, nz_box, ny_box)
-    T_step2 = xp.tensordot(T_step1, geom.By_fine, axes=(0, 0))
-    
+    T_step2 = xp.tensordot(T_step1, SsState.By_fine, axes=(0, 0))
     # 3. Contract X: (nx, nz_box, ny_box) . (nx, nx_box) -> (nz_box, ny_box, nx_box)
-    T_box = xp.tensordot(T_step2, geom.Bx_fine, axes=(0, 0))
+    T_box = xp.tensordot(T_step2, SsState.Bx_fine, axes=(0, 0))
     
-    return T_box.astype(np.float32), (geom.box_x, geom.box_y, geom.box_z)
+    return T_box.astype(np.float32), (SsState.box_x, SsState.box_y, SsState.box_z)
 
 
-def reconstruct_temperature_top(a, num, geom):
+def reconstruct_temperature_top(a, SsState):
     """Reconstruct top surface temperature from modal coefficients."""
-    A = (geom.Cp32[:, None, None] * a).sum(axis=0)
-    return (geom.recon_scale * dctn(A, type=3, norm='ortho', axes=(0, 1), workers=-1)).astype(np.float32, copy=False)
+    A = (SsState.Cp32[:, None, None] * a).sum(axis=0)
+    return (SsState.recon_scale * dctn(A, type=3, norm='ortho', axes=(0, 1), workers=-1)).astype(np.float32, copy=False)
 
-def reconstruct_temperature_xz(a, num, geom, phys, laser, y0=None):
+def reconstruct_temperature_xz(a, num, geom, SsState, laser, y0=None):
     """
     Optimized reconstruction of X-Z temperature slice using FFTW/DCT.
     Returns (x_vals, z_vals, T_xz).
@@ -270,7 +317,7 @@ def reconstruct_temperature_xz(a, num, geom, phys, laser, y0=None):
     y0 = laser.y0
     nx, ny, nz = num.nx, num.ny, num.nz
     # Evaluate cosine basis at specific y0 (ny,)
-    cos_y = geom.Cn * np.cos(np.pi * np.arange(ny) * y0 / geom.Ly)
+    cos_y = SsState.Cn * np.cos(np.pi * np.arange(ny) * y0 / geom.Ly)
     # Contract Y axis: (nz, ny, nx) dot (ny,)
     A_xz = np.tensordot(a, cos_y, axes=(1, 0)) 
     # Reconstruct X-Z field using 2D IDCT (Type 3)
@@ -279,15 +326,13 @@ def reconstruct_temperature_xz(a, num, geom, phys, laser, y0=None):
     
     return geom.x, geom.z, T_xz.astype(np.float32)
 
-
-
-def reconstruct_temperature_volume(a, num, geom):
+def reconstruct_temperature_volume(a, SsState):
     """Reconstruct the temperature field on the full simulation grid."""
     xp = get_array_module(a)
     # To be implemented later, proper DCT-based reconstruction for full volume
-    Bx = (geom.Cm[:, None] * geom.cos_mx).astype(np.float32)
-    By = (geom.Cn[:, None] * geom.cos_ny).astype(np.float32)
-    Bz = (geom.Cp[:, None] * geom.cos_pz).astype(np.float32)
+    Bx = (SsState.Cm[:, None] * SsState.cos_mx).astype(np.float32)
+    By = (SsState.Cn[:, None] * SsState.cos_ny).astype(np.float32)
+    Bz = (SsState.Cp[:, None] * SsState.cos_pz).astype(np.float32)
 
     T_step1 = xp.tensordot(a, Bx, axes=(2, 0))  # (nz, ny, nx)
     T_step2 = xp.tensordot(T_step1, By, axes=(1, 0))  # (nz, nx, ny)
@@ -303,7 +348,7 @@ def _cosine_basis_along_axis(n_modes, length, coords):
     return np.cos(np.pi * indices[:, None] * coords[None, :] / length)
 
 
-def reconstruct_temperature_volume_at_points(a, num, geom, coords):
+def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
     """Evaluate the temperature field at arbitrary points using modal expansion."""
     coords = np.asarray(coords, dtype=np.float64)
     if coords.ndim != 2 or coords.shape[1] != 3:
@@ -313,15 +358,15 @@ def reconstruct_temperature_volume_at_points(a, num, geom, coords):
     y_vals = np.clip(coords[:, 1], 0.0, geom.Ly)
     z_vals = np.clip(coords[:, 2], 0.0, geom.Lz)
 
-    Bx = (geom.Cm[:, None] * _cosine_basis_along_axis(num.nx, geom.Lx, x_vals)).astype(np.float64)
-    By = (geom.Cn[:, None] * _cosine_basis_along_axis(num.ny, geom.Ly, y_vals)).astype(np.float64)
-    Bz = (geom.Cp[:, None] * _cosine_basis_along_axis(num.nz, geom.Lz, z_vals)).astype(np.float64)
+    Bx = (SsState.Cm[:, None] * _cosine_basis_along_axis(num.nx, geom.Lx, x_vals)).astype(np.float64)
+    By = (SsState.Cn[:, None] * _cosine_basis_along_axis(num.ny, geom.Ly, y_vals)).astype(np.float64)
+    Bz = (SsState.Cp[:, None] * _cosine_basis_along_axis(num.nz, geom.Lz, z_vals)).astype(np.float64)
 
     temps = np.einsum('pnm,pi,ni,mi->i', a.astype(np.float64), Bz, By, Bx, optimize=True)
 
     return temps.astype(np.float32)
 
-def save_temp_profiles(a, num, geom, phys, laser, t=None, center="laser"):
+def save_temp_profiles(a, num, geom, SsState, laser, t=None, center="laser"):
     """
     Save 1D temperature profiles intersecting at the specified center.
     Coordinates generated start at 0.0 (aligned with save_temp_profiles_fine).
@@ -363,9 +408,9 @@ def save_temp_profiles(a, num, geom, phys, laser, t=None, center="laser"):
 
     # Pre-multiply by Normalization Coefficients C_k
     # Effective projection vector K = C_k * phi_c
-    Kx_c = phi_x_c * geom.Cm
-    Ky_c = phi_y_c * geom.Cn
-    Kz_c = phi_z_c * geom.Cp
+    Kx_c = phi_x_c * SsState.Cm
+    Ky_c = phi_y_c * SsState.Cn
+    Kz_c = phi_z_c * SsState.Cp
 
     # --- X Profile ( at y=y_c, z=z_top ) ---
     # T(x) = sum_m [ sum_n sum_p a_pnm * Kz_p * Ky_n ] * (Cm_m * cos_m(x))
@@ -375,7 +420,7 @@ def save_temp_profiles(a, num, geom, phys, laser, t=None, center="laser"):
     a_x = np.dot(Ky_c, a_yx)
     # 3. Evaluate along line
     Bx_line = eval_cos(num.nx, geom.Lx, x_line) # (nx, points)
-    T_x = (a_x * geom.Cm) @ Bx_line
+    T_x = (a_x * SsState.Cm) @ Bx_line
 
     # --- Y Profile ( at x=x_c, z=z_top ) ---
     # Use a_yx from above
@@ -383,7 +428,7 @@ def save_temp_profiles(a, num, geom, phys, laser, t=None, center="laser"):
     a_y = np.dot(a_yx, Kx_c)
     # 2. Evaluate along line
     By_line = eval_cos(num.ny, geom.Ly, y_line)
-    T_y = (a_y * geom.Cn) @ By_line
+    T_y = (a_y * SsState.Cn) @ By_line
 
     # --- Z Profile ( at x=x_c, y=y_c ) ---
     # 1. Contract X (axis 2 of a): Result (nz, ny)
@@ -392,7 +437,7 @@ def save_temp_profiles(a, num, geom, phys, laser, t=None, center="laser"):
     a_z = np.dot(a_zy, Ky_c)
     # 3. Evaluate along line
     Bz_line = eval_cos(num.nz, geom.Lz, z_line)
-    T_z = (a_z * geom.Cp) @ Bz_line
+    T_z = (a_z * SsState.Cp) @ Bz_line
 
     # 4. Save
     for direction, coords, profile in [
@@ -409,6 +454,7 @@ def save_temp_profiles_fine(
     a=None,
     num=None,
     geom=None,
+    SsState=None,
     laser=None,
     coords_x=None,
     coords_y=None,
@@ -424,9 +470,9 @@ def save_temp_profiles_fine(
     Provide either (a, num, geom) for exact modal evaluation or (volume, grid_coords).
     """
     if volume is None:
-        if any(v is None for v in (a, num, geom)):
-            raise ValueError("Provide modal data (a, num, geom) when volume is not supplied.")
-        x_axis, y_axis, z_axis = geom.x, geom.y, geom.z
+        if any(v is None for v in (a, num, SsState)):
+            raise ValueError("Provide modal data (a, num, SsState) when volume is not supplied.")
+        x_axis, y_axis, z_axis = SsState.x, SsState.y, SsState.z
     else:
         if grid_coords is None:
             raise ValueError("grid_coords must be provided with volume data.")
@@ -441,7 +487,7 @@ def save_temp_profiles_fine(
 
     if center == "hotspot":
         if volume is None:
-            T_top = reconstruct_temperature_top(a, num, geom)
+            T_top = reconstruct_temperature_top(a, SsState)
         else:
             T_top = volume[top_idx, :, :]
         iy_idx, ix_idx = np.unravel_index(np.nanargmax(T_top), T_top.shape)
@@ -465,9 +511,9 @@ def save_temp_profiles_fine(
     points_z = np.column_stack((np.full_like(coords_z, x_center), np.full_like(coords_z, y_center), coords_z))
 
     if volume is None:
-        T_x = reconstruct_temperature_volume_at_points(a, num, geom, points_x)
-        T_y = reconstruct_temperature_volume_at_points(a, num, geom, points_y)
-        T_z = reconstruct_temperature_volume_at_points(a, num, geom, points_z)
+        T_x = reconstruct_temperature_volume_at_points(a, num, geom,  SsState, points_x)
+        T_y = reconstruct_temperature_volume_at_points(a, num, geom,  SsState, points_y)
+        T_z = reconstruct_temperature_volume_at_points(a, num, geom,  SsState, points_z)
     else:
         interpolator = RegularGridInterpolator((z_axis, y_axis, x_axis), volume.astype(np.float64), bounds_error=False, fill_value=np.nan)
         T_x = interpolator(points_x[:, [2, 1, 0]]).astype(np.float32)
@@ -485,31 +531,26 @@ def save_temp_profiles_fine(
         np.savetxt(fname, np.vstack([coords, profile]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
         print(f"Saved fine profile: {fname}")
 
-def box_field_to_modes(field_box, geom):
+def box_field_to_modes(field_box, SsState):
     """
     Convert a field defined in the fine box (e.g. Q_latent) to global spectral modes.
     Input field_box is (nz_box, ny_box, nx_box) [ZYX layout].
     Returns modes in (nz, ny, nx).
     """
-    if not geom.fine_mesh_initialized:
+    if not SsState.fine_mesh_initialized:
         raise RuntimeError("Fine mesh not initialized. Call geom.update_fine_mesh(laser) first.")
     
     xp = get_array_module(field_box)
     
     # Direct tensor contraction avoiding intermediate reshapes/transposes
-    
     # 1. Contract Z_box: (nz_box, ny_box, nx_box) . (nz, nz_box) -> (ny_box, nx_box, nz)
-    temp1 = xp.tensordot(field_box, geom.Bz_fine, axes=(0, 1))
-    
+    temp1 = xp.tensordot(field_box, SsState.Bz_fine, axes=(0, 1))
     # 2. Contract Y_box: (ny_box, nx_box, nz) . (ny, ny_box) -> (nx, nz_box, ny_box)
-    temp2 = xp.tensordot(temp1, geom.By_fine, axes=(0, 1))
-    
+    temp2 = xp.tensordot(temp1, SsState.By_fine, axes=(0, 1))
     # 3. Contract X_box: (nx_box, nz, ny) . (nx, nx_box) -> (nz, ny, nx)
-    modes = xp.tensordot(temp2, geom.Bx_fine, axes=(0, 1))
-    
+    modes = xp.tensordot(temp2, SsState.Bx_fine, axes=(0, 1))
     # Multiply by dV for the numerical integration
-    modes *= geom.dV_fine
-    
+    modes *= SsState.dV_fine
     return modes.astype(np.float32)
 
 # ============================================================

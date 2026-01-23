@@ -181,3 +181,19 @@ Goal: Use the new loader to cleanly access data.
 
 Update comparison.py to use the helper functions from Step 5 instead of iterating raw filenames manually.
 Allow passing a specific run_id to compare against.
+
+
+def prepare_K_buffers(self, phys, geom):
+        """Precompute spectral propagators and allocate buffers."""
+        print(f"Precomputing K, KK... ")
+        self.K, self.KK = precompute_K_KK(phys, self, geom)
+        self.KK_by_Cp = (self.KK * geom.Cp[:, None, None]).astype(np.float32) # Projected on x,y plane
+        
+        # Allocate working arrays
+        self.q_diff = np.empty((self.ny, self.nx), dtype=np.float32)
+        self.B_buffer = np.empty((self.ny, self.nx), dtype=np.float32)
+        self.a_temp = np.empty((self.nz, self.ny, self.nx), dtype=np.float32)
+        self.aK = np.empty((self.nz, self.ny, self.nx), dtype=np.float32)
+        self.q_evap_old = np.zeros((self.ny, self.nx), dtype=np.float32)
+        # ZYX layout for contiguous X-scanning
+        self.Q_latent_buffer = np.zeros((geom.nz_box, geom.ny_box, geom.nx_box), dtype=np.float32)
