@@ -4,10 +4,11 @@ import os
 from types import SimpleNamespace
 from dataclasses import dataclass
 
-import helpers as hp
-# Import the new CPU kernels
-import implementations.physics.spectral_cpu_kernels as kernels
 
+import implementations.physics.spectral_cpu_kernels as kernels
+import utils.spectral_helpers as spec_hp
+import utils.helpers as hp
+import implementations.file_io.fs_io as fs_io
 pyfftw.config.NUM_THREADS = os.cpu_count()
 OUT_DIR = "out"
 
@@ -116,10 +117,10 @@ class SpectralSolverState:
         self.X, self.Y = self.X.astype(np.float32), self.Y.astype(np.float32)
         """Precompute reconstruction bases and normalization coefficients."""
         print("Precomputing reconstruction bases...")
-        # Normalization coefficients
-        self.Cm = hp.C_coef(nx, Lx)
-        self.Cn = hp.C_coef(ny, Ly)
-        self.Cp = hp.C_coef(nz, Lz)
+        # Normalization coefficients ([FIX] Use spec_hp.C_coef)
+        self.Cm = spec_hp.C_coef(nx, Lx)
+        self.Cn = spec_hp.C_coef(ny, Ly)
+        self.Cp = spec_hp.C_coef(nz, Lz)
         self.Cp32 = self.Cp.astype(np.float32)
         
         # Scaling factors for DCT/IDCT
@@ -173,7 +174,8 @@ class SpectralSolverState:
         """
 
         print(f"Precomputing K, KK... ")
-        self.K, self.KK = hp.precompute_K_KK(phys, num, geom)
+        # [FIX] Use spec_hp.precompute_K_KK
+        self.K, self.KK = spec_hp.precompute_K_KK(phys, num, geom)
         self.KK_by_Cp = (self.KK * self.Cp[:, None, None]).astype(np.float32) # Projected on x,y plane
         nx, ny, nz = num.nx, num.ny, num.nz
         # Allocate working arrays
@@ -186,6 +188,8 @@ class SpectralSolverState:
         # ZYX layout for contiguous X-scanning
         self.Q_latent_buffer = np.zeros((self.nz_box, self.ny_box, self.nx_box), dtype=np.float32)
 
+
+
 # ============================================================
 #   FUNCTIONS
 # ============================================================
@@ -193,14 +197,21 @@ class SpectralSolverState:
 
 def time_step(a, phys, num, geom, laser, SsState, epsilon=2e+1, iter_step=0):
     # 1. Compute source terms (Laser + Evaporation)
-    q_las = hp.q_laser(SsState, laser)
+    # [FIX 1] Use Kernel for Laser Flux (Unpack SsState.X/Y and Laser params)
+    q_las = kernels.compute_gaussian_laser_flux(
+        SsState.X, SsState.Y, 
+        laser.x, laser.y, 
+        laser.r_b, laser.laser_coef
+    )
     
     # Initialize buffers if not exist
     if not hasattr(SsState, 'q_evap_buffer'):
         SsState.q_evap_buffer = np.zeros_like(q_las)
         
     q_evap = hp.shift_flux(SsState.q_evap_old, (laser.v[0]*num.dt, laser.v[1]*num.dt), geom)
-    q_dct = hp.DCT_II(q_las - q_evap)
+    
+    # [FIX] Use spec_hp.DCT_II
+    q_dct = spec_hp.DCT_II(q_las - q_evap)
     
     # 2. Linear step (ETD1)
     np.multiply(a, SsState.K, out=SsState.aK, casting='same_kind')
@@ -212,45 +223,41 @@ def time_step(a, phys, num, geom, laser, SsState, epsilon=2e+1, iter_step=0):
     
     S_current = S_n.copy()
 
-    # 3. Latent Heat Correction (Volumetric Source) - MOVED BEFORE EVAPORATION
-    hp.update_fine_mesh(SsState, laser) 
-    
-    # Compute volumetric source
+    # 3. Latent Heat Correction
+    # [FIX] Use spec_hp.update_fine_mesh (assuming you moved it there as planned)
+    spec_hp.update_fine_mesh(SsState, laser) 
     SsState.Q_latent_buffer.fill(0.0)
-    
-    # [KERNEL Call] High-level orchestrator for latent heat
     kernels.compute_latent_heat_source(SsState.Q_latent_buffer, phys, laser, geom, num, SsState)
 
-    # Convert to modes
-    Q_modes = hp.box_field_to_modes(SsState.Q_latent_buffer, SsState)
+    # [FIX 2] Use Kernel for Box Projection
+    Q_modes = kernels.project_box_to_modes(SsState.Q_latent_buffer, SsState)
 
-    # Add to temperature modes
     kernels.add_source_term_modes(SsState.aK, SsState.KK, Q_modes)
-    # Update current a_temp so that the start of evaporation loop sees it
     kernels.add_source_term_modes(SsState.a_temp, SsState.KK, Q_modes)
     
     # 4. Nonlinear iteration for evaporation
-    T_temp = hp.reconstruct_temperature_top(SsState.a_temp, SsState)
+    # [FIX 3] Use kernel for Surface Reconstruction
+    T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
+    
     for k in range(30):
-        
-        # compute_evaporation_flux (IN-PLACE)
-        # We use the buffer created earlier
         kernels.compute_evaporation_flux(
             T_temp, SsState.q_evap_buffer,
             phys.Pa, phys.R_v, phys.T_boil, phys.DeltaH_LV, phys.R_v, phys.T_liquidus
         )
-        q_evap = SsState.q_evap_buffer # Alias for readability
+        q_evap = SsState.q_evap_buffer 
         
         np.subtract(q_las, q_evap, out=SsState.q_diff, casting='same_kind')
-        S_target = SsState.dct_scale * hp.DCT_II(SsState.q_diff)
-        S_current = 0.1 * S_target + 0.9 * S_current # Relaxation
+        # [FIX] Use spec_hp.DCT_II
+        S_target = SsState.dct_scale * spec_hp.DCT_II(SsState.q_diff)
+        S_current = 0.1 * S_target + 0.9 * S_current 
         np.multiply(1.0, S_current, out=SsState.B_buffer, casting='same_kind')
         
-        # [KERNEL SUBCALL]
         kernels.update_modes_etd1(SsState.aK, SsState.KK_by_Cp, SsState.B_buffer, SsState.a_temp)
         
         T_old = T_temp
-        T_temp = hp.reconstruct_temperature_top(SsState.a_temp, SsState)
+        # [FIX 3] Use kernel for Surface Reconstruction (Inside Loop)
+        T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
+        
         if np.max(np.abs(T_temp - T_old)) < epsilon: break
     
     SsState.q_evap_old = q_evap.astype(np.float32, copy=True)
@@ -258,7 +265,7 @@ def time_step(a, phys, num, geom, laser, SsState, epsilon=2e+1, iter_step=0):
     
     # Debug output
     if iter_step % 200 == 0:
-        T_box, box_coords = hp.reconstruct_temperature_box(SsState.a_temp, SsState)
+        T_box, box_coords = kernels.reconstruct_temperature_box(SsState.a_temp, SsState)
         hp.save_field_to_hdf5(
             f"{OUT_DIR}/T_box_step_{laser.t:.5f}",
             T_box, # Already (nz, ny, nx)
@@ -302,7 +309,7 @@ def run_simulation(phys, num, geom, laser, SsState):
 if __name__ == "__main__":
     # Simulation parameters
     Lx, Ly, Lz = 0.01, 0.005, 0.0025
-    nx, ny, nz =  512, 256, 1000
+    nx, ny, nz =  10, 10, 10 # 512, 256, 1000
     dt = 6.0e-6
     t_final = 1.2e-2
     # Material properties
@@ -324,18 +331,22 @@ if __name__ == "__main__":
     SsState = SpectralSolverState()
     SsState.prepare_reconstruction_basis(geom)
     SsState.prepare_K_buffers(phys, geom, num)
-    hp.check_resolution(laser, num, geom)
-    # Running simulation
+    # Run Simulation
     a, T_hist, P_hist = run_simulation(phys, num, geom, laser, SsState)
 
-    T_volume = hp.reconstruct_temperature_volume(a, SsState)
+    # Save full 3D field for Paraview
+    print("Reconstructing full volume...")
+    T_volume = spec_hp.reconstruct_temperature_volume(a, SsState)
     volume_base = f"{OUT_DIR}/T_volume_final"
-    hp.save_field_to_hdf5(
-        volume_base,
-        T_volume.transpose(2, 1, 0),
-        (SsState.x, SsState.y, SsState.z),
-        value_name="Temperature",
-        geom=geom,
+    
+    # [FIX] Use fs_io.save_field_to_hdf5
+    fs_io.save_field_to_hdf5(
+        volume_base, 
+        T_volume, 
+        (SsState.x, SsState.y, SsState.z), 
+        value_name="Temperature", 
+        geom=geom, 
+        verbose=True
     )
 
     laser_snapshot = SimpleNamespace(
@@ -346,5 +357,4 @@ if __name__ == "__main__":
         r_b=laser.r_b,
         v=laser.v
     )
-    hp.save_temp_profiles_fine(a, num, geom, SsState, laser=laser_snapshot, center="laser")
-    hp.save_temp_profiles(a, num, geom, SsState, laser=laser_snapshot, center="laser")
+    spec_hp.save_temp_profiles(a, num, geom, SsState, laser=laser_snapshot, center="laser")

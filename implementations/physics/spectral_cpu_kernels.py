@@ -1,6 +1,7 @@
 import numpy as np
 from numba import njit, prange
 from scipy.ndimage import shift as scipy_shift
+from pyfftw.interfaces.scipy_fft import dctn
 
 # ======================================
 # Spectral Method CPU Kernels
@@ -68,6 +69,29 @@ def compute_evaporation_flux(T_surface, q_out, P0, R, T_boil, DeltaH_LV, R_v, T_
                 term = (1.0 / np.sqrt(T)) * np.exp(factor2 * (1.0 - T_boil / T))
                 q_out[j, i] = factor1 * term
 
+
+def compute_gaussian_laser_flux(X, Y, laser_x, laser_y, laser_r, laser_coef):
+    """Compute Gaussian flux on grid X,Y."""
+    r_sq = (X - laser_x) ** 2 + (Y - laser_y) ** 2
+    return (laser_coef * np.exp(-2.0 * r_sq / laser_r ** 2)).astype(np.float32)
+
+
+def project_box_to_modes(field_box, SsState):
+    """Project fine box field to global spectral modes."""
+    if not SsState.fine_mesh_initialized:
+        raise RuntimeError("Fine mesh not initialized.")
+    
+    # 1. Contract Z_box: (nz_box, ny_box, nx_box) . (nz, nz_box) -> (ny_box, nx_box, nz)
+    temp1 = np.tensordot(field_box, SsState.Bz_fine, axes=(0, 1))
+    # 2. Contract Y_box: (ny_box, nx_box, nz) . (ny, ny_box) -> (nx_box, nz, ny)
+    temp2 = np.tensordot(temp1, SsState.By_fine, axes=(0, 1))
+    # 3. Contract X_box: (nx_box, nz, ny) . (nx, nx_box) -> (nz, ny, nx)
+    modes = np.tensordot(temp2, SsState.Bx_fine, axes=(0, 1))
+    
+    modes *= SsState.dV_fine
+    return modes.astype(np.float32)
+
+
 def reconstruct_temperature_box(a, SsState):
     """
     Reconstructs temperature in a small ROI around the laser.
@@ -129,4 +153,33 @@ def compute_latent_heat_source(Q_buffer, phys, laser, geom, num, SsState, alpha=
     SsState.laser_x_prev = laser.x
     SsState.laser_y_prev = laser.y
 
+def reconstruct_surface_temperature(a, SsState):
+    """Reconstruct 2D temperature field at z=0."""
+    # Sum over Z modes (weighted by Cp coefficients at z=0, which is just Cp/sqrt(1/L)?? No)
+    # In helpers.py: A = (SsState.Cp32[:, None, None] * a).sum(axis=0)
+    # This assumes cos(p*pi*z/Lz) at z=0 is 1.0. 
+    # The reconstruction formula is T = sum(a * Bx * By * Bz).
+    # Bz[p] at z=0 is Cp[p] * cos(0) = Cp[p].
+    
+    A = (SsState.Cp32[:, None, None] * a).sum(axis=0)
+    
+    # Then 2D IDCT (DCT-III)
+    # recon_scale handles the sqrt(N/L) factors for 2D transform
+    return (SsState.recon_scale * dctn(A, type=3, norm='ortho', axes=(0, 1), workers=-1)).astype(np.float32, copy=False)
 
+def reconstruct_temperature_xz(a, num, geom, SsState, laser, y0=None):
+    """
+    Optimized reconstruction of X-Z temperature slice using FFTW/DCT.
+    Returns (x_vals, z_vals, T_xz).
+    """
+    y0 = laser.y0
+    nx, ny, nz = num.nx, num.ny, num.nz
+    # Evaluate cosine basis at specific y0 (ny,)
+    cos_y = SsState.Cn * np.cos(np.pi * np.arange(ny) * y0 / geom.Ly)
+    # Contract Y axis: (nz, ny, nx) dot (ny,)
+    A_xz = np.tensordot(a, cos_y, axes=(1, 0)) 
+    # Reconstruct X-Z field using 2D IDCT (Type 3)
+    scale_xz = np.sqrt(nx * nz / (geom.Lx * geom.Lz))
+    T_xz = scale_xz * dctn(A_xz, type=3, norm='ortho', axes=(0, 1))
+    
+    return geom.x, geom.z, T_xz.astype(np.float32)

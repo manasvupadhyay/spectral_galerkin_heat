@@ -177,15 +177,6 @@ It doesn't care if the position comes from a simple `v*t` formula or a complex G
 
 TO DO 
 
-==>Refactor Reconstruction Logic:
-
-Action: Update reconstruct_temperature_* functions to use the dynamic xp backend for tensor contractions (tensordot), ensuring the geometry basis vectors (geom.Bz_fine) match the device of the coefficients a.
-Goal: Run the heavy reconstruction steps entirely on the GPU if the data is there.
-
-==>Isolate Numba Kernels:
-
-Action: Extract the @njit decorated functions (like _compute_source_term_from_temperature) from helpers.py or wrap them in a dispatcher that throws an error or uses a simplified pure-Python/Cupy fallback if GPU arrays are passed (since Numba CPU kernels crash on GPU arrays).
-Goal: Ensure helpers.py doesn't force a dependency on CPU-only compiled code when running in a GPU context.
 
 ==> edit yaml exemple in the readme (take vizu exemple into account)
 
@@ -198,17 +189,8 @@ Update comparison.py to use the helper functions from Step 5 instead of iteratin
 Allow passing a specific run_id to compare against.
 
 
-def prepare_K_buffers(self, phys, geom):
-        """Precompute spectral propagators and allocate buffers."""
-        print(f"Precomputing K, KK... ")
-        self.K, self.KK = precompute_K_KK(phys, self, geom)
-        self.KK_by_Cp = (self.KK * geom.Cp[:, None, None]).astype(np.float32) # Projected on x,y plane
-        
-        # Allocate working arrays
-        self.q_diff = np.empty((self.ny, self.nx), dtype=np.float32)
-        self.B_buffer = np.empty((self.ny, self.nx), dtype=np.float32)
-        self.a_temp = np.empty((self.nz, self.ny, self.nx), dtype=np.float32)
-        self.aK = np.empty((self.nz, self.ny, self.nx), dtype=np.float32)
-        self.q_evap_old = np.zeros((self.ny, self.nx), dtype=np.float32)
-        # ZYX layout for contiguous X-scanning
-        self.Q_latent_buffer = np.zeros((geom.nz_box, geom.ny_box, geom.nx_box), dtype=np.float32)
+==> Refactoring:
+reconstruct_temperature_volume_at_points: Move entirely to kernels.
+save_temp_profiles: The I/O part (saving to txt) belongs in fs_io.py or the high-level workflow, but the heavy lifting of computing T_x, T_y, T_z (lines 538-568) should be a kernel function called compute_1d_profiles_from_modes.
+
+==> do not do io in spectral_helpers.py

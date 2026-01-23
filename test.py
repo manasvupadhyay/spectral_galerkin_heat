@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import time
 from numba import njit, prange
 import os
-import helpers as hp
+import utils.helpers as hp
 
 pyfftw.config.NUM_THREADS = os.cpu_count()
 OUT_DIR = "out"
