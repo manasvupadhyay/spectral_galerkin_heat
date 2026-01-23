@@ -1,24 +1,42 @@
 from abc import ABC, abstractmethod
-from typing import Any
-import numpy as np
+from typing import Any, Tuple, Dict, Optional
 
 class HeatSolver(ABC):
-    """Abstract Product: Interface for the heat equation solver."""
+    """
+    Abstract interface for a Heat Equation Solver.
+    Encapsulates the physics engine and numerical methods.
+    """
 
     @abstractmethod
-    def initialize(self):
-        """Perform any pre-computation or resource allocation."""
+    def initialize(self) -> Any:
+        """
+        Initialize the solver state (fields, spectral coefficients, etc.).
+
+        Returns:
+            The initial state object (implementation dependent, usually an array).
+        """
         pass
 
     @abstractmethod
-    def solve_step(self, time: float, dt: float, laser_state: any) -> np.ndarray:
+    def step(self, t: float, dt: float, state: Any) -> Tuple[Any, Dict[str, float]]:
         """
-        Advance the simulation by one time step.
-        Returns the current temperature field (or a reference to it).
+        Advance the simulation by one time step dt.
+
+        Args:
+            t: Current time.
+            dt: Time step size.
+            state: The current state of the system (from previous step).
+
+        Returns:
+            Tuple containing:
+            - new_state: The evolved state.
+            - metrics: Dictionary of scalar diagnostics (e.g., {'P_laser': 50.0, 'T_max': 2000.0}).
         """
         pass
-    
+
     @abstractmethod
-    def get_temperature_field(self) -> np.ndarray:
-        """Return the current temperature field."""
+    def finalize(self) -> None:
+        """
+        Clean up resources (GPU memory, thread pools) if necessary.
+        """
         pass

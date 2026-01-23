@@ -10,7 +10,7 @@ from typing import Dict, Any
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.workflow import SimulationWorkflow
-from core.parameters import SimulationContext, NumParams, MaterialParams, GeomParams, LaserParams
+from core.parameters import SimulationContext, NumParams, MaterialParams, GeomParams, LaserParams, IOParams
 from utils.visualisation import generate_plots
 
 # Configure Logging
@@ -63,7 +63,6 @@ def build_context(cfg: Dict[str, Any]) -> SimulationContext:
         L_f=float(mat_cfg.get('L_f', 0.0)),
         T_solidus=float(mat_cfg.get('T_solidus', 0.0)),
         T_liquidus=float(mat_cfg.get('T_liquidus', 0.0))
-        # Note: Additional params like DeltaH_LV could be added to MaterialParams or passed via extra dict if needed
     )
 
     # 3. Laser Parameters
@@ -75,17 +74,25 @@ def build_context(cfg: Dict[str, Any]) -> SimulationContext:
     )
 
     # 4. Laser Path Strategy (Placeholder for now)
-    # In a real implementation, this would instantiate GCodeLaserPath or LinearLaserPath
     path_cfg = laser_cfg.get('path', {})
-    laser_path = None # To be implemented: basic path object or G-Code loader
+    laser_path = None 
     
+    # 5. IO Parameters
+    io_cfg = cfg.get('output', {})
+    io_params = IOParams(
+        output_root=io_cfg.get('directory', 'out'),
+        run_tag=io_cfg.get('run_tag', 'sim'),
+        save_full_fields=io_cfg.get('save_full_fields', False),
+        output_interval=float(sim_cfg.get('output_interval', 1e-3))
+    )
     
     ctx = SimulationContext(
         num=num_params,
         mat=mat_params,
         geom=geom_params,
         laser=laser_params,
-        laser_path=laser_path
+        laser_path=laser_path,
+        io=io_params
     )
     
     return ctx
@@ -129,6 +136,8 @@ def main():
         backend = config.get('simulation', {}).get('backend', 'cpu')
     
     logger.info(f"Using Backend: {backend.upper()}")
+    
+    run_dir = None
 
     # 3. Instantiate Factory & Workflow
     try:
@@ -137,6 +146,10 @@ def main():
         
         # 4. Run Simulation
         workflow.run()
+        
+        # Retrieve the specific run ID directory created by IOManager
+        if hasattr(workflow, 'io_manager'):
+             run_dir = workflow.io_manager.base_dir
         
     except Exception as e:
         logger.exception("Simulation Failed")
@@ -153,38 +166,23 @@ def main():
     if should_visualize:
         logger.info("Starting Visualization...")
         
-        # Construct output filename based on config
-        # Assuming workflow uses these conventions. 
-        # Ideally, workflow.run() returns the path to the result file.
-        output_dir = config.get('output', {}).get('directory', 'out')
-        # This is a bit brittle, workflow needs to expose where it saved data
-        # For now, we assume a standard name or derived from config
-        
-        # Heuristic: find the latest xdmf in output dir?
-        # Or require config to specify filename
-        # Let's check config used in build_context, but I didn't store it in context completely...
-        # For prototype, let's assume 'out/simulation_result.xdmf' or scan folder.
-        
-        # Better approach: 
-        # Assume workflow saves to {output_dir}/validation.xdmf or similar. 
-        # Let's try to locate the most recently modified .xdmf file in output dir
-        
-        try:
-             files = [os.path.join(output_dir, f) for f in os.listdir(output_dir) if f.endswith('.xdmf')]
-             if not files:
-                 logger.warning(f"No XDMF files found in {output_dir} for visualization.")
-             else:
-                 latest_file = max(files, key=os.path.getmtime)
-                 logger.info(f"Visualizing result: {latest_file}")
-                 
+        if run_dir and os.path.exists(run_dir):
+            logger.info(f"Visualizing results from: {run_dir}")
+            
+            try:
+                 # Passing the specific run directory to generate_plots.
+                 # The visualization tool should now load data using the loader utils
+                 # or scan the profiles/ folder within run_dir.
                  generate_plots(
-                     xdmf_path=latest_file,
+                     run_dir=run_dir,
                      show_ui=viz_cfg.get('show_gui', True),
                      save_images=viz_cfg.get('save_images', True),
-                     output_dir=output_dir
+                     output_dir=run_dir
                  )
-        except Exception as e:
-             logger.error(f"Visualization failed: {str(e)}")
+            except Exception as e:
+                 logger.error(f"Visualization failed: {str(e)}")
+        else:
+             logger.warning("Output directory not found or IOManager not active. Visualization skipped.")
 
 if __name__ == "__main__":
     main()

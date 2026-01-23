@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
+
 import numpy as np
 
 @dataclass
@@ -65,7 +66,24 @@ class LaserParams:
     radius: float
     absorptivity: float
     power: float = 0.0 # Base power if constant, or max power
-    
+
+@dataclass
+class IOParams:
+    """Configuration for Input/Output operations."""
+    output_root: str = "out"
+    run_tag: str = "simulation"
+    save_full_fields: bool = False
+    output_interval: float = 1e-4  # Time between output saves (s)
+
+    @classmethod
+    def from_dict(cls, cfg: Dict[str, Any]) -> 'IOParams':
+        return cls(
+            output_root=cfg.get('output_root', 'out'),
+            run_tag=cfg.get('run_tag', 'simulation'),
+            save_full_fields=cfg.get('save_full_fields', False),
+            output_interval=float(cfg.get('output_interval', 1e-4))
+        )
+
 @dataclass
 class SimulationContext:
     """Unified context object holding all simulation configurations."""
@@ -73,5 +91,7 @@ class SimulationContext:
     mat: MaterialParams
     geom: GeomParams
     laser: LaserParams
+    io: IOParams  # Added IO configuration
+
     # laser_path will be injected separately or added here if it's a strongly typed object
-    laser_path: Any = None 
+    laser_path: Any = None

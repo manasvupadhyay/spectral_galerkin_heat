@@ -15,25 +15,30 @@ fastHeatSolv/
 ├── config/                     # [Config] YAML configuration files defining simulation parameters.
 ├── data/
 │   └── paths/                  # [Data] G-code files defining laser paths.
+├── out/                        # [Output] Root directory for simulation results.
+│   └── {timestamp}_{tag}/      # [Run] Specific run container (run_id).
+│       ├── fields/             # - 3D Volumetric fields (HDF5/NPY)
+│       ├── profiles/           # - 1D Temperature text profiles for plotting
+│       ├── plots/              # - Generated PNG/SVG plots
+│       ├── logs/               # - Run logs (stdout, errors)
+│       └── diagnostics/        # - JSON/CSV timing and convergence
 ├── core/
-│   ├── workflow.py             # [Strategy] Defines the simulation loo(Orchestrator). 
+│   ├── workflow.py             # [Strategy] Defines the simulation loop (Orchestrator). 
 │   │                           # It uses abstract interfaces to run the timeline      
 |   |                           #   independent of the backend.
-│   └── parameters.py           # Data Classes (PhysParams, NumParams, GeomParams).
+│   ├── parameters.py           # Data Classes (PhysParams, NumParams, GeomParams, IOParams).
+│   └── io.py                   # [Interface] Abstract base class for IOManager.
 ├── interfaces/
 │   └── factory.py              # [Abstract Factory] Defines the interface for 
 |   |                           #   creating Solvers and IO managers.
 │   └── solver.py               # [Abstract Product] Interface for HeatSolver.
-│   └── io.py                   # [Abstract Product] Interface for Input/Output operations.
 ├── implementations/
 │   ├── factories/
-│   │   ├── cpu_factory.py      # [Concrete Factory] Creates CPUSolver and StandardIO.
-│   │   └── gpu_factory.py      # [Concrete Factory] Creates GPUSolver and AsyncIO.
+│   │   ├── cpu_factory.py      # [Concrete Factory] Creates CPUSimulationFactory.
 │   ├── solvers/
-│   │   ├── spectral_cpu.py     # [Concrete Product] CPU-based Spectral Solver (numba).
-│   │   └── spectral_gpu.py     # [Concrete Product] GPU-based Spectral Solver (cupy).
-│   ├── io/
-│   │   └── xdmf_io.py          # [Concrete Product] HDF5/XDMF handling.
+│   │   ├── spectral_cpu.py     # [Concrete Product] CPU-based Spectral Solver.
+│   ├── file_io/                # Concrete IO implementations
+│   │   └── fs_io.py            # [Concrete Product] Local file system IO manager.
 │   └── physics/
 │       └── kernels.py          # Low-level physical laws (Latent heat, evaporation)
 |                                 implementation agnostic or specific.
@@ -146,6 +151,7 @@ class SimulationContext:
     geom: GeomParams
     mat: MaterialParams
     laser_path: LaserPath  # The initialized path strategy object
+    io: IOParams # Configuration for output behavior
 ```
 
 This ensures that the Solver (Product) logic remains pure:
@@ -168,6 +174,10 @@ Goal: Ensure helpers.py doesn't force a dependency on CPU-only compiled code whe
 
 ==> edit yaml exemple in the readme (take vizu exemple into account)
 
-==> See where the output files should go 
-
 ==> Dispatch functions from test+speed spectral and helpers to the kernels etc
+
+==> We have to do that Step 6: Refactor comparison.py
+Goal: Use the new loader to cleanly access data.
+
+Update comparison.py to use the helper functions from Step 5 instead of iterating raw filenames manually.
+Allow passing a specific run_id to compare against.

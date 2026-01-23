@@ -1,20 +1,24 @@
 from abc import ABC, abstractmethod
+from typing import Any
 from .solver import HeatSolver
 from .io import IOManager
-from ..core.parameters import SimulationContext
 
 class SimulationFactory(ABC):
-    """Abstract Factory: Creates families of related objects (Solver, IO, etc.)"""
-
-    def __init__(self, context: SimulationContext):
+    """
+    Abstract Factory for creating simulation components.
+    Allows switching between different implementations (CPU/GPU, Spectral/FEM)
+    without changing the main workflow logic.
+    """
+    
+    def __init__(self, context: Any):
         self.context = context
 
     @abstractmethod
     def create_heat_solver(self) -> HeatSolver:
-        """Create a solver instance compatible with the factory's strategy (CPU/GPU)."""
+        """Create and return a configured HeatSolver instance."""
         pass
 
     @abstractmethod
     def create_io_manager(self) -> IOManager:
-        """Create an IO manager instance."""
+        """Create and return a configured IOManager instance."""
         pass
