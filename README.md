@@ -87,40 +87,65 @@ Jobs are defined by a config file where you can now select the simulation **meth
 
 ```yaml
 simulation:
-  name: "single_track_test"
-  method: "spectral"          # Options: "spectral", "fem"
-  backend: "cpu"              # Options: "cpu", "gpu" (only compatible with spectral)
-  duration: auto              # or explicit seconds
-  dt: 1.0e-5
-  output_interval: 1.0e-3
-  
-  # IO Settings
-  output_root: "./out"
-  run_tag: "validation_run"
-  save_full_fields: false      # Set to true to dump heavy .h5 files
+    name: "spectral_test_run"
+    method: "spectral"          # Options: "spectral", "fem"
+    backend: "cpu"              # Options: "cpu", "gpu" (only compatible with spectral)
+    duration: 0.012             # seconds
+    dt: 6.0e-6                  # seconds
+    update_interval: 20         # ETA update every 20 steps (approx)
 
 domain:
-  size: [0.02, 0.01, 0.005]    # [Lx, Ly, Lz] in meters
-  mesh: [512, 256, 128]        # [nx, ny, nz]
+    size: [0.01, 0.005, 0.0025] # [Lx, Ly, Lz] in meters
+    mesh: [10, 10, 10]          # [nx, ny, nz]
 
 material:
-  name: "Ti64"
-  rho: 4420.0
-  k: 7.0
-  Cp: 550.0
-  L_f: 2.8e5                  # Latent heat
-  T_solidus: 1878.0
-  T_liquidus: 1928.0
+    name: "GenericSteel"
+    rho: 7850.0
+    k: 15.0
+    Cp: 500.0
+    L_f: 267700.0               # Latent heat J/kg
+    T_solidus: 1700.0
+    T_liquidus: 1800.0
+    T0: 293.0                   # Ambient temperature
+    DeltaH_LV: 7.41e6           # Evaporation parameters
+    R_v: 150.774
+    Pa: 101325.0
+    T_boil: 3090.0
 
 laser:
-  radius: 50.0e-6             # Beam radius (1/e^2 or D4sigma?)
-  absorptivity: 0.35
-  # The path strategy determines how (x,y) and Power evolve over time
-  path:
-    type: "gcode"             # Options: "gcode", "linear", "function"
-    file: "paths/layer_1.gcode"
-    gcode_flavor: "reprap"    # To handle different G-code dialects
-    initial_position: [0.0, 0.0]
+    radius: 60.0e-6             # r_b in meters
+    absorptivity: 0.30
+    power_nominal: 200.0         # Default power if not specified in path
+    path:
+        type: "gcode"
+        file: "linear_track.gcode"
+        initial_position: [0.0, 0.0025] # [x, y] in meters
+
+io:
+    interval: 1.2e-3                # Output interval for time-stepped outputs (e.g., full_volume)
+    outputs: [full_volume]          # What to save at each interval
+    at_end: [full_volume, profiles, cut_views]  # What to save at the end
+    profiles_locations:
+        - [0.005, 0.0025]
+    cut_views_planes:
+        - xy
+        - yz
+        - xz
+```
+
+- `interval`: How often to save outputs during the simulation (in seconds).
+- `outputs`: List of output types to save at each interval (e.g., `full_volume`).
+- `at_end`: List of output types to save at the end of the simulation (e.g., `profiles`, `cut_views`).
+- `profiles_locations`: Optional, locations for extracting 1D profiles.
+- `cut_views_planes`: Optional, planes for extracting 2D cut views.
+
+This structure is parsed as a flat dictionary and passed to the workflow and IOManager. The workflow will:
+
+- Save all outputs in `outputs` at every interval.
+- Save all outputs in `at_end` at the end of the simulation.
+
+Additional config (like locations/planes) is passed to the IOManager for use in output routines.
+
 ```
 
 ### 2. Laser Path Strategy
@@ -162,16 +187,23 @@ class SimulationContext:
     geom: GeomParams
     mat: MaterialParams
     laser_path: LaserPath  # The initialized path strategy object
-    io: IOParams # Configuration for output behavior
+    io: IOParams # Configuration for output behavior, e.g.:
+    # io.full_volume.interval, io.profiles.at_end, io.cut_views.planes, etc.
     
     # Execution Config
     method: str = "spectral"
     backend: str = "cpu"
 ```
 
-This ensures that the Solver (Product) logic remains pure:
-`q_laser = laser_path.get_state(t).power * gaussian_kernel(...)`
-It doesn't care if the position comes from a simple `v*t` formula or a complex G-code interpretation.
+#### Flexible Output Control
+
+The `io` section allows you to control what is saved and when:
+
+- `full_volume`: Save the full 3D field at a given interval and/or at the end.
+- `profiles`: Save 1D temperature profiles at specified locations, only at the end or at intervals.
+- `cut_views`: Save 2D slices (xy, yz, xz) at the end or at intervals.
+
+This enables efficient disk usage and post-processing tailored to your needs.
 
 
 

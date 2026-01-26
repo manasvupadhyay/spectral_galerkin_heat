@@ -1,14 +1,13 @@
 import os
-import shutil
 import logging
-import time
-import numpy as np
 import h5py
 from datetime import datetime
 from typing import Any, Dict, Optional, Union
 from core.io import IOManager
 
 logger = logging.getLogger(__name__)
+
+
 
 class LocalFSIOManager(IOManager):
     """
@@ -74,55 +73,19 @@ class LocalFSIOManager(IOManager):
         else:
             return os.path.join(self.base_dir, filename)
 
-    def save_step(self, time_val: float, step: int, field: Any, **kwargs) -> None:
+    def save_step(self, time: float, step: int, state: Any, **kwargs) -> None:
         """
-        Save outputs for current step.
-        - Always saves 1D profiles (if 'profiles' data is passed in kwargs)
-        - Conditionally saves full 3D fields
+        Save the current simulation state to HDF5/XDMF, with time and step in filenames and XMF metadata.
         """
-        if self.base_dir is None:
-            return
-
-        # 1. Save Full Field (if configured)
-        if self.save_full_fields and field is not None:
-            filename = f"field_step{step:06d}.h5"
-            path = self.get_output_path(filename, 'fields')
-            temp_path = path + ".tmp"
-            
-            try:
-                # Atomic write: write to .tmp then rename
-                with h5py.File(temp_path, 'w') as f:
-                    dset = f.create_dataset("temperature", data=field, compression="gzip", compression_opts=4)
-                    dset.attrs['time'] = time_val
-                    dset.attrs['step'] = step
-                    
-                    # Store extra scalars (like laser power if present)
-                    for k, v in kwargs.items():
-                        if isinstance(v, (int, float, str, bool)):
-                            dset.attrs[k] = v
-                            
-                os.replace(temp_path, path)
-                logger.debug(f"Saved full field to {path}")
-            except Exception as e:
-                logger.warning(f"Failed to save field step {step}: {e}")
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-
-        # 2. Save 1D Profiles (if provided in kwargs)
-        # Expecting kwargs['profiles'] = {'x': (coords, vals), 'y': ...}
-        if 'profiles' in kwargs:
-            for direction, (coords, vals) in kwargs['profiles'].items():
-                fname = f"{direction}_step{step:06d}.txt"
-                fpath = self.get_output_path(fname, 'profiles')
-                
-                # Simple atomic text write
-                tmp_txt = fpath + ".tmp"
-                try:
-                    header = f"direction={direction} time={time_val:.6e} step={step}"
-                    np.savetxt(tmp_txt, np.column_stack((coords, vals)), header=header, fmt='%.6e')
-                    os.replace(tmp_txt, fpath)
-                except Exception as e:
-                    logger.warning(f"Failed to save profile {direction}: {e}")
+        try:
+            from utils.spectral_helpers import reconstruct_temperature_volume
+            field = reconstruct_temperature_volume(state.a, state)
+            grid_coords = (state.x, state.y, state.z)
+            filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
+            save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
+            logger.info(f"Saved field for step {step} to {filename_base}.h5/.xmf")
+        except Exception as e:
+            logger.error(f"Failed to save field for step {step}: {e}")
 
     def load_step(self, step: Union[int, str] = 'latest') -> Optional[Dict[str, Any]]:
         """
@@ -172,3 +135,66 @@ class LocalFSIOManager(IOManager):
         Nothing specific to close for local FS, just log.
         """
         logger.info(f"Simulation run {self.run_id} finalized. Data in {self.base_dir}")
+
+
+# Utility function to save field
+
+
+
+def save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", geom=None, verbose=False, t=None, step=None):
+    """Serialize a 3D scalar field, on a uniform domain, to HDF5 with an accompanying XDMF wrapper. Adds time and step to XMF metadata and filenames."""
+    h5_name = f"{filename_base}.h5"
+    xmf_name = f"{filename_base}.xmf"
+    h5_ref = os.path.basename(h5_name)
+
+    x_coords, y_coords, z_coords = grid_coords
+    nz, ny, nx = field.shape
+
+    if verbose and geom is not None:
+        print(f"Exporting HDF5/XDMF. Domain Size: {geom.Lx:.2e} x {geom.Ly:.2e} x {geom.Lz:.2e}")
+
+    with h5py.File(h5_name, "w") as f:
+        f.create_dataset("X", data=x_coords)
+        f.create_dataset("Y", data=y_coords)
+        f.create_dataset("Z", data=z_coords)
+        dset = f.create_dataset(value_name, data=field)
+        # Store time and step as attributes in the HDF5 file
+        if t is not None:
+            dset.attrs['time'] = t
+        if step is not None:
+            dset.attrs['step'] = step
+
+    # Add time and step as XML attributes in the XMF file
+    time_str = f' Time="{t}"' if t is not None else ''
+    step_str = f' Step="{step}"' if step is not None else ''
+    xmf_content = f'''<?xml version="1.0" ?>
+<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>
+<Xdmf Version="2.0">
+ <Domain>
+     <Grid Name="Mesh" GridType="Uniform"{time_str}{step_str}>
+         <Topology TopologyType="3DRectMesh" Dimensions="{nz} {ny} {nx}"/>
+         <Geometry GeometryType="VXVYVZ">
+             <DataItem Dimensions="{nx}" NumberType="Float" Precision="4" Format="HDF">
+                {h5_ref}:/X
+             </DataItem>
+             <DataItem Dimensions="{ny}" NumberType="Float" Precision="4" Format="HDF">
+                {h5_ref}:/Y
+             </DataItem>
+             <DataItem Dimensions="{nz}" NumberType="Float" Precision="4" Format="HDF">
+                {h5_ref}:/Z
+             </DataItem>
+         </Geometry>
+         <Attribute Name="{value_name}" AttributeType="Scalar" Center="Node">
+             <DataItem Dimensions="{nz} {ny} {nx}" NumberType="Float" Precision="4" Format="HDF">
+                {h5_ref}:/{value_name}
+             </DataItem>
+         </Attribute>
+     </Grid>
+ </Domain>
+</Xdmf>
+'''
+    with open(xmf_name, "w") as f:
+        f.write(xmf_content)
+
+    if verbose:
+        print(f"Saved debug files: {xmf_name} (Open this in Paraview)")

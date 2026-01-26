@@ -60,8 +60,6 @@ class SpectralSolverCPU:
         # Use velocity from laser_state (from GCodeLaserPath)
         v_x, v_y = laser_state.v if hasattr(laser_state, 'v') else (0.0, 0.0)
 
-
-
             
         q_evap = hp.shift_flux(SsState.q_evap_old, (v_x*num.dt, v_y*num.dt), geom)
         q_dct = spec_hp.DCT_II(q_las - q_evap)

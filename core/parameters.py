@@ -11,7 +11,7 @@ class NumParams:
     ny: int
     nz: int
     t_end: float = 0.0
-    output_interval: float = 1.0e-3
+    update_interval: float = 1e-3  # Time interval for logging updates
     save_all: bool = False
 
 @dataclass
@@ -81,19 +81,26 @@ class IOParams:
             output_root=cfg.get('output_root', 'out'),
             run_tag=cfg.get('run_tag', 'simulation'),
             save_full_fields=cfg.get('save_full_fields', False),
-            output_interval=float(cfg.get('output_interval', 1e-4))
+            output_interval=float(cfg.get('output_interval'))
         )
 
 @dataclass
 class SimulationContext:
-    """Aggregate context holding all simulation parameters."""
+    """
+    Aggregate context holding all simulation parameters.
+    io: flat dictionary from YAML config with keys:
+        - interval: float, output interval for time-stepped outputs
+        - outputs: list[str], outputs to save at each interval
+        - at_end: list[str], outputs to save at the end
+        - profiles_locations: list[list[float]], locations for profiles
+        - cut_views_planes: list[str], planes for cut views
+    """
     num: 'NumParams'
     mat: 'MaterialParams'
     geom: 'GeomParams'
     laser: 'LaserParams'
-    io: 'IOParams'
+    io: Dict[str, Any]  # Flat dict with new keys
     laser_path: Any = None
-    
     # Execution configuration
     method: str = "spectral"  # "spectral" or "fem"
     backend: str = "cpu"      # "cpu" or "gpu"

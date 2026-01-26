@@ -40,8 +40,14 @@ class SimulationWorkflow:
         t_end = self.context.num.t_end
 
         # IO Timers
-        next_output_time = 0.0
+        io_cfg = self.context.io if hasattr(self.context, 'io') else {}
+        interval = io_cfg.get('interval')
+        outputs = io_cfg.get('outputs', [])
+        at_end = io_cfg.get('at_end', [])
+        profiles_locations = io_cfg.get('profiles_locations', [])
+        cut_views_planes = io_cfg.get('cut_views_planes', [])
 
+        next_output_time = 0.0
         logger.info(f"Starting time loop: 0 -> {t_end:.4e} s (dt={dt:.2e})")
 
         # Check for dynamic laser_path in context
@@ -50,19 +56,22 @@ class SimulationWorkflow:
         # ETA logging setup
         start_wall_time = time.time()
         last_eta_log_time = start_wall_time
-        eta_log_interval = 10.0  # seconds
+        eta_log_interval = self.context.num.update_interval
 
         while t < t_end:
             # A. Output Check
             if t >= next_output_time:
-                self.io_manager.save_step(t, step, state)
-                # fs_io save not implemented yet 
-                logger.info(f"Step {step} | t={t:.6e}s | Output saved")
-                next_output_time += self.context.io.output_interval
-
+                for output_type in outputs:
+                    self.io_manager.save_step(
+                        t, step, state,
+                        output_type=output_type,
+                        profiles_locations=profiles_locations,
+                        cut_views_planes=cut_views_planes
+                    )
+                logger.info(f"Step {step} | t={t:.6e}s | Output(s) saved: {outputs}")
+                next_output_time += interval
             # B. Evolve State
             state, metrics = self.heat_solver.step(t, dt, state)
-
             # C. Advance Time
             t += dt
             step += 1
@@ -81,9 +90,17 @@ class SimulationWorkflow:
                     logger.info(f"[ETA] Step {step} | t={t:.6e}s | Elapsed: {elapsed:.1f}s | Remaining: unknown")
                 last_eta_log_time = now
 
-            if step % 100 == 0:
-                logger.debug(f"Step {step}/{int(t_end/dt)}")
+        # At end: save all requested outputs
+        for output_type in at_end:
+            self.io_manager.save_step(
+                t, step, state,
+                output_type=output_type,
+                profiles_locations=profiles_locations,
+                cut_views_planes=cut_views_planes
+            )
+        logger.info(f"Final output(s) saved at end: {at_end}")
+
 
         # 4. Finalize
         self.io_manager.finalize()
-        logger.info("Simulation completed successfully.")
+        logger.info("Simulation completed successfully.")   

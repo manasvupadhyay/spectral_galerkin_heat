@@ -68,6 +68,9 @@ def plot_comparison(profiles, output_file="temperature_comparison.png", label_si
         profiles: Dictionary returned by load_temperature_profiles
         output_file: Path to save the comparison figure (will be suffixed with _x, _y, _z)
         label_sim: Label to use for the simulation data in the legend.
+    
+    python comparison.py --align-start --align-target FE --invert-target FE --invert-axes z 
+    
     """
     directions = ['x', 'y', 'z']
     labels = ['x (m)', 'y (m)', 'z (m)']

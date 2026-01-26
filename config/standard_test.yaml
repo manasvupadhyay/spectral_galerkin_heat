@@ -4,11 +4,11 @@ simulation:
   backend: "cpu"              # Options: "cpu" (standard), "gpu" (if supported)
   duration: 0.012             # seconds
   dt: 6.0e-6                  # seconds
-  output_interval: 1.2e-4     # Output every 20 steps (approx)
+  update_interval: 20         # ETA update every 20 steps (approx)
 
 domain:
   size: [0.01, 0.005, 0.0025] # [Lx, Ly, Lz] in meters
-  mesh: [512, 256, 1000]      # [nx, ny, nz]
+  mesh: [10, 10, 10] # [512, 256, 1024]      # [nx, ny, nz]
 
 material:
   name: "GenericSteel"
@@ -21,7 +21,7 @@ material:
   T0: 293.0                   # Ambient temperature
   
   # Evaporation parameters
-  DeltaH_LV: 7.41e6
+  DeltaH_LV: 7.41e6  # TODO Where is this taken from and units 
   R_v: 150.774
   Pa: 101325.0
   T_boil: 3090.0
@@ -35,3 +35,14 @@ laser:
     type: "gcode"
     file: "linear_track.gcode"
     initial_position: [0.0, 0.0025] # [x, y] in meters, matches test_speed_spectral start
+
+io:
+  interval: 1.2e-3                # Output interval for time-stepped outputs (e.g., full_volume)
+  outputs: [full_volume]          # What to save at each interval
+  at_end: [full_volume, profiles, cut_views]  # What to save at the end
+  profiles_locations:
+    - [0.005, 0.0025]
+  cut_views_planes:
+    - xy
+    - yz
+    - xz

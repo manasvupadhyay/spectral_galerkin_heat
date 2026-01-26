@@ -10,7 +10,7 @@ from typing import Dict, Any
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.workflow import SimulationWorkflow
-from core.parameters import SimulationContext, NumParams, MaterialParams, GeomParams, LaserParams, IOParams
+from core.parameters import SimulationContext, NumParams, MaterialParams, GeomParams, LaserParams
 from utils.visualisation import generate_plots
 
 # Configure Logging
@@ -49,7 +49,7 @@ def build_context(cfg: Dict[str, Any]) -> SimulationContext:
         ny=int(ny),
         nz=int(nz),
         t_end=float(t_end),
-        output_interval=float(sim_cfg.get('output_interval', 1e-3))
+        update_interval=float(sim_cfg.get('update_interval'))
     )
 
     geom_params = GeomParams(
@@ -90,26 +90,19 @@ def build_context(cfg: Dict[str, Any]) -> SimulationContext:
                 gcode_file = os.path.join(os.path.dirname(__file__), 'data', 'paths', gcode_file)
             laser_path = GCodeLaserPath(gcode_file, initial_position=initial_position)
 
-    # 5. IO Parameters
-    io_cfg = cfg.get('output', {})
-    io_params = IOParams(
-        output_root=io_cfg.get('directory', 'out'),
-        run_tag=io_cfg.get('run_tag', 'sim'),
-        save_full_fields=io_cfg.get('save_full_fields', False),
-        output_interval=float(sim_cfg.get('output_interval', 1e-3))
-    )
-    
+    # 5. IO Parameters (flat dict: interval, outputs, at_end, etc.)
+    io_cfg = cfg.get('io', {})
+    # Optionally validate/normalize io_cfg here
     ctx = SimulationContext(
         num=num_params,
         mat=mat_params,
         geom=geom_params,
         laser=laser_params,
         laser_path=laser_path,
-        io=io_params,
-        method=sim_method,   # New Field
-        backend=sim_backend  # New Field
+        io=io_cfg,  # Flat dict for new IO config
+        method=sim_method,
+        backend=sim_backend
     )
-    
     return ctx
 
 def get_factory(context: SimulationContext):

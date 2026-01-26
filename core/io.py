@@ -21,21 +21,20 @@ class IOManager(ABC):
         Must determine the unique 'run_id' and create necessary directory structures.
         
         Args:
-            context: The SimulationContext object containing configuration (IOParams).
+            context: The SimulationContext object containing configuration (context.io is now a flexible dictionary from YAML, not IOParams).
         """
         pass
 
     @abstractmethod
-    def save_step(self, time: float, step: int, field: Any, **kwargs) -> None:
+    def save_step(self, time: float, step: int, state: Any, **kwargs) -> None:
         """
         Save simulation state for the current time step.
-        Implementation decides whether to save full fields, 1D profiles, or diagnostics
-        based on configuration.
-        
+        Implementation decides what to extract and persist from the simulation state object.
+
         Args:
             time: Current simulation time (s).
             step: Current time step index.
-            field: The primary field data (e.g., Temperature array).
+            state: The simulation state object (e.g., spectral coefficients, temperature field, etc).
             **kwargs: Additional data to save (e.g., laser_state, derived metrics).
         """
         pass

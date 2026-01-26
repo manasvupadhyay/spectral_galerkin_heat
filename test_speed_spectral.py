@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import implementations.physics.spectral_cpu_kernels as kernels
 import utils.spectral_helpers as spec_hp
 import utils.helpers as hp
-import implementations.file_io.fs_io as fs_io
+import implementations.file_io.spectral_fs_io as spectral_fs_io
 pyfftw.config.NUM_THREADS = os.cpu_count()
 OUT_DIR = "out"
 
@@ -205,7 +205,7 @@ if __name__ == "__main__":
     volume_base = f"{OUT_DIR}/T_volume_final"
     
     # [FIX] Use fs_io.save_field_to_hdf5
-    fs_io.save_field_to_hdf5(
+    spectral_fs_io.save_field_to_hdf5(
         volume_base, 
         T_volume, 
         (SsState.x, SsState.y, SsState.z), 
