@@ -1,10 +1,10 @@
 import time
 import logging
 from typing import Optional, Dict, Any
-from ..interfaces.factory import SimulationFactory
-from ..interfaces.solver import HeatSolver
-from ..interfaces.io import IOManager
-from .parameters import SimulationContext
+from interfaces.factory import SimulationFactory
+from interfaces.solver import HeatSolver
+from interfaces.io import IOManager
+from core.parameters import SimulationContext
 
 logger = logging.getLogger(__name__)
 
@@ -26,48 +26,61 @@ class SimulationWorkflow:
         Execute the main simulation loop.
         """
         logger.info("Initializing simulation workflow...")
-        
+
         # 1. Initialize IO System
-        # This creates the run directory and sets up file handlers
         self.io_manager.initialize(self.context)
-        
+
         # 2. Initialize Solver State
-        # Assuming solver.initialize() returns the initial field (e.g. spectral coefficients or temp array)
         state = self.heat_solver.initialize()
-        
+
         # 3. Time Loop
         t = 0.0
         step = 0
         dt = self.context.num.dt
         t_end = self.context.num.t_end
-        
+
         # IO Timers
         next_output_time = 0.0
-        
+
         logger.info(f"Starting time loop: 0 -> {t_end:.4e} s (dt={dt:.2e})")
+
+        # Check for dynamic laser_path in context
+        laser_path = getattr(self.context, 'laser_path', None)
+
+        # ETA logging setup
+        start_wall_time = time.time()
+        last_eta_log_time = start_wall_time
+        eta_log_interval = 10.0  # seconds
 
         while t < t_end:
             # A. Output Check
-            # We save at the *start* of the step for t=0, or when threshold passed
             if t >= next_output_time:
-                # Pass data to IO manager
-                # 'metrics' can be a dict returned by solver containing scalar diagnostics (Power, MaxT, etc)
-                # For now we pass the raw state. The IO manager decides what to write.
                 self.io_manager.save_step(t, step, state)
-                
+                # fs_io save not implemented yet 
                 logger.info(f"Step {step} | t={t:.6e}s | Output saved")
                 next_output_time += self.context.io.output_interval
 
             # B. Evolve State
-            # Solver returns new state and potentially a dictionary of metrics (e.g., {'P_laser': ..., 'max_T': ...})
-            # Adjust signature based on your specific HeatSolver interface definition
             state, metrics = self.heat_solver.step(t, dt, state)
-            
+
             # C. Advance Time
             t += dt
             step += 1
-            
-            # Optional: Log progress periodically
+
+            # ETA logging (every eta_log_interval seconds or at end)
+            now = time.time()
+            if (now - last_eta_log_time >= eta_log_interval) or (t >= t_end):
+                elapsed = now - start_wall_time
+                frac_done = min(t / t_end, 1.0) if t_end > 0 else 0.0
+                if frac_done > 0:
+                    est_total = elapsed / frac_done
+                    est_remaining = est_total - elapsed
+                    eta_str = time.strftime('%H:%M:%S', time.gmtime(est_remaining))
+                    logger.info(f"[ETA] Step {step} | t={t:.6e}s | Elapsed: {elapsed:.1f}s | Remaining: {eta_str}")
+                else:
+                    logger.info(f"[ETA] Step {step} | t={t:.6e}s | Elapsed: {elapsed:.1f}s | Remaining: unknown")
+                last_eta_log_time = now
+
             if step % 100 == 0:
                 logger.debug(f"Step {step}/{int(t_end/dt)}")
 

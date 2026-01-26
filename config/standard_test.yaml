@@ -33,5 +33,5 @@ laser:
   
   path:
     type: "gcode"
-    file: "data/paths/linear_track.gcode"
+    file: "linear_track.gcode"
     initial_position: [0.0, 0.0025] # [x, y] in meters, matches test_speed_spectral start

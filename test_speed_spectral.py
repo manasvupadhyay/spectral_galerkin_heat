@@ -2,7 +2,6 @@ import numpy as np
 import pyfftw
 import os
 from types import SimpleNamespace
-from dataclasses import dataclass
 
 
 import implementations.physics.spectral_cpu_kernels as kernels
@@ -53,140 +52,6 @@ class NumericalParams:
         self.dt, self.t_final = dt, t_final
         self.nx, self.ny, self.nz = nx, ny, nz
         self.iter =  0
-
-@dataclass
-class SpectralSolverState:
-    """
-    Encapsulates solver-specific buffers and precomputed grids needed for the spectral method.
-    Keeps global GeomParams/NumParams clean from implementation details.
-    """
-    # Spectral Propagators
-    K: np.ndarray = None
-    KK: np.ndarray = None
-    KK_by_Cp: np.ndarray = None
-    
-    # State Arrays
-    a: np.ndarray = None       # Current temperature modes (nz, ny, nx)
-    aK: np.ndarray = None      # Decayed temperature modes (nz, ny, nx)
-    a_temp: np.ndarray = None  # Temporary working array (nz, ny, nx)
-    
-    # Buffers
-    q_evap_old: np.ndarray = None
-    q_diff: np.ndarray = None
-    B_buffer: np.ndarray = None
-    
-    # Latent Heat Specifics
-    Q_latent_buffer: np.ndarray = None
-    isotherm_cache: list = None
-    
-        
-    # Fine Grid / Aliasing structures
-    # Box Coordinate Arrays (Changing every step)
-    box_x: np.ndarray = None
-    box_y: np.ndarray = None
-    box_z: np.ndarray = None
-    
-    # Active Box Basis Subsets (Changing every step)
-    Bx_fine: np.ndarray = None 
-    By_fine: np.ndarray = None
-    Bz_fine: np.ndarray = None
-    
-    # Precomputed Full Fine Bases (Static, but needed for slicing)
-    Bx_fine_full: np.ndarray = None
-    By_fine_full: np.ndarray = None
-    Bz_fine_full: np.ndarray = None
-    
-    # Box State Descriptors
-    ix_laser_box: int = 0
-    nx_box: int = 0
-    ny_box: int = 0
-    nz_box: int = 0
-    
-    fine_mesh_initialized: bool = False
-
-    def prepare_reconstruction_basis(self, geom):
-        # Global mesh coordinates (Cell-Centered to match the definition of DCT-II)
-        dx, dy, dz = geom.dx, geom.dy, geom.dz
-        nx, ny, nz = geom.nx, geom.ny, geom.nz
-        Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
-        self.x = ((np.arange(nx) + 0.5) * dx).astype(np.float32)
-        self.y = ((np.arange(ny) + 0.5) * dy).astype(np.float32)
-        self.z = ((np.arange(nz) + 0.5) * dz).astype(np.float32)
-        x_np, y_np, z_np = self.x, self.y, self.z
-        self.X, self.Y = np.meshgrid(self.x, self.y, indexing='xy')
-        self.X, self.Y = self.X.astype(np.float32), self.Y.astype(np.float32)
-        """Precompute reconstruction bases and normalization coefficients."""
-        print("Precomputing reconstruction bases...")
-        # Normalization coefficients ([FIX] Use spec_hp.C_coef)
-        self.Cm = spec_hp.C_coef(nx, Lx)
-        self.Cn = spec_hp.C_coef(ny, Ly)
-        self.Cp = spec_hp.C_coef(nz, Lz)
-        self.Cp32 = self.Cp.astype(np.float32)
-        
-        # Scaling factors for DCT/IDCT
-        self.dct_scale = np.float32((dx * dy) * np.sqrt((nx * ny) / (Lx * Ly)))
-        self.recon_scale = np.float32(np.sqrt(nx * ny) / np.sqrt(Lx * Ly))
-
-        # Precomputed cosine bases for reconstruction
-        self.cos_mx = np.cos(np.pi * np.arange(nx)[:, None] * x_np[None, :] / Lx).astype(np.float32)
-        self.cos_ny = np.cos(np.pi * np.arange(ny)[:, None] * y_np[None, :] / Ly).astype(np.float32)
-        self.cos_pz = np.cos(np.pi * np.arange(nz)[:, None] * z_np[None, :] / Lz).astype(np.float32)
-
-        # Fine mesh setup for latent heat correction
-        self.refinement = 4
-        self.Lx_box, self.Ly_box, self.Lz_box = 0.7e-3, 0.2e-3, 0.04e-3
-        self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
-        
-        self.nx_fine_total = int(np.ceil(Lx / self.dx_fine))
-        self.ny_fine_total = int(np.ceil(Ly / self.dy_fine))
-        self.nz_fine_total = int(np.ceil(self.Lz_box / self.dz_fine))
-        
-        x_fine = ((np.arange(self.nx_fine_total) + 0.5) * self.dx_fine).astype(np.float32)
-        y_fine = ((np.arange(self.ny_fine_total) + 0.5) * self.dy_fine).astype(np.float32)
-        z_fine = ((np.arange(self.nz_fine_total) + 0.5) * self.dz_fine).astype(np.float32)
-        self.x_fine = x_fine
-        self.y_fine = y_fine
-        self.z_fine = z_fine
-        
-        print("Precomputing fine cosine bases...")
-        m, n, p = np.arange(nx), np.arange(ny), np.arange(nz)
-        self.Bx_fine_full = (self.Cm[:, None] * np.cos(np.pi * m[:, None] * x_fine[None, :] / Lx)).astype(np.float32)
-        self.By_fine_full = (self.Cn[:, None] * np.cos(np.pi * n[:, None] * y_fine[None, :] / Ly)).astype(np.float32)
-        self.Bz_fine_full = (self.Cp[:, None] * np.cos(np.pi * p[:, None] * z_fine[None, :] / Lz)).astype(np.float32)
-        
-        # Box dimensions in fine grid points
-        self.nx_box = int(np.ceil(self.Lx_box / self.dx_fine))
-        self.ny_box = int(np.ceil(self.Ly_box / self.dy_fine))
-        self.nz_box = self.nz_fine_total
-        
-        # Preallocated arrays for fine mesh box
-        self.Bx_fine = np.zeros((nx, self.nx_box), dtype=np.float32)
-        self.By_fine = np.zeros((ny, self.ny_box), dtype=np.float32)
-        self.Bz_fine = self.Bz_fine_full[:, :self.nz_box]
-        self.box_x = np.zeros(self.nx_box, dtype=np.float32)
-        self.box_y = np.zeros(self.ny_box, dtype=np.float32)
-        self.box_z = np.linspace(0.0, self.Lz_box, self.nz_box, dtype=np.float32)
-        self.fine_mesh_initialized = False
-        self.ix_laser_box = max(0, min(self.nx_box - 1, int(round(0.5 * (self.nx_box - 1)))))
-
-    def prepare_K_buffers(self, phys, geom, num):
-        """Precompute spectral propagators and allocate buffers.
-        """
-
-        print(f"Precomputing K, KK... ")
-        # [FIX] Use spec_hp.precompute_K_KK
-        self.K, self.KK = spec_hp.precompute_K_KK(phys, num, geom)
-        self.KK_by_Cp = (self.KK * self.Cp[:, None, None]).astype(np.float32) # Projected on x,y plane
-        nx, ny, nz = num.nx, num.ny, num.nz
-        # Allocate working arrays
-        self.q_diff = np.empty((ny, nx), dtype=np.float32)
-        self.B_buffer = np.empty((ny, nx), dtype=np.float32)
-        self.a_temp = np.empty((nz, ny, nx), dtype=np.float32)
-        self.aK = np.empty((nz, ny, nx), dtype=np.float32)
-        self.q_evap_old = np.zeros((ny, nx), dtype=np.float32)
-        self.Q_latent_buffer = None
-        # ZYX layout for contiguous X-scanning
-        self.Q_latent_buffer = np.zeros((self.nz_box, self.ny_box, self.nx_box), dtype=np.float32)
 
 
 
@@ -328,7 +193,7 @@ if __name__ == "__main__":
     laser = Laser(P, r_b, 0.0, 0.0025, v, Absorptivity)
     num = NumericalParams(dt, t_final, nx, ny, nz)
     geom = GeomParams(Lx, Ly, Lz, num, phys, laser)
-    SsState = SpectralSolverState()
+    SsState = spec_hp.SpectralSolverState()
     SsState.prepare_reconstruction_basis(geom)
     SsState.prepare_K_buffers(phys, geom, num)
     # Run Simulation

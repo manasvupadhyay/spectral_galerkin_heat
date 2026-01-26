@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 import numpy as np
-from ..core.parameters import SimulationContext
+from core.parameters import SimulationContext
 
 class IOManager(ABC):
     """Abstract Product: Interface for Input/Output operations."""
