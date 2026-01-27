@@ -209,5 +209,13 @@ def main():
         else:
              logger.warning("Output directory not found or IOManager not active. Visualization skipped.")
 
+
 if __name__ == "__main__":
+    import cProfile
+    import pstats
+    profiler = cProfile.Profile()
+    profiler.enable()
     main()
+    profiler.disable()
+    stats = pstats.Stats(profiler).sort_stats('cumtime')
+    stats.print_stats(40)  # Show top 40 functions

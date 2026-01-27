@@ -86,8 +86,10 @@ class SimulationWorkflow:
                     est_remaining = est_total - elapsed
                     eta_str = time.strftime('%H:%M:%S', time.gmtime(est_remaining))
                     logger.info(f"[ETA] Step {step} | t={t:.6e}s | Elapsed: {elapsed:.1f}s | Remaining: {eta_str}")
+                    logger.info(f"[METRICS] {metrics}")
                 else:
                     logger.info(f"[ETA] Step {step} | t={t:.6e}s | Elapsed: {elapsed:.1f}s | Remaining: unknown")
+                    logger.info(f"[METRICS] {metrics}")
                 last_eta_log_time = now
 
         # At end: save all requested outputs

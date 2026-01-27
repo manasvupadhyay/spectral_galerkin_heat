@@ -3,12 +3,12 @@ import numpy as np
 
 class GCodeLaserPath(LaserPath):
     def __init__(self, gcode_file: str, initial_position=(0.0, 0.0)):
-        self.segments = self._parse_gcode(gcode_file)
-        self.initial_position = initial_position
+        self.segments, self.unit_scale = self._parse_gcode(gcode_file)
+        self.initial_position = tuple(np.array(initial_position) * self.unit_scale)
         self.current_segment = 0
 
     def _parse_gcode(self, filepath):
-        # Parses G0 (move), G1 (linear cut), M3/M5 for power
+        # Parses G0 (move), G1 (linear cut), M3/M5 for power, and G21 for units
         segments = []
         current_pos = [0.0, 0.0]
         current_power = 0.0
@@ -17,10 +17,19 @@ class GCodeLaserPath(LaserPath):
         t = 0.0
         last_pos = None
         last_t = 0.0
+        unit_scale = 1.0  # Default: mm (will convert to meters)
         with open(filepath, 'r') as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith(';'):
+                    continue
+                if line.startswith('G21'):
+                    # Set units to mm, but solver expects meters, so scale = 1/1000
+                    unit_scale = 1.0 / 1000.0
+                    continue
+                if line.startswith('G20'):
+                    # Set units to inches, but solver expects meters, so scale = 25.4/1000
+                    unit_scale = 25.4 / 1000.0
                     continue
                 if line.startswith('G0') or line.startswith('G1'):
                     # Extract X, Y, F
@@ -28,11 +37,11 @@ class GCodeLaserPath(LaserPath):
                     x = y = None
                     for token in tokens:
                         if token.startswith('X'):
-                            x = float(token[1:])
+                            x = float(token[1:]) * unit_scale
                         elif token.startswith('Y'):
-                            y = float(token[1:])
+                            y = float(token[1:]) * unit_scale
                         elif token.startswith('F'):
-                            feedrate = float(token[1:])  # mm/min
+                            feedrate = float(token[1:]) * unit_scale  # mm/min
                     if x is not None:
                         current_pos[0] = x
                     if y is not None:
@@ -60,7 +69,7 @@ class GCodeLaserPath(LaserPath):
                     # Laser off
                     is_on = False
                     current_power = 0.0
-        return segments
+        return segments, unit_scale
 
     def get_state(self, time: float, dt: float) -> LaserState:
         # Find the segment for the given time

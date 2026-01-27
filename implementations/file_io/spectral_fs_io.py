@@ -79,10 +79,13 @@ class LocalFSIOManager(IOManager):
         """
         try:
             from utils.spectral_helpers import reconstruct_temperature_volume
-            field = reconstruct_temperature_volume(state.a, state)
+            field = reconstruct_temperature_volume(state.a, state).transpose(2,1,0)  # Ensure (z,y,x) ordering
             grid_coords = (state.x, state.y, state.z)
             filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
             save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
+            
+
+
             logger.info(f"Saved field for step {step} to {filename_base}.h5/.xmf")
         except Exception as e:
             logger.error(f"Failed to save field for step {step}: {e}")
@@ -137,21 +140,20 @@ class LocalFSIOManager(IOManager):
         logger.info(f"Simulation run {self.run_id} finalized. Data in {self.base_dir}")
 
 
-# Utility function to save field
-
-
-
-def save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", geom=None, verbose=False, t=None, step=None):
+def save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", verbose=False, t=None, step=None):
     """Serialize a 3D scalar field, on a uniform domain, to HDF5 with an accompanying XDMF wrapper. Adds time and step to XMF metadata and filenames."""
     h5_name = f"{filename_base}.h5"
     xmf_name = f"{filename_base}.xmf"
     h5_ref = os.path.basename(h5_name)
-
+    
     x_coords, y_coords, z_coords = grid_coords
     nz, ny, nx = field.shape
-
-    if verbose and geom is not None:
-        print(f"Exporting HDF5/XDMF. Domain Size: {geom.Lx:.2e} x {geom.Ly:.2e} x {geom.Lz:.2e}")
+    if (nx != len(x_coords)) or (ny != len(y_coords)) or (nz != len(z_coords)):
+        raise ValueError(
+            f"Field shape (z, y, x) = {field.shape} does not match grid coordinates lengths: "
+            f"X({len(x_coords)}), Y({len(y_coords)}), Z({len(z_coords)}). "
+            f"Expected field.shape = (len(z), len(y), len(x)) = ({len(z_coords)}, {len(y_coords)}, {len(x_coords)})"
+        )
 
     with h5py.File(h5_name, "w") as f:
         f.create_dataset("X", data=x_coords)

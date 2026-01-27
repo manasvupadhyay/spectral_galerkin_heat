@@ -115,7 +115,7 @@ class SpectralSolverCPU:
 
         # Optionally, return metrics for logging/diagnostics
         metrics = {
-            'T_surface': T_temp,
+            'T_surface_max': np.max(T_temp),
             'P_laser': P_laser,
             'n_evap_iter': k+1
         }

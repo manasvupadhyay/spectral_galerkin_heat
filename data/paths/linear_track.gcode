@@ -14,7 +14,7 @@ G0 X0 Y2.5
 ; Turn laser on (M3 pseudo-code, S values map to Power)
 M3 S200
 
-; Linear move
+; Linear move 
 G1 X9.6 Y2.5 F48000
 
 ; Turn laser off
