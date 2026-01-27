@@ -175,13 +175,15 @@ class SpectralSolverState:
         self.x = ((cp.arange(nx) + 0.5) * dx).astype(cp.float32)
         self.y = ((cp.arange(ny) + 0.5) * dy).astype(cp.float32)
         self.z = ((cp.arange(nz) + 0.5) * dz).astype(cp.float32)
-        
+        x_np, y_np, z_np = self.x, self.y, self.z
         # Meshgrid on GPU
         self.X, self.Y = cp.meshgrid(self.x, self.y, indexing='xy')
         self.X, self.Y = self.X.astype(cp.float32), self.Y.astype(cp.float32)
-
-        # Normalization coefficients (computed via helpers, moved to GPU)
-        # Note: spec_hp.C_coef likely returns numpy, so we cast to cp.
+        """Precompute reconstruction bases and normalization coefficients."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("Precomputing reconstruction bases...")
+        # Normalization coefficients ([FIX] Use spec_hp.C_coef)
         self.Cm = cp.asarray(spec_hp.C_coef(nx, Lx), dtype=cp.float32)
         self.Cn = cp.asarray(spec_hp.C_coef(ny, Ly), dtype=cp.float32)
         self.Cp = cp.asarray(spec_hp.C_coef(nz, Lz), dtype=cp.float32)
@@ -190,15 +192,20 @@ class SpectralSolverState:
         # Scaling factors (Scalars)
         self.dct_scale = cp.float32((dx * dy) * np.sqrt((nx * ny) / (Lx * Ly)))
         self.recon_scale = cp.float32(np.sqrt(nx * ny) / np.sqrt(Lx * Ly))
+        # Precomputed cosine bases for reconstruction
+        self.cos_mx = cp.cos(cp.pi * cp.arange(nx)[:, None] * x_np[None, :] / Lx).astype(cp.float32)
+        self.cos_ny = cp.cos(cp.pi * cp.arange(ny)[:, None] * y_np[None, :] / Ly).astype(cp.float32)
+        self.cos_pz = cp.cos(cp.pi * cp.arange(nz)[:, None] * z_np[None, :] / Lz).astype(cp.float32)
+
 
         # Fine mesh setup for latent heat correction
         self.refinement = 4
         self.Lx_box, self.Ly_box, self.Lz_box = 0.7e-3, 0.2e-3, 0.04e-3
         self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
         
-        self.nx_fine_total = int(np.ceil(Lx / self.dx_fine))
-        self.ny_fine_total = int(np.ceil(Ly / self.dy_fine))
-        self.nz_fine_total = int(np.ceil(self.Lz_box / self.dz_fine))
+        self.nx_fine_total = int(cp.ceil(Lx / self.dx_fine))
+        self.ny_fine_total = int(cp.ceil(Ly / self.dy_fine))
+        self.nz_fine_total = int(cp.ceil(self.Lz_box / self.dz_fine))
         
         x_fine = ((cp.arange(self.nx_fine_total) + 0.5) * self.dx_fine).astype(cp.float32)
         y_fine = ((cp.arange(self.ny_fine_total) + 0.5) * self.dy_fine).astype(cp.float32)
@@ -212,13 +219,13 @@ class SpectralSolverState:
         
         # Broadcasting for basis computation
         # (nx, 1) * (1, nx_fine) -> (nx, nx_fine)
-        self.Bx_fine_full = (self.Cm[:, None] * cp.cos(np.pi * m[:, None] * x_fine[None, :] / Lx)).astype(cp.float32)
-        self.By_fine_full = (self.Cn[:, None] * cp.cos(np.pi * n[:, None] * y_fine[None, :] / Ly)).astype(cp.float32)
-        self.Bz_fine_full = (self.Cp[:, None] * cp.cos(np.pi * p[:, None] * z_fine[None, :] / Lz)).astype(cp.float32)
+        self.Bx_fine_full = (self.Cm[:, None] * cp.cos(cp.pi * m[:, None] * x_fine[None, :] / Lx)).astype(cp.float32)
+        self.By_fine_full = (self.Cn[:, None] * cp.cos(cp.pi * n[:, None] * y_fine[None, :] / Ly)).astype(cp.float32)
+        self.Bz_fine_full = (self.Cp[:, None] * cp.cos(cp.pi * p[:, None] * z_fine[None, :] / Lz)).astype(cp.float32)
         
         # Box dimensions in fine grid points
-        self.nx_box = int(np.ceil(self.Lx_box / self.dx_fine))
-        self.ny_box = int(np.ceil(self.Ly_box / self.dy_fine))
+        self.nx_box = int(cp.ceil(self.Lx_box / self.dx_fine))
+        self.ny_box = int(cp.ceil(self.Ly_box / self.dy_fine))
         self.nz_box = self.nz_fine_total
         
         # Preallocated arrays for fine mesh box (on GPU)
@@ -266,7 +273,7 @@ def precompute_K_KK(phys, num, geom):
 
     # meshgrid(..., indexing='ij')
     KX, KY, KZ = cp.meshgrid(kx, ky, kz, indexing='ij')
-    k2 = (KX**2 + KY**2 + KZ**2)
+    k2 = (kx[None, None, :]**2 + ky[None, :, None]**2 + kz[:, None, None]**2)
 
     alpha = phys.k / (phys.rho * phys.Cp)
     K = cp.exp(-alpha * k2 * num.dt).astype(cp.float32)

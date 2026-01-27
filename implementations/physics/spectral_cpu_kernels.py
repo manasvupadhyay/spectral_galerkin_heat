@@ -61,6 +61,35 @@ class SpectralSolverState:
     
     fine_mesh_initialized: bool = False
 
+    # Grid coordinates
+    x: np.ndarray = None
+    y: np.ndarray = None
+    z: np.ndarray = None
+    X: np.ndarray = None
+    Y: np.ndarray = None
+    
+    # Helper coefficients
+    Cp32_broadcast: np.ndarray = None
+    recon_scale: float = 0.0
+
+    # Fine grid coords
+    x_fine: np.ndarray = None
+    y_fine: np.ndarray = None
+    z_fine: np.ndarray = None
+    dx_fine: float = 0.0
+    dy_fine: float = 0.0
+    dz_fine: float = 0.0
+    nx_fine_total: int = 0
+    ny_fine_total: int = 0
+    nz_fine_total: int = 0
+
+    # Additional history for Latent Heat
+    T_prev: np.ndarray = None
+    Q_prev: np.ndarray = None
+    laser_x_prev: float = None
+    laser_y_prev: float = None
+    dV_fine: float = 0.0
+
     def prepare_reconstruction_basis(self, geom):
         # Global mesh coordinates (Cell-Centered to match the definition of DCT-II)
         dx, dy, dz = geom.dx, geom.dy, geom.dz
@@ -127,6 +156,8 @@ class SpectralSolverState:
         self.box_z = np.linspace(0.0, self.Lz_box, self.nz_box, dtype=np.float32)
         self.fine_mesh_initialized = False
         self.ix_laser_box = max(0, min(self.nx_box - 1, int(round(0.5 * (self.nx_box - 1)))))
+        
+        self.dV_fine = self.dx_fine * self.dy_fine * self.dz_fine
 
     def prepare_K_buffers(self, phys, geom, num):
         """Precompute spectral propagators and allocate buffers.

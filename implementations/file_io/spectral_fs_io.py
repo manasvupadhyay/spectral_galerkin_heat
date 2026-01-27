@@ -82,13 +82,15 @@ class LocalFSIOManager(IOManager):
             field = reconstruct_temperature_volume(state.a, state).transpose(2,1,0)  # Ensure (z,y,x) ordering
             grid_coords = (state.x, state.y, state.z)
             filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
+            if hasattr(field, "get"):
+                field = field.get()
             save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
             
-
 
             logger.info(f"Saved field for step {step} to {filename_base}.h5/.xmf")
         except Exception as e:
             logger.error(f"Failed to save field for step {step}: {e}")
+            raise
 
     def load_step(self, step: Union[int, str] = 'latest') -> Optional[Dict[str, Any]]:
         """
@@ -146,7 +148,17 @@ def save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", ve
     xmf_name = f"{filename_base}.xmf"
     h5_ref = os.path.basename(h5_name)
     
+
     x_coords, y_coords, z_coords = grid_coords
+    # Ensure all coordinate arrays are NumPy arrays (not CuPy)
+    # TO DO handle that better upstream
+    if hasattr(x_coords, "get"):
+        x_coords = x_coords.get()
+    if hasattr(y_coords, "get"):
+        y_coords = y_coords.get()
+    if hasattr(z_coords, "get"):
+        z_coords = z_coords.get()
+
     nz, ny, nx = field.shape
     if (nx != len(x_coords)) or (ny != len(y_coords)) or (nz != len(z_coords)):
         raise ValueError(
