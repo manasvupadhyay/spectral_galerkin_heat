@@ -24,7 +24,13 @@ class MaterialParams:
     L_f: float = 0.0
     T_solidus: float = 0.0
     T_liquidus: float = 0.0
-    
+    Pa: float = 0
+    R_v: float = 0
+    T_boil: float = 0
+    DeltaH_LV: float = 0
+    T0: float = 0 # Reference temperature
+    # Add more fields as needed from your YAML/config
+
     @property
     def diff(self) -> float:
         """Thermal diffusivity."""

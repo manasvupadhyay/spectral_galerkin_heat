@@ -44,8 +44,8 @@ fastHeatSolv/
 │   ├── file_io/                # Concrete IO implementations
 │   │   └── fs_io.py            # [Concrete Product] Local file system IO manager.
 │   └── physics/
-│       └── kernels.py          # Low-level physical laws (Latent heat, evaporation)
-|                                 implementation agnostic or specific.
+│       └── spectral_cpu_kernels.py   # Low-level physical laws (Latent heat, evaporation)
+│       └── spectral_gpu_kernels.py   # Low-level physical laws (Latent heat, evaporation)
 └── utils/
     └── spectral_helpers.py     # Shared mathematical utilities (DCT, grid          
     |                           #   manipulation).

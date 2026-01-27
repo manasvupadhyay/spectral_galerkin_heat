@@ -21,6 +21,7 @@ class SimulationWorkflow:
         self.io_manager: IOManager = self.factory.create_io_manager()
 
 
+
     def run(self):
         """
         Execute the main simulation loop.
@@ -29,6 +30,21 @@ class SimulationWorkflow:
 
         # 1. Initialize IO System
         self.io_manager.initialize(self.context)
+
+        # --- LOG FILE SETUP ---
+        run_dir = self.io_manager.base_dir
+        if run_dir is not None:
+            import os
+            log_file_path = os.path.join(run_dir, "logs", "simulation.log")
+            # Remove previous file handlers if any (avoid duplicate logs)
+            for h in logger.handlers[:]:
+                if isinstance(h, logging.FileHandler):
+                    logger.removeHandler(h)
+            file_handler = logging.FileHandler(log_file_path, mode="a")
+            file_handler.setLevel(logging.INFO)
+            file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+            logger.addHandler(file_handler)
+            logger.info(f"File logging enabled: {log_file_path}")
 
         # 2. Initialize Solver State
         state = self.heat_solver.initialize()
@@ -71,7 +87,7 @@ class SimulationWorkflow:
                 logger.info(f"Step {step} | t={t:.6e}s | Output(s) saved: {outputs}")
                 next_output_time += interval
             # B. Evolve State
-            state, metrics = self.heat_solver.step(t, dt, state)
+            state, metrics = self.heat_solver.step(t, dt)
             # C. Advance Time
             t += dt
             step += 1

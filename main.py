@@ -64,9 +64,14 @@ def build_context(cfg: Dict[str, Any]) -> SimulationContext:
         rho=float(mat_cfg['rho']),
         k=float(mat_cfg['k']),
         Cp=float(mat_cfg['Cp']),
-        L_f=float(mat_cfg.get('L_f', 0.0)),
-        T_solidus=float(mat_cfg.get('T_solidus', 0.0)),
-        T_liquidus=float(mat_cfg.get('T_liquidus', 0.0))
+        L_f=float(mat_cfg.get('L_f')),
+        T_solidus=float(mat_cfg.get('T_solidus')),
+        T_liquidus=float(mat_cfg.get('T_liquidus')),
+        Pa=float(mat_cfg.get('Pa')),
+        R_v=float(mat_cfg.get('R_v')),
+        T_boil=float(mat_cfg.get('T_boil')),
+        DeltaH_LV=float(mat_cfg.get('DeltaH_LV')),
+        T0=float(mat_cfg.get('T0')) # Reference temperature
     )
 
     # 3. Laser Parameters
@@ -74,7 +79,7 @@ def build_context(cfg: Dict[str, Any]) -> SimulationContext:
     laser_params = LaserParams(
         radius=float(laser_cfg['radius']),
         absorptivity=float(laser_cfg['absorptivity']),
-        power=float(laser_cfg.get('power_nominal', 0.0))
+        power=float(laser_cfg.get('power_nominal'))
     )
 
     # 4. Laser Path Strategy
@@ -164,18 +169,15 @@ def main():
     run_dir = None
 
     # 3. Instantiate Factory & Workflow
+
     try:
-        # get_factory now only needs context, as it contains method/backend info
+        # get_factory only needs context
         factory = get_factory(context) 
         workflow = SimulationWorkflow(context, factory)
-        
+
         # 4. Run Simulation
         workflow.run()
-        
-        # Retrieve the specific run ID directory created by IOManager
-        if hasattr(workflow, 'io_manager'):
-             run_dir = workflow.io_manager.base_dir
-        
+
     except Exception as e:
         logger.exception("Simulation Failed")
         sys.exit(1)
@@ -217,5 +219,30 @@ if __name__ == "__main__":
     profiler.enable()
     main()
     profiler.disable()
-    stats = pstats.Stats(profiler).sort_stats('cumtime')
-    stats.print_stats(40)  # Show top 40 functions
+    # Try to write profiler output to diagnostics if possible
+    try:
+        # run_dir is set in main() as a global variable
+        run_dir = None
+        # Try to get run_dir from the main function's local scope
+        import inspect
+        frame = inspect.currentframe()
+        while frame:
+            if 'run_dir' in frame.f_locals:
+                run_dir = frame.f_locals['run_dir']
+                break
+            frame = frame.f_back
+        if run_dir and os.path.exists(run_dir):
+            diag_dir = os.path.join(run_dir, "diagnostics")
+            os.makedirs(diag_dir, exist_ok=True)
+            prof_path = os.path.join(diag_dir, "profiler.txt")
+            with open(prof_path, "w") as f:
+                stats = pstats.Stats(profiler, stream=f).sort_stats('cumtime')
+                stats.print_stats(40)
+            print(f"[cProfile] Top 40 functions written to {prof_path}")
+        else:
+            stats = pstats.Stats(profiler).sort_stats('cumtime')
+            stats.print_stats(40)
+    except Exception as e:
+        print(f"[cProfile] Failed to write diagnostics: {e}")
+        stats = pstats.Stats(profiler).sort_stats('cumtime')
+        stats.print_stats(40)
