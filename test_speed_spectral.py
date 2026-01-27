@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 
 import implementations.physics.spectral_cpu_kernels as kernels
-import utils.spectral_cpu_helpers as spec_hp
+import utils.spectral_helpers as spec_hp
 import utils.helpers as hp
 import implementations.file_io.spectral_fs_io as spectral_fs_io
 pyfftw.config.NUM_THREADS = os.cpu_count()

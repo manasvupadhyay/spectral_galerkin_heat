@@ -1,16 +1,15 @@
-import numpy as np
-import implementations.physics.spectral_cpu_kernels as kernels
-import utils.helpers as hp
+import cupy as cp
+import implementations.physics.spectral_gpu_kernels as kernels
 
-class SpectralSolverCPU:
+class SpectralSolverGPU:
     """
-    SpectralSolverCPU implements a spectral method for solving the heat equation on the CPU.
+    SpectralSolverGPU implements a spectral method for solving the heat equation on the GPU.
     It manages the solver state, initialization, and time-stepping logic, including laser source,
     latent heat, and evaporation effects. The solver is designed for modularity and performance.
     """
     def __init__(self, context):
         """
-        Initialize the SpectralSolverCPU with the simulation context.
+        Initialize the SpectralSolverGPU with the simulation context.
         Args:
             context: SimulationContext containing geometry, material, laser, and numerical parameters.
         """
@@ -33,10 +32,16 @@ class SpectralSolverCPU:
         self.state.prepare_K_buffers(mat, geom, num)
 
         # Initial condition: mean T in mode (0,0,0)
-        self.state.a = np.zeros((num.nz, num.ny, num.nx), dtype=np.float32)
+        self.state.a = cp.zeros((num.nz, num.ny, num.nx), dtype=cp.float32)
         # Use T0 if present, else default to 293.0
         T0 = getattr(mat, 'T0', 293.0)
-        self.state.a[0,0,0] = T0 * np.sqrt(geom.Lx * geom.Ly * geom.Lz)
+        self.state.a[0,0,0] = cp.asarray(T0 * (geom.Lx * geom.Ly * geom.Lz) ** 0.5, dtype=cp.float32)
+
+        # Ensure all state arrays are on GPU (CuPy) TO DO - Ensure in kernels directly
+        for attr in ["aK", "a_temp", "K", "KK", "KK_by_Cp", "q_evap_old", "q_evap_buffer", "q_diff", "B_buffer", "Q_latent_buffer"]:
+            arr = getattr(self.state, attr, None)
+            if arr is not None and not isinstance(arr, cp.ndarray):
+                setattr(self.state, attr, cp.asarray(arr, dtype=cp.float32))
 
         return self.state
 
@@ -69,22 +74,22 @@ class SpectralSolverCPU:
         is_on = laser_state.is_on
         r_b = laser_params.radius
         absorptivity = laser_params.absorptivity
-        laser_coef = absorptivity * 2.0 * power / (np.pi * r_b ** 2) if is_on else 0.0
+        laser_coef = absorptivity * 2.0 * power / (cp.pi * r_b ** 2) if is_on else 0.0
 
         # 1. Compute source terms (Laser + Evaporation)
         q_las = kernels.compute_gaussian_laser_flux(
-            SsState.X, SsState.Y,
+            cp.asarray(SsState.X), cp.asarray(SsState.Y),
             x, y,
             r_b, laser_coef
         )
         v_x, v_y = laser_state.v if hasattr(laser_state, 'v') else (0.0, 0.0)
-        q_evap = hp.shift_flux(SsState.q_evap_old, (v_x*num.dt, v_y*num.dt), geom)
+        q_evap = kernels.shift_flux(cp.asarray(SsState.q_evap_old), (v_x*num.dt, v_y*num.dt), geom)
         q_dct = kernels.DCT_II(q_las - q_evap)
 
         # 2. Linear step (ETD1)
-        np.multiply(a, SsState.K, out=SsState.aK, casting='same_kind')
+        cp.multiply(cp.asarray(a), cp.asarray(SsState.K), out=SsState.aK, casting='same_kind')
         S_n = SsState.dct_scale * q_dct
-        np.multiply(SsState.dct_scale, q_dct, out=SsState.B_buffer, casting='same_kind')
+        cp.multiply(SsState.dct_scale, q_dct, out=SsState.B_buffer, casting='same_kind')
         kernels.update_modes_etd1(SsState.aK, SsState.KK_by_Cp, SsState.B_buffer, SsState.a_temp)
         S_current = S_n.copy()
 
@@ -104,22 +109,22 @@ class SpectralSolverCPU:
                 mat.DeltaH_LV, mat.R_v, mat.T_liquidus
             )
             q_evap = SsState.q_evap_buffer
-            np.subtract(q_las, q_evap, out=SsState.q_diff, casting='same_kind')
+            cp.subtract(q_las, q_evap, out=SsState.q_diff, casting='same_kind')
             S_target = SsState.dct_scale * kernels.DCT_II(SsState.q_diff)
             S_current = 0.1 * S_target + 0.9 * S_current
-            np.multiply(1.0, S_current, out=SsState.B_buffer, casting='same_kind')
+            cp.multiply(1.0, S_current, out=SsState.B_buffer, casting='same_kind')
             kernels.update_modes_etd1(SsState.aK, SsState.KK_by_Cp, SsState.B_buffer, SsState.a_temp)
             T_old = T_temp
             T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
-            if np.max(np.abs(T_temp - T_old)) < 2e+1:
+            if cp.max(cp.abs(T_temp - T_old)) < 2e+1:
                 break
 
-        SsState.q_evap_old = q_evap.astype(np.float32, copy=True)
-        P_laser = np.sum(q_las) * geom.dx * geom.dy
+        SsState.q_evap_old = cp.asarray(q_evap, dtype=cp.float32).copy()
+        P_laser = cp.sum(q_las) * geom.dx * geom.dy
 
         # Optionally, return metrics for logging/diagnostics
         metrics = {
-            'T_surface_max': np.max(T_temp),
+            'T_surface_max': cp.max(T_temp),
             'P_laser': P_laser,
             'n_evap_iter': k+1
         }

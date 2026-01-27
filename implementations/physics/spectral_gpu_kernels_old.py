@@ -4,7 +4,7 @@ from scipy.ndimage import shift as scipy_shift
 import utils.spectral_helpers as spec_hp
 import pyfftw
 from dataclasses import dataclass
-
+import cupyx.scipy.ndimage as cupy_ndimage
 # ======================================
 # Spectral Method CPU State Definition
 # ======================================
@@ -438,9 +438,7 @@ def update_fine_mesh(SsState, x_laser, y_laser):
 # keep in helpers
 def shift_flux(field: np.ndarray, shift: tuple, geom) -> np.ndarray:
     """Translate a surface flux field by ``shift=(dx, dy)`` meters."""
-    if field is None or field.size == 0:
-        return np.zeros((geom.ny, geom.nx), dtype=np.float32)
     dx, dy = shift
     shift_pixels = (dy / geom.dy, dx / geom.dx)
+    cupy_ndimage.shift(field, shift_pixels, order=1, mode='constant', cval=0.0).astype(np.float32)
     
-    return scipy_shift(field, shift_pixels, order=1, mode='constant', cval=0.0).astype(np.float32) 

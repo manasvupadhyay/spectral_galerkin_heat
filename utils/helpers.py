@@ -87,20 +87,6 @@ def compute_evaporation_flux(T_surface, q_out, P0, R, T_boil, DeltaH_LV, R_v, T_
     q[T_surface < T_liquidus] = 0.0
     return q.astype(np.float32)
 
-# keep in helpers
-def shift_flux(field: np.ndarray, shift: tuple, geom) -> np.ndarray:
-    """Translate a surface flux field by ``shift=(dx, dy)`` meters."""
-    xp = get_array_module(field)
-    if field is None or field.size == 0:
-        return xp.zeros((geom.ny, geom.nx), dtype=np.float32)
-    dx, dy = shift
-    shift_pixels = (dy / geom.dy, dx / geom.dx)
-    
-    if cp is not None and xp == cp:
-        return cupy_ndimage.shift(field, shift_pixels, order=1, mode='constant', cval=0.0).astype(np.float32)
-    
-    return scipy_shift(field, shift_pixels, order=1, mode='constant', cval=0.0).astype(np.float32) 
-
 
 def check_resolution(laser, num, geom):
     """Check if spatial and temporal resolutions are sufficient."""

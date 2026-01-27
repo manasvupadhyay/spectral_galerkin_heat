@@ -78,7 +78,7 @@ class LocalFSIOManager(IOManager):
         Save the current simulation state to HDF5/XDMF, with time and step in filenames and XMF metadata.
         """
         try:
-            from utils.spectral_cpu_helpers import reconstruct_temperature_volume
+            from utils.spectral_helpers import reconstruct_temperature_volume
             field = reconstruct_temperature_volume(state.a, state).transpose(2,1,0)  # Ensure (z,y,x) ordering
             grid_coords = (state.x, state.y, state.z)
             filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')

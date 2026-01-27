@@ -1,6 +1,5 @@
 import numpy as np
 import implementations.physics.spectral_cpu_kernels as kernels
-import utils.helpers as hp
 
 class SpectralSolverCPU:
     """
@@ -78,7 +77,7 @@ class SpectralSolverCPU:
             r_b, laser_coef
         )
         v_x, v_y = laser_state.v if hasattr(laser_state, 'v') else (0.0, 0.0)
-        q_evap = hp.shift_flux(SsState.q_evap_old, (v_x*num.dt, v_y*num.dt), geom)
+        q_evap = kernels.shift_flux(SsState.q_evap_old, (v_x*num.dt, v_y*num.dt), geom)
         q_dct = kernels.DCT_II(q_las - q_evap)
 
         # 2. Linear step (ETD1)
