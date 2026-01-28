@@ -150,6 +150,23 @@ Additional config (like locations/planes) is passed to the IOManager for use in 
 
 ### 2. Laser Path Strategy
 
+ +Z (BUILD DIRECTION)
+            ^          ^  + y   
+            |         / 
+            |        /
+            | +=====================+   <-- Top Layer (Lasered)
+            |/=====================/|  
+            +====================+  |        
+            |                    |  | 
+            |        CUBOID      |  +
+            |        (PART)      | /   <-- Base Layer sits on platform
+(X,Y,Z=0)   |                    |/     
+ORIGIN >----+====================+--------------------> + X 
+                 ( X-Y Plane)
+           
+          
+         
+
 We introduce an abstract `LaserPath` interface to decouple the heat source physics (Gaussian distribution) from the movement logic.
 
 ```python
@@ -208,11 +225,6 @@ This enables efficient disk usage and post-processing tailored to your needs.
 
 
 TO DO 
-
-
-==> edit yaml exemple in the readme (take vizu exemple into account)
-
-==> Dispatch functions from test+speed spectral and helpers to the kernels etc
 
 ==> We have to do that Step 6: Refactor comparison.py
 Goal: Use the new loader to cleanly access data.
