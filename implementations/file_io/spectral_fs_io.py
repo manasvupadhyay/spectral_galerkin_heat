@@ -87,7 +87,7 @@ class LocalFSIOManager(IOManager):
         try:
             from utils.spectral_helpers import reconstruct_temperature_volume
             field = reconstruct_temperature_volume(state.a, state).transpose(2,1,0)  # Ensure (z,y,x) ordering
-            grid_coords = (state.x, state.y, state.z)
+            grid_coords = (state.x_rec, state.y_rec, state.z_rec)
             if output_type == 'full_volume':
                 filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
                 if hasattr(field, "get"):
@@ -97,22 +97,53 @@ class LocalFSIOManager(IOManager):
             elif output_type == 'profiles':
                 # Compute 1D profiles using the helper (no I/O in helper)
                 from utils.spectral_helpers import save_temp_profiles
-                # You may want to pass additional arguments as needed (center, num_points, etc.)
-                # Here, we use the first location in profiles_locations if provided, else default to 'laser'
-                center = 'laser'
-                if profiles_locations and len(profiles_locations) > 0:
-                    center = profiles_locations[0]
-                # Try to get laser object from state if available, else None
-                laser_state = laser_path.get_state(time, 0.0)
-                laser_position = (float(laser_state.x), float(laser_state.y), 0.0)
-                profiles = save_temp_profiles(state.a, self.context.num, self.context.geom, state, laser_position, center=center)
+
+                # Determine center and laser_position robustly.
+                # profiles_locations in config may be:
+                #  - the string 'laser'
+                #  - a list whose first element is 'laser'
+                #  - a list of numeric [x, y]
+                #  - empty / omitted -> use 'hotspot'
+                laser_position = None
+                center = 'hotspot'
+                # Case: profiles_locations provided as a plain string 'laser'
+                if isinstance(profiles_locations, str) and profiles_locations.lower() == 'laser':
+                    if laser_path is not None:
+                        laser_state = laser_path.get_state(time, 0.0)
+                        laser_position = (float(laser_state.x), float(laser_state.y))
+                        center = 'laser'
+                    else:
+                        logger.warning("profiles_locations='laser' requested but no laser_path available; using 'hotspot'.")
+
+                # Case: profiles_locations is a list/tuple
+                elif isinstance(profiles_locations, (list, tuple)) and len(profiles_locations) > 0:
+                    first = profiles_locations[0]
+                    if isinstance(first, str) and first.lower() == 'laser':
+                        if laser_path is not None:
+                            laser_state = laser_path.get_state(time, 0.0)
+                            laser_position = (float(laser_state.x), float(laser_state.y))
+                            center = 'laser'
+                            # replace sentinel with actual position for logging
+                            profiles_locations = [laser_position]
+                        else:
+                            logger.warning("profiles_locations contains 'laser' but no laser_path available; using 'hotspot'.")
+                    elif isinstance(first, (list, tuple)) and len(first) >= 2:
+                        # Explicit numeric coordinates provided
+                        laser_position = (float(first[0]), float(first[1]))
+                        center = laser_position
+
+                # Call helper with a well-formed laser_position (None or tuple(x,y)) and center
+                profiles = save_temp_profiles(state.a, self.context.num, self.context.geom,
+                    state, laser_position, center=center
+                )
+
                 # Write each profile to the profiles/ subfolder
                 profiles_dir = self.get_output_path('', subdir='profiles')
                 for direction, (coords, temps) in profiles.items():
                     fname = os.path.join(profiles_dir, f"{direction}_spectral_latent_heat.txt")
                     # Format: Coord [m] | Temp [K]
                     np.savetxt(fname, np.vstack([coords, temps]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
-                logger.info(f"Saved 1D profiles at {profiles_locations} for step {step} to {profiles_dir}")
+                logger.info(f"Saved 1D profiles (center={center}, {laser_position}) for step {step} to {profiles_dir}")
             elif output_type == 'cut_views':
                 # 1. Ensure XDMF exists for this step
                 filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
@@ -132,7 +163,8 @@ class LocalFSIOManager(IOManager):
                     output_file = os.path.join(cut_views_dir, f"cut_{plane}_step{step:06d}.png")
                     # Determine center based on laser position
                     laser_state = laser_path.get_state(time, 0.0)
-                    center = (float(laser_state.x), float(laser_state.y), 0.0)
+                    height=0.0002
+                    center = (float(laser_state.x), float(laser_state.y), self.context.geom.Lz-height/2)
                     generate_plots(
                         xdmf_path=xdmf_path,
                         output_dir=cut_views_dir,
@@ -141,7 +173,7 @@ class LocalFSIOManager(IOManager):
                         normal=plane[0],  # e.g., 'x', 'y', or 'z'
                         center=center,
                         width=0.0006,  # 0.6 mm
-                        height=0.0002,  # 0.2 mm
+                        height=height,  # 0.2 mm
                         specific_output_filename=output_file
                     )
                     logger.info(f"Saved cut view {plane} for step {step} to {output_file}")

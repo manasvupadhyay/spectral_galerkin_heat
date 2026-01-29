@@ -37,12 +37,10 @@ laser:
     initial_position: [0.0, 0.0025] # [x, y] in meters, matches test_speed_spectral start
 
 io:
-  interval: null               # Output interval for time-stepped outputs, null means no intermediate outputs
-  outputs: [full_volume]          # What to save at each interval
+  interval: 0.0012                # Output interval (seconds) for time-stepped outputs, null means no intermediate outputs
+  outputs: [full_volume, cut_views]          # What to save at each interval
   at_end: [full_volume, profiles, cut_views]  # What to save at the end
   profiles_locations:
-    - [0.005, 0.0025]
+    - 'laser'                  # Center profile at end of laser path otherwise [x,y] in meters
   cut_views_planes:
-    - xy
     - yz
-    - xz

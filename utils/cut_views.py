@@ -6,6 +6,9 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator, griddata
 import os
 import sys
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ==========================================
 # 1. PARSING & DATA LOADING
@@ -61,7 +64,7 @@ def load_data(xdmf_path):
     # Fallback: If Topology/Geometry not found in target grid (e.g. due to XInclude), 
     # look for them in other grids (usually defined in the first Grid for the mesh)
     if topology is None or geometry is None:
-        print("Topology/Geometry not found in target grid. Searching in Domain...")
+        logger.warning("Topology/Geometry not found in target grid. Searching in Domain...")
         for g in domain.findall(".//Grid"):
             if topology is None and g.find("Topology") is not None:
                 topology = g.find("Topology")
@@ -82,7 +85,7 @@ def load_data(xdmf_path):
     
     # --- FORMAT 1: Structured (3DRectMesh) ---
     if topo_type == "3DRectMesh":
-        print(f"Detected Format: Structured Grid ({topo_type})")
+        logger.info(f"Detected Format: Structured Grid ({topo_type})")
         
         # Geometry in VXVYVZ format expects 3 DataItems (X, Y, Z vectors)
         geo_items = geometry.findall("DataItem")
@@ -114,7 +117,7 @@ def load_data(xdmf_path):
 
     # --- FORMAT 2: Unstructured (Tetrahedron/XYZ) ---
     else:
-        print(f"Detected Format: Unstructured Grid ({topo_type})")
+        logger.info(f"Detected Format: Unstructured Grid ({topo_type})")
         
         # Load XYZ Geometry (N x 3)
         geo_item = geometry.find("DataItem")
@@ -147,7 +150,7 @@ def get_slice(data, normal, center, width, height, reverse_axes=(), resolution=4
     reverse_axes: list of axes ('x', 'y', 'z') to invert sign for data querying
     method: 'linear' or 'nearest' interpolation
     """
-    print(f"Interpolating slice Normal={normal} at Center={center}, W={width}, H={height}...")
+    logger.info(f"Interpolating slice Normal={normal} at Center={center}, W={width}, H={height}...")
     
     cx, cy, cz = center
 
@@ -240,11 +243,11 @@ def get_slice(data, normal, center, width, height, reverse_axes=(), resolution=4
         
         # Fallback if filtering removes too much (unlikely unless margin is tiny)
         if len(p_sub) < 10: 
-            print("Warning: Optimization filter removed too many points. Falling back to full mesh.")
+            logger.warning("Optimization filter removed too many points. Falling back to full mesh.")
             p_sub = points
             v_sub = values
         else:
-            print(f"Optimization: Reduced mesh from {len(points)} to {len(p_sub)} nodes for interpolation.")
+            logger.info(f"Optimization: Reduced mesh from {len(points)} to {len(p_sub)} nodes for interpolation.")
             
         # --- OPTIMIZATION END ---
         
@@ -258,12 +261,12 @@ def get_slice(data, normal, center, width, height, reverse_axes=(), resolution=4
     if h_axis in reverse_axes:
         # Flip horizontal axis (columns)
         slice_data = np.fliplr(slice_data)
-        print(f"Reversing horizontal axis ({h_axis})")
+        logger.info(f"Reversing horizontal axis ({h_axis})")
         
     if v_axis in reverse_axes:
         # Flip vertical axis (rows)
         slice_data = np.flipud(slice_data)
-        print(f"Reversing vertical axis ({v_axis})")
+        logger.info(f"Reversing vertical axis ({v_axis})")
     
     return U, V, slice_data, xlabel, ylabel
 
@@ -345,7 +348,7 @@ def plot_meltpool(U, V, T_grid, xlabel, ylabel, liquidus, solidus, title, output
         ax.quiver(U[skip], V[skip], dU_norm[skip], dV_norm[skip], 
                   color='black', alpha=0.5, scale=20, width=0.002)
     except Exception as e:
-        print(f"Could not plot gradients: {e}")
+        logger.warning("Could not plot gradients: %s", e)
 
     # 4. Styling
     ax.set_aspect('equal')
@@ -357,7 +360,7 @@ def plot_meltpool(U, V, T_grid, xlabel, ylabel, liquidus, solidus, title, output
     
     if output_file:
         plt.savefig(output_file, dpi=300)
-        print(f"Plot saved to {output_file}")
+        logger.info(f"Plot saved to {output_file}")
     else:
         plt.show() # Blocking show if no output file
         
@@ -378,16 +381,14 @@ def generate_plots(xdmf_path, output_dir=None, show_ui=True, save_images=False,
     Main function to generate plots from an XDMF file.
     """
     if not os.path.exists(xdmf_path):
-        print(f"Error: XDMF file not found: {xdmf_path}")
+        logger.error(f"Error: XDMF file not found: {xdmf_path}")
         return
 
     # 1. Load Data
     try:
         data = load_data(xdmf_path)
     except Exception as e:
-        print(f"Error loading XDMF: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception("Error loading XDMF: %s", e)
         return
 
     # 2. Interpolate Slice
@@ -397,9 +398,7 @@ def generate_plots(xdmf_path, output_dir=None, show_ui=True, save_images=False,
         
         U, V, T_grid, xlabel, ylabel = get_slice(data, normal, center, width, height, reverse_axes=reverse, method=interp)
     except Exception as e:
-        print(f"Error extracting slice: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception("Error extracting slice: %s", e)
         return
 
     # 3. Plot

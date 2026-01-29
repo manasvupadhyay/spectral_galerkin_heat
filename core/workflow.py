@@ -63,7 +63,17 @@ class SimulationWorkflow:
         profiles_locations = io_cfg.get('profiles_locations', [])
         cut_views_planes = io_cfg.get('cut_views_planes', [])
 
-        next_output_time = 0.0
+        # Defensive handling: if interval is None (YAML null) we disable periodic outputs
+        if interval is None:
+            logger.info("io.interval is None: periodic outputs disabled; only 'at_end' outputs will be saved.")
+            next_output_time = float('inf')
+        else:
+            # Ensure numeric
+            try:
+                next_output_time = float(interval)
+            except Exception:
+                logger.warning(f"Invalid io.interval '{interval}' - disabling periodic outputs.")
+                next_output_time = float('inf')
         logger.info(f"Starting time loop: 0 -> {t_end:.4e} s (dt={dt:.2e})")
 
         # Check for dynamic laser_path in context

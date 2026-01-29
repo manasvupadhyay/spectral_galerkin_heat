@@ -98,27 +98,50 @@ class SpectralSolverState:
         self.x = ((np.arange(nx) + 0.5) * dx).astype(np.float32)
         self.y = ((np.arange(ny) + 0.5) * dy).astype(np.float32)
         self.z = ((np.arange(nz) + 0.5) * dz).astype(np.float32)
-        x_np, y_np, z_np = self.x, self.y, self.z
+        
         self.X, self.Y = np.meshgrid(self.x, self.y, indexing='xy')
         self.X, self.Y = self.X.astype(np.float32), self.Y.astype(np.float32)
         """Precompute reconstruction bases and normalization coefficients."""
         import logging
         logger = logging.getLogger(__name__)
         logger.info("Precomputing reconstruction bases...")
-        # Normalization coefficients ([FIX] Use spec_hp.C_coef)
+        # Normalization coefficients
         self.Cm = spec_hp.C_coef(nx, Lx)
         self.Cn = spec_hp.C_coef(ny, Ly)
         self.Cp = spec_hp.C_coef(nz, Lz)
-        self.Cp32_broadcast = self.Cp.astype(np.float32)[:, None, None]
         
         # Scaling factors for DCT/IDCT
         self.dct_scale = np.float32((dx * dy) * np.sqrt((nx * ny) / (Lx * Ly)))
         self.recon_scale = np.float32(np.sqrt(nx * ny) / np.sqrt(Lx * Ly))
 
-        # Precomputed cosine bases for reconstruction
+        # Precomputed cosine bases for reconstruction (cell-centered points)
+        x_np, y_np, z_np = self.x, self.y, self.z
         self.cos_mx = np.cos(np.pi * np.arange(nx)[:, None] * x_np[None, :] / Lx).astype(np.float32)
         self.cos_ny = np.cos(np.pi * np.arange(ny)[:, None] * y_np[None, :] / Ly).astype(np.float32)
         self.cos_pz = np.cos(np.pi * np.arange(nz)[:, None] * z_np[None, :] / Lz).astype(np.float32)
+
+        # --- Full-domasin reconstruction grids (node-centered) and buffered bases ---
+        # Keep cell-centered coordinates for solver internals, but precompute
+        # a node-centered reconstruction grid for full-volume evaluation (x=0,dx,2dx,...)
+        # Need to assert if it's really necessary
+        dx_rec = dx  # dx = Lx / nx
+        dy_rec = dy
+        dz_rec = dz
+        x_rec = ((np.arange(nx+1)) * dx_rec).astype(np.float32)
+        y_rec = ((np.arange(ny+1)) * dy_rec).astype(np.float32)
+        z_rec = ((np.arange(nz+1)) * dz_rec).astype(np.float32)
+        self.x_rec = x_rec
+        self.y_rec = y_rec
+        self.z_rec = z_rec
+
+        # Precompute full-domain basis matrices including normalization coefficients
+        m = np.arange(nx)
+        n = np.arange(ny)
+        p = np.arange(nz)
+        # Bx_recon: (modes_x, nx_rec), By_recon: (modes_y, ny_rec), Bz_recon: (modes_z, nz_rec)
+        self.Bx_recon = (self.Cm[:, None] * np.cos(np.pi * m[:, None] * x_rec[None, :] / Lx)).astype(np.float32)
+        self.By_recon = (self.Cn[:, None] * np.cos(np.pi * n[:, None] * y_rec[None, :] / Ly)).astype(np.float32)
+        self.Bz_recon = (self.Cp[:, None] * np.cos(np.pi * p[:, None] * z_rec[None, :] / Lz)).astype(np.float32)
 
         # Fine mesh setup for latent heat correction
         self.refinement = 4
@@ -153,7 +176,8 @@ class SpectralSolverState:
         self.Bz_fine = self.Bz_fine_full[:, :self.nz_box]
         self.box_x = np.zeros(self.nx_box, dtype=np.float32)
         self.box_y = np.zeros(self.ny_box, dtype=np.float32)
-        self.box_z = np.linspace(0.0, self.Lz_box, self.nz_box, dtype=np.float32)
+        # box_z assumes top surface fixed at Lz
+        self.box_z = np.linspace(geom.Lz - self.Lz_box, geom.Lz, self.nz_box, dtype=np.float32)
         self.fine_mesh_initialized = False
         self.ix_laser_box = max(0, min(self.nx_box - 1, int(round(0.5 * (self.nx_box - 1)))))
         
@@ -168,7 +192,14 @@ class SpectralSolverState:
         logger.info("Precomputing K, KK... ")
         # [FIX] Use spec_hp.precompute_K_KK
         self.K, self.KK = precompute_K_KK(phys, num, geom)
-        self.KK_by_Cp = (self.KK * self.Cp[:, None, None]).astype(np.float32) # Projected on x,y plane
+        logger.info("Preparing projection on top surface..., assumed fixed at z=Lz ")
+        # Compute top-surface weighting: cos(p*pi) = (-1)^p so that modes are evaluated at z=Lz
+        sign = np.power(-1.0, np.arange(num.nz, dtype=np.float32)).astype(np.float32)
+        Cp_top = (self.Cp.astype(np.float32) * sign)
+        # Broadcasted coefficient array for fast contraction with modal arrays (shape: (nz,1,1))
+        self.Cp32_broadcast = Cp_top[:, None, None]
+        # Precompute KK multiplied by Cp evaluated at top surface for source projection
+        self.KK_by_Cp = (self.KK * Cp_top[:, None, None]).astype(np.float32)
         nx, ny, nz = num.nx, num.ny, num.nz
         # Allocate working arrays
         self.q_diff = np.empty((ny, nx), dtype=np.float32)
@@ -380,16 +411,17 @@ def reconstruct_surface_temperature(a, SsState):
     # In helpers.py: A = (SsState.Cp32[:, None, None] * a).sum(axis=0)
     # This assumes cos(p*pi*z/Lz) at z=0 is 1.0. 
     # The reconstruction formula is T = sum(a * Bx * By * Bz).
-    # Bz[p] at z=0 is Cp[p] * cos(0) = Cp[p].
+    # Bz[p] at z=0 is Cp[p] * cos(p*pi*z/Lz) -> z top surface
     A = (SsState.Cp32_broadcast * a).sum(axis=0)
     # Use DCT-II for surface temperature (mathematical definition)
     dct_result = IDCT_II(A)
     return (SsState.recon_scale * dct_result).astype(np.float32, copy=False)
 
-def reconstruct_temperature_xz(a, num, geom, SsState, laser, y0=None):
+def reconstruct_temperature_xz(a, num, geom, SsState, laser):
     """
     Optimized reconstruction of X-Z temperature slice using FFTW/DCT.
     Returns (x_vals, z_vals, T_xz).
+    Unused
     """
     y0 = laser.y0
     nx, ny, nz = num.nx, num.ny, num.nz
@@ -399,7 +431,7 @@ def reconstruct_temperature_xz(a, num, geom, SsState, laser, y0=None):
     A_xz = np.tensordot(a, cos_y, axes=(1, 0)) 
     # Reconstruct X-Z field using 2D IDCT (Type 3)
     scale_xz = np.sqrt(nx * nz / (geom.Lx * geom.Lz))
-    T_xz = scale_xz * dctn(A_xz, type=3, norm='ortho', axes=(0, 1))
+    T_xz = scale_xz * pyfftw.interfaces.scipy_fft.dctn(A_xz, type=3, norm='ortho', axes=(0, 1))
     
     return geom.x, geom.z, T_xz.astype(np.float32)
 
@@ -439,6 +471,8 @@ def calculate_subgrid_indices(pos, dx, n_total_fine, n_box):
 def update_fine_mesh(SsState, x_laser, y_laser):
     """
     Update fine mesh box coordinates and basis subsets so the laser remains centered.
+    Only x and y are updated since z is static (considering flat top).
+
     """
     # 1. Update X-Axis (Scanning Direction)
     ix_start, ix_end, ix_laser_rel = calculate_subgrid_indices(

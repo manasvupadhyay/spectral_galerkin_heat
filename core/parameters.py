@@ -62,8 +62,6 @@ class GeomParams:
         self.x = np.linspace(0.0, self.Lx, self.nx, endpoint=False).astype(np.float32)
         self.y = np.linspace(0.0, self.Ly, self.ny, endpoint=False).astype(np.float32)
         # Check if z endpoint should be included or not. Usually for spectral in Z we might want specific BCs.
-        # The good file for now is test_speed_spectral.py
-        # self.z = np.linspace(0.0, self.Lz, self.nz).astype(np.float32)
         self.z = np.linspace(0.0, self.Lz, self.nz).astype(np.float32)
 
 @dataclass

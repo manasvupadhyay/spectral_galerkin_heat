@@ -175,7 +175,7 @@ class SpectralSolverState:
         self.x = ((cp.arange(nx) + 0.5) * dx).astype(cp.float32)
         self.y = ((cp.arange(ny) + 0.5) * dy).astype(cp.float32)
         self.z = ((cp.arange(nz) + 0.5) * dz).astype(cp.float32)
-        x_np, y_np, z_np = self.x, self.y, self.z
+        
         # Meshgrid on GPU
         self.X, self.Y = cp.meshgrid(self.x, self.y, indexing='xy')
         self.X, self.Y = self.X.astype(cp.float32), self.Y.astype(cp.float32)
@@ -187,17 +187,42 @@ class SpectralSolverState:
         self.Cm = cp.asarray(spec_hp.C_coef(nx, Lx), dtype=cp.float32)
         self.Cn = cp.asarray(spec_hp.C_coef(ny, Ly), dtype=cp.float32)
         self.Cp = cp.asarray(spec_hp.C_coef(nz, Lz), dtype=cp.float32)
-        self.Cp32_broadcast = self.Cp.astype(cp.float32)[:, None, None]
+        # Evaluate Cp at top surface (z = Lz): cos(p*pi) = (-1)^p
+        sign = cp.power(-1.0, cp.arange(nz, dtype=cp.float32)).astype(cp.float32)
+        Cp_top = (self.Cp.astype(cp.float32) * sign)
+        self.Cp32_broadcast = Cp_top[:, None, None]
         
         # Scaling factors (Scalars)
         self.dct_scale = cp.float32((dx * dy) * np.sqrt((nx * ny) / (Lx * Ly)))
         self.recon_scale = cp.float32(np.sqrt(nx * ny) / np.sqrt(Lx * Ly))
         # Precomputed cosine bases for reconstruction
+        x_np, y_np, z_np = self.x, self.y, self.z
         self.cos_mx = cp.cos(cp.pi * cp.arange(nx)[:, None] * x_np[None, :] / Lx).astype(cp.float32)
         self.cos_ny = cp.cos(cp.pi * cp.arange(ny)[:, None] * y_np[None, :] / Ly).astype(cp.float32)
         self.cos_pz = cp.cos(cp.pi * cp.arange(nz)[:, None] * z_np[None, :] / Lz).astype(cp.float32)
 
+        # --- Full-domasin reconstruction grids (node-centered) and buffered bases ---
+        # Keep cell-centered coordinates for solver internals, but precompute
+        # a node-centered reconstruction grid for full-volume evaluation (x=0,dx,2dx,...)
+        # Need to assert if it's really necessary
+        dx_rec = dx  # dx = Lx / nx
+        dy_rec = dy
+        dz_rec = dz
+        x_rec = ((cp.arange(nx+1)) * dx_rec).astype(cp.float32)
+        y_rec = ((cp.arange(ny+1)) * dy_rec).astype(cp.float32)
+        z_rec = ((cp.arange(nz+1)) * dz_rec).astype(cp.float32)
+        self.x_rec = x_rec
+        self.y_rec = y_rec
+        self.z_rec = z_rec
 
+        # Precompute full-domain basis matrices including normalization coefficients
+        m = cp.arange(nx)
+        n = cp.arange(ny)
+        p = cp.arange(nz)
+        # Bx_recon: (modes_x, nx_rec), By_recon: (modes_y, ny_rec), Bz_recon: (modes_z, nz_rec)
+        self.Bx_recon = (self.Cm[:, None] * cp.cos(cp.pi * m[:, None] * x_rec[None, :] / Lx)).astype(cp.float32)
+        self.By_recon = (self.Cn[:, None] * cp.cos(cp.pi * n[:, None] * y_rec[None, :] / Ly)).astype(cp.float32)
+        self.Bz_recon = (self.Cp[:, None] * cp.cos(cp.pi * p[:, None] * z_rec[None, :] / Lz)).astype(cp.float32)
         # Fine mesh setup for latent heat correction
         self.refinement = 4
         self.Lx_box, self.Ly_box, self.Lz_box = 0.7e-3, 0.2e-3, 0.04e-3
@@ -248,9 +273,12 @@ class SpectralSolverState:
         logger.info("Precomputing K, KK on GPU... ")
         
         self.K, self.KK = precompute_K_KK(phys, num, geom)
-        self.KK_by_Cp = (self.KK * self.Cp[:, None, None]).astype(cp.float32)
-        
+        # Project KK onto top-surface weighted Cp for source projection
         nx, ny, nz = num.nx, num.ny, num.nz
+        sign = cp.power(-1.0, cp.arange(nz, dtype=cp.float32)).astype(cp.float32)
+        Cp_top = (self.Cp.astype(cp.float32) * sign)
+        self.KK_by_Cp = (self.KK * Cp_top[:, None, None]).astype(cp.float32)
+        
         # Allocate working arrays on GPU
         self.q_diff = cp.empty((ny, nx), dtype=cp.float32)
         self.B_buffer = cp.empty((ny, nx), dtype=cp.float32)
@@ -438,7 +466,11 @@ def IDCT_II(a):
 
 def reconstruct_surface_temperature(a, SsState):
     """Reconstruct 2D temperature field at z=0 (GPU)."""
-    # A = sum(Cp32 * a) along z-axis
+   # Sum over Z modes (weighted by Cp coefficients at z=0, which is just Cp/sqrt(1/L)?? No)
+    # In helpers.py: A = (SsState.Cp32[:, None, None] * a).sum(axis=0)
+    # This assumes cos(p*pi*z/Lz) at z=0 is 1.0. 
+    # The reconstruction formula is T = sum(a * Bx * By * Bz).
+    # Bz[p] at z=0 is Cp[p] * cos(p*pi*z/Lz) -> z top surface
     A = (SsState.Cp32_broadcast * a).sum(axis=0)
     
     # Use DCT-III (IDCT) for surface temperature
@@ -495,6 +527,8 @@ def calculate_subgrid_indices(pos, dx, n_total_fine, n_box):
 def update_fine_mesh(SsState, x_laser, y_laser):
     """
     Update fine mesh box coordinates and basis subsets on GPU.
+    Only x and y are updated since z is static (considering flat top).
+
     """
     # 1. Update X-Axis
     ix_start, ix_end, ix_laser_rel = calculate_subgrid_indices(
