@@ -1,6 +1,7 @@
 import os
 import logging
 import h5py
+import numpy as np
 from datetime import datetime
 from typing import Any, Dict, Optional, Union
 from core.io import IOManager
@@ -34,6 +35,7 @@ class LocalFSIOManager(IOManager):
         """
         Setup directory structure: root/run_id/{subdirs}
         """
+        self.context = context  # Store context for later use
         # 1. Extract config
         # Assuming context has an 'io' attribute or we fall back to defaults
         # We handle context dynamically since types might vary
@@ -73,23 +75,80 @@ class LocalFSIOManager(IOManager):
         else:
             return os.path.join(self.base_dir, filename)
 
-    def save_step(self, time: float, step: int, state: Any, **kwargs) -> None:
+    def save_step(self, time: float, step: int, state: Any, laser_path: Any, **kwargs) -> None:
         """
         Save the current simulation state to HDF5/XDMF, with time and step in filenames and XMF metadata.
+        Handles output types as defined in the YAML config (full_volume, profiles, cut_views).
         """
+        output_type = kwargs.get('output_type', 'full_volume')
+        profiles_locations = kwargs.get('profiles_locations', [])
+        cut_views_planes = kwargs.get('cut_views_planes', [])
+
         try:
             from utils.spectral_helpers import reconstruct_temperature_volume
             field = reconstruct_temperature_volume(state.a, state).transpose(2,1,0)  # Ensure (z,y,x) ordering
             grid_coords = (state.x, state.y, state.z)
-            filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
-            if hasattr(field, "get"):
-                field = field.get()
-            save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
-            
+            if output_type == 'full_volume':
+                filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
+                if hasattr(field, "get"):
+                    field = field.get()
+                save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
+                logger.info(f"Saved field for step {step} to {filename_base}.h5/.xmf")
+            elif output_type == 'profiles':
+                # Compute 1D profiles using the helper (no I/O in helper)
+                from utils.spectral_helpers import save_temp_profiles
+                # You may want to pass additional arguments as needed (center, num_points, etc.)
+                # Here, we use the first location in profiles_locations if provided, else default to 'laser'
+                center = 'laser'
+                if profiles_locations and len(profiles_locations) > 0:
+                    center = profiles_locations[0]
+                # Try to get laser object from state if available, else None
+                laser_state = laser_path.get_state(time, 0.0)
+                laser_position = (float(laser_state.x), float(laser_state.y), 0.0)
+                profiles = save_temp_profiles(state.a, self.context.num, self.context.geom, state, laser_position, center=center)
+                # Write each profile to the profiles/ subfolder
+                profiles_dir = self.get_output_path('', subdir='profiles')
+                for direction, (coords, temps) in profiles.items():
+                    fname = os.path.join(profiles_dir, f"{direction}_spectral_latent_heat.txt")
+                    # Format: Coord [m] | Temp [K]
+                    np.savetxt(fname, np.vstack([coords, temps]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
+                logger.info(f"Saved 1D profiles at {profiles_locations} for step {step} to {profiles_dir}")
+            elif output_type == 'cut_views':
+                # 1. Ensure XDMF exists for this step
+                filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
+                xdmf_path = f"{filename_base}.xmf"
+                if not os.path.exists(xdmf_path):
+                    # Generate HDF5/XDMF by saving the full volume
+                    if hasattr(field, "get"):
+                        field = field.get()
+                    save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
+                    logger.info(f"Generated XDMF for cut views at {xdmf_path}")
 
-            logger.info(f"Saved field for step {step} to {filename_base}.h5/.xmf")
+                # 2. Generate cut views for each plane
+                from utils.cut_views import generate_plots
+                cut_views_dir = self.get_output_path('', subdir='cut_views')
+                for plane in cut_views_planes:
+                    logger.warning("You may want to set parameters for center, width, height, etc.")
+                    output_file = os.path.join(cut_views_dir, f"cut_{plane}_step{step:06d}.png")
+                    # Determine center based on laser position
+                    laser_state = laser_path.get_state(time, 0.0)
+                    center = (float(laser_state.x), float(laser_state.y), 0.0)
+                    generate_plots(
+                        xdmf_path=xdmf_path,
+                        output_dir=cut_views_dir,
+                        show_ui=False,
+                        save_images=True,
+                        normal=plane[0],  # e.g., 'x', 'y', or 'z'
+                        center=center,
+                        width=0.0006,  # 0.6 mm
+                        height=0.0002,  # 0.2 mm
+                        specific_output_filename=output_file
+                    )
+                    logger.info(f"Saved cut view {plane} for step {step} to {output_file}")
+            else:
+                logger.warning(f"Unknown output_type '{output_type}' in save_step. Skipping.")
         except Exception as e:
-            logger.error(f"Failed to save field for step {step}: {e}")
+            logger.error(f"Failed to save {output_type} for step {step}: {e}")
             raise
 
     def load_step(self, step: Union[int, str] = 'latest') -> Optional[Dict[str, Any]]:

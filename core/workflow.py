@@ -67,8 +67,8 @@ class SimulationWorkflow:
         logger.info(f"Starting time loop: 0 -> {t_end:.4e} s (dt={dt:.2e})")
 
         # Check for dynamic laser_path in context
-        laser_path = getattr(self.context, 'laser_path', None)
-
+        laser_path = getattr(self.context, 'laser_path')
+        
         # ETA logging setup
         start_wall_time = time.time()
         last_eta_log_time = start_wall_time
@@ -79,7 +79,7 @@ class SimulationWorkflow:
             if t >= next_output_time:
                 for output_type in outputs:
                     self.io_manager.save_step(
-                        t, step, state,
+                        t, step, state, laser_path,
                         output_type=output_type,
                         profiles_locations=profiles_locations,
                         cut_views_planes=cut_views_planes
@@ -88,6 +88,7 @@ class SimulationWorkflow:
                 next_output_time += interval
             # B. Evolve State
             state, metrics = self.heat_solver.step(t, dt)
+            
             # C. Advance Time
             t += dt
             step += 1
@@ -111,7 +112,7 @@ class SimulationWorkflow:
         # At end: save all requested outputs
         for output_type in at_end:
             self.io_manager.save_step(
-                t, step, state,
+                t, step, state, laser_path,
                 output_type=output_type,
                 profiles_locations=profiles_locations,
                 cut_views_planes=cut_views_planes

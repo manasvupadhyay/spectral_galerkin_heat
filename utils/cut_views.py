@@ -444,7 +444,7 @@ if __name__ == "__main__":
 
     save_images = args.out is not None
     show_ui = not args.no_show
-    
+
     # If args.out is provided, it is a specific filename. 
     # We pass it as specific_output_filename to generate_plots.
     

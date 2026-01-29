@@ -58,7 +58,7 @@ def save_temp_profiles(
     num,
     geom,
     SsState,
-    laser,
+    laser_position,
     center="laser",
     num_points=1000,
     output_dir=OUT_DIR):
@@ -91,9 +91,9 @@ def save_temp_profiles(
         y_center = SsState.y[iy_idx]
         
     elif center == "laser":
-        if laser is None:
-            raise ValueError("Laser object required for center='laser'")
-        x_center, y_center = float(laser.x), float(laser.y)
+        if laser_position is None:
+            raise ValueError("Laser position required for center='laser'")
+        x_center, y_center = float(laser_position[0]), float(laser_position[1])
     elif isinstance(center, (tuple, list, np.ndarray)):
         x_center, y_center = float(center[0]), float(center[1])
     else:
@@ -123,20 +123,13 @@ def save_temp_profiles(
     T_y = reconstruct_temperature_volume_at_points(a, num, geom, SsState, points_y)
     T_z = reconstruct_temperature_volume_at_points(a, num, geom, SsState, points_z)
 
-    # 5. Save Results
-    os.makedirs(output_dir, exist_ok=True)
-    # TO DO WE SHOULDNT DO IO HERE
-    for direction, coords, profile in [
-        ('x_fine', coords_x, T_x),
-        ('y_fine', coords_y, T_y),
-        ('z_fine', coords_z, T_z)
-    ]:
-        fname = os.path.join(output_dir, f"{direction}_spectral_latent_heat.txt")
-        # Format: Coord [m] | Temp [K]
-        np.savetxt(fname, np.vstack([coords, profile]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
-        
-    print(f"Saved fine temp profiles centered at ({x_center:.2e}, {y_center:.2e}) to {output_dir}")
-
+    # 5. Return computed profiles as a dictionary
+    return {
+        'x': (coords_x, T_x),
+        'y': (coords_y, T_y),
+        'z': (coords_z, T_z)
+    }
+    
     
 
 
