@@ -38,9 +38,9 @@ laser:
 
 io:
   interval: 0.0012            # s (Output interval)
-  outputs: [full_volume, cut_views]          
+  outputs: [full_volume]      
   at_end: [full_volume, profiles, cut_views]  
   profiles_locations:
-    - 'laser'                 # m or 'laser' keyword
+    - 'hotspot'                 # m, 'laser' or 'hotspot' keyword
   cut_views_planes:
     - yz

@@ -4,7 +4,7 @@ import numpy as np
 class GCodeLaserPath(LaserPath):
     def __init__(self, gcode_file: str, initial_position=(0.0, 0.0)):
         self.segments, self.unit_scale = self._parse_gcode(gcode_file)
-        self.initial_position = tuple(np.array(initial_position) * self.unit_scale)
+        self.initial_position = tuple(np.array(initial_position)*self.unit_scale) # Assume input is already in Metres (from Config)
         self.current_segment = 0
 
     def _parse_gcode(self, filepath):
@@ -90,5 +90,12 @@ class GCodeLaserPath(LaserPath):
                 else:
                     vx = vy = 0.0
                 return LaserState(x=x, y=y, power=power, is_on=is_on, v=(vx, vy))
-        # If time is outside all segments, return off state
+        
+        # If time is past the last segment, remain at the final position
+        if self.segments and time > self.segments[-1][3]:
+             end_pos = self.segments[-1][1]
+             # Laser off after path ends
+             return LaserState(x=end_pos[0], y=end_pos[1], power=0.0, is_on=False, v=(0.0, 0.0))
+
+        # If time is before first segment or otherwise unmatched, use initial position
         return LaserState(x=self.initial_position[0], y=self.initial_position[1], power=0.0, is_on=False, v=(0.0, 0.0))

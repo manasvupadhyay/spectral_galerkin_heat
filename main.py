@@ -121,7 +121,8 @@ def get_factory(context: SimulationContext):
     logger.info(f"Factory Selector: Method='{method}', Backend='{backend}'")
 
     if method == "fem":
-        # Import local to avoid loading dependencies if not used
+        # Provided here the framework for FEM factory selection
+        # It is not implemented in this codebase. 
         try:
             from implementations.factories.fem_factory import FEMSimulationFactory
             return FEMSimulationFactory(context)

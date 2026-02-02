@@ -95,7 +95,10 @@ class SimulationWorkflow:
                         cut_views_planes=cut_views_planes
                     )
                 logger.info(f"Step {step} | t={t:.6e}s | Output(s) saved: {outputs}")
-                next_output_time += interval
+                if interval is not None:
+                    next_output_time += float(interval)
+                else:
+                    next_output_time = float('inf')
             # B. Evolve State
             state, metrics = self.heat_solver.step(t, dt)
             

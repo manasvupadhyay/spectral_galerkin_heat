@@ -8,7 +8,7 @@ simulation:
 
 domain:
   size: [0.01, 0.005, 0.0025] # [Lx, Ly, Lz] in m
-  mesh: [512, 256, 1024]      # [nx, ny, nz] (dimensionless)
+  mesh: [51, 51, 51]      # [nx, ny, nz] (dimensionless)
 
 material:
   name: "GenericSteel"
@@ -37,11 +37,11 @@ laser:
     initial_position: [0.0, 0.0025] # [x, y] in m
 
 io:
-  interval: 0.0012            # s (Output frequency)
-  outputs: [full_volume]      
-  at_end: [full_volume, profiles, cut_views]  
+  interval: null # 0.0012            # s (Output frequency)
+  outputs: [] #[full_volume]      
+  at_end: [] #[full_volume, profiles, cut_views]  
   profiles_locations:
-    - 'laser'                 # Location in m or 'laser' for dynamic center
+    - 'hotspot'                 # Location in m, 'laser' or 'hotspot' for dynamic center
   cut_views_planes:
     - xy
     - yz
