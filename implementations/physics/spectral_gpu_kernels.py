@@ -238,6 +238,10 @@ class SpectralSolverState:
         self.x_fine = x_fine
         self.y_fine = y_fine
         self.z_fine = z_fine
+
+        # Shift z_fine to top of the domain for basis evaluation (fine mesh is at the top)
+        z_fine_global = (Lz - self.Lz_box) + z_fine
+
         
         logger.info("Precomputing fine cosine bases on GPU...")
         m, n, p = cp.arange(nx), cp.arange(ny), cp.arange(nz)
@@ -246,7 +250,7 @@ class SpectralSolverState:
         # (nx, 1) * (1, nx_fine) -> (nx, nx_fine)
         self.Bx_fine_full = (self.Cm[:, None] * cp.cos(cp.pi * m[:, None] * x_fine[None, :] / Lx)).astype(cp.float32)
         self.By_fine_full = (self.Cn[:, None] * cp.cos(cp.pi * n[:, None] * y_fine[None, :] / Ly)).astype(cp.float32)
-        self.Bz_fine_full = (self.Cp[:, None] * cp.cos(cp.pi * p[:, None] * z_fine[None, :] / Lz)).astype(cp.float32)
+        self.Bz_fine_full = (self.Cp[:, None] * cp.cos(cp.pi * p[:, None] * z_fine_global[None, :] / Lz)).astype(cp.float32)
         
         # Box dimensions in fine grid points
         self.nx_box = int(cp.ceil(self.Lx_box / self.dx_fine))
@@ -259,7 +263,7 @@ class SpectralSolverState:
         self.Bz_fine = self.Bz_fine_full[:, :self.nz_box] # Slicing works on GPU
         self.box_x = cp.zeros(self.nx_box, dtype=cp.float32)
         self.box_y = cp.zeros(self.ny_box, dtype=cp.float32)
-        self.box_z = cp.linspace(0.0, self.Lz_box, self.nz_box, dtype=cp.float32)
+        self.box_z = z_fine_global # Use actual cell centers
         
         self.fine_mesh_initialized = False
         self.ix_laser_box = max(0, min(self.nx_box - 1, int(round(0.5 * (self.nx_box - 1)))))

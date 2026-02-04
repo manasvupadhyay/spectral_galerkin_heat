@@ -86,13 +86,13 @@ def build_context(cfg: Dict[str, Any]) -> SimulationContext:
     path_cfg = laser_cfg.get('path', {})
     laser_path = None
     if path_cfg.get('type', '').lower() == 'gcode':
-        from implementations.io.gcode_path import GCodeLaserPath
+        from utils.gcode_path import GCodeLaserPath
         gcode_file = path_cfg.get('file', None)
         initial_position = tuple(path_cfg.get('initial_position', [0.0, 0.0]))
         if gcode_file is not None:
-            # Assume relative to data/paths if not absolute
+            # Assume relative to config/paths if not absolute
             if not os.path.isabs(gcode_file):
-                gcode_file = os.path.join(os.path.dirname(__file__), 'data', 'paths', gcode_file)
+                gcode_file = os.path.join(os.path.dirname(__file__), 'config', 'paths', gcode_file)
             laser_path = GCodeLaserPath(gcode_file, initial_position=initial_position)
 
     # 5. IO Parameters (flat dict: interval, outputs, at_end, etc.)

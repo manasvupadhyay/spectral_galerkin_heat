@@ -15,7 +15,7 @@ G0 X0 Y2.5
 M3 S200
 
 ; Linear move 
-G1 X9.6 Y2.5 F48000
+G1 X9.7 Y2.5 F48000
 
 ; Turn laser off
 M5

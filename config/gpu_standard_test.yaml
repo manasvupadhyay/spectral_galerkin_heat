@@ -15,7 +15,7 @@ material:
   rho: 7850.0                 # kg/m^3
   k: 15.0                     # W/(m·K)
   Cp: 500.0                   # J/(kg·K)
-  L_f: 267700.0               # J/kg (Latent heat)
+  L_f: 267700.0               # J/kg (Latent heat of fusion)
   T_solidus: 1700.0           # K
   T_liquidus: 1800.0          # K
   T0: 293.0                   # K (Ambient temperature)
@@ -23,12 +23,12 @@ material:
   # Evaporation parameters
   DeltaH_LV: 7.41e6           # J/kg (Specific enthalpy of vaporization)
   R_v: 150.774                # J/(kg·K) (Specific gas constant for vapor)
-  Pa: 101325.0                # Pa
+  Pa: 101325.0                # Pa (Ambient pressure)
   T_boil: 3090.0              # K
 
 laser:
   radius: 60.0e-6             # m (r_b)
-  absorptivity: 0.30          # (dimensionless)
+  absorptivity: 0.30          # (dimensionless, 0.0 to 1.0)
   power_nominal: 200.0        # W
   
   path:
@@ -37,9 +37,9 @@ laser:
     initial_position: [0.0, 0.0025] # [x, y] in m
 
 io:
-  interval: 0.0012            # s (Output interval)
-  outputs: [full_volume]      
-  at_end: [full_volume, profiles, cut_views]  
+  interval: null # 0.0012            # s (Output interval)
+  outputs: [] # [full_volume]      
+  at_end: [] # [full_volume, profiles, cut_views]  
   profiles_locations:
     - 'hotspot'                 # m, 'laser' or 'hotspot' keyword
   cut_views_planes:
