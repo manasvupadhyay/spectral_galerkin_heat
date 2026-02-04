@@ -159,11 +159,14 @@ class SpectralSolverState:
         self.y_fine = y_fine
         self.z_fine = z_fine
         
+        # Shift z_fine to top of the domain for basis evaluation (fine mesh is at the top)
+        z_fine_global = (Lz - self.Lz_box) + z_fine
+
         logger.info("Precomputing fine cosine bases...")
         m, n, p = np.arange(nx), np.arange(ny), np.arange(nz)
         self.Bx_fine_full = (self.Cm[:, None] * np.cos(np.pi * m[:, None] * x_fine[None, :] / Lx)).astype(np.float32)
         self.By_fine_full = (self.Cn[:, None] * np.cos(np.pi * n[:, None] * y_fine[None, :] / Ly)).astype(np.float32)
-        self.Bz_fine_full = (self.Cp[:, None] * np.cos(np.pi * p[:, None] * z_fine[None, :] / Lz)).astype(np.float32)
+        self.Bz_fine_full = (self.Cp[:, None] * np.cos(np.pi * p[:, None] * z_fine_global[None, :] / Lz)).astype(np.float32)
         
         # Box dimensions in fine grid points
         self.nx_box = int(np.ceil(self.Lx_box / self.dx_fine))
@@ -177,7 +180,7 @@ class SpectralSolverState:
         self.box_x = np.zeros(self.nx_box, dtype=np.float32)
         self.box_y = np.zeros(self.ny_box, dtype=np.float32)
         # box_z assumes top surface fixed at Lz
-        self.box_z = np.linspace(geom.Lz - self.Lz_box, geom.Lz, self.nz_box, dtype=np.float32)
+        self.box_z = z_fine_global # Use actual cell centers
         self.fine_mesh_initialized = False
         self.ix_laser_box = max(0, min(self.nx_box - 1, int(round(0.5 * (self.nx_box - 1)))))
         

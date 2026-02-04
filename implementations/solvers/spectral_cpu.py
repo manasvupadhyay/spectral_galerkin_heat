@@ -93,6 +93,7 @@ class SpectralSolverCPU:
         kernels.compute_latent_heat_source(SsState.Q_latent_buffer, mat, x, y, num, SsState)
         Q_modes = kernels.project_box_to_modes(SsState.Q_latent_buffer, SsState)
         kernels.add_source_term_modes(SsState.aK, SsState.KK, Q_modes)
+        # TODO Check if next line is necessary
         kernels.add_source_term_modes(SsState.a_temp, SsState.KK, Q_modes)
 
         # 4. Nonlinear iteration for evaporation
