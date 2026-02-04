@@ -38,7 +38,7 @@ class SpectralSolverGPU:
         self.state.a[0,0,0] = cp.asarray(T0 * (geom.Lx * geom.Ly * geom.Lz) ** 0.5, dtype=cp.float32)
 
         # Ensure all state arrays are on GPU (CuPy) TO DO - Ensure in kernels directly
-        for attr in ["aK", "a_temp", "K", "KK", "KK_by_Cp", "q_evap_old", "q_evap_buffer", "q_diff", "B_buffer", "Q_latent_buffer"]:
+        for attr in ["a_temp", "K", "q_evap_old", "q_evap_buffer", "q_diff", "B_buffer", "Q_latent_buffer"]:
             arr = getattr(self.state, attr, None)
             if arr is not None and not isinstance(arr, cp.ndarray):
                 setattr(self.state, attr, cp.asarray(arr, dtype=cp.float32))
@@ -87,19 +87,26 @@ class SpectralSolverGPU:
         q_dct = kernels.DCT_II(q_las - q_evap)
 
         # 2. Linear step (ETD1)
-        cp.multiply(cp.asarray(a), cp.asarray(SsState.K), out=SsState.aK, casting='same_kind')
+        # Apply decay to 'a' in-place (a becomes the base decayed state for this step)
+        cp.multiply(a, SsState.K, out=a)
+        
+        # Prepare Source term S_n
         S_n = SsState.dct_scale * q_dct
         cp.multiply(SsState.dct_scale, q_dct, out=SsState.B_buffer, casting='same_kind')
-        kernels.update_modes_etd1(SsState.aK, SsState.KK_by_Cp, SsState.B_buffer, SsState.a_temp)
+        
+        # Compute first estimate a_temp (includes linear decay + initial source guess)
+        kernels.update_modes_etd1(a, SsState, SsState.B_buffer, SsState.a_temp)
         S_current = S_n.copy()
 
         # 3. Latent Heat Correction
-        kernels.update_fine_mesh(SsState, x, y) # can be moved easily to kernels
+        kernels.update_fine_mesh(SsState, x, y)
         SsState.Q_latent_buffer.fill(0.0)
         kernels.compute_latent_heat_source(SsState.Q_latent_buffer, mat, x, y, num, SsState)
-        Q_modes = kernels.project_box_to_modes(SsState.Q_latent_buffer, SsState)
-        kernels.add_source_term_modes(SsState.aK, SsState.KK, Q_modes)
-        kernels.add_source_term_modes(SsState.a_temp, SsState.KK, Q_modes)
+        
+        # Project latent heat directly into 'a' (base state) and 'a_temp' (current estimate)
+        # This modifies 'a' to include the integrated latent heat, so it serves effectively as 'aK' from original code
+        kernels.add_projected_source(a, SsState.Q_latent_buffer, SsState)
+        kernels.add_projected_source(SsState.a_temp, SsState.Q_latent_buffer, SsState)
 
         # 4. Nonlinear iteration for evaporation
         T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
@@ -113,7 +120,10 @@ class SpectralSolverGPU:
             S_target = SsState.dct_scale * kernels.DCT_II(SsState.q_diff)
             S_current = 0.1 * S_target + 0.9 * S_current
             cp.multiply(1.0, S_current, out=SsState.B_buffer, casting='same_kind')
-            kernels.update_modes_etd1(SsState.aK, SsState.KK_by_Cp, SsState.B_buffer, SsState.a_temp)
+            
+            # Recompute a_temp from base 'a' (which includes latent heat now) and new source S_current
+            kernels.update_modes_etd1(a, SsState, SsState.B_buffer, SsState.a_temp)
+            
             T_old = T_temp
             T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
             if cp.max(cp.abs(T_temp - T_old)) < 2e+1:
@@ -129,6 +139,8 @@ class SpectralSolverGPU:
             'n_evap_iter': k+1
         }
 
-        # Update state for next step
-        SsState.a = SsState.a_temp.copy()
+        # Update state for next step by ping-pong swapping
+        # 'a_temp' holds validity, 'a' holds garbage. Swap so 'a' holds validity.
+        SsState.a, SsState.a_temp = SsState.a_temp, SsState.a
+        
         return SsState, metrics
