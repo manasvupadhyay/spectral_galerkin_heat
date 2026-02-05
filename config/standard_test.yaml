@@ -8,7 +8,7 @@ simulation:
 
 domain:
   size: [0.01, 0.005, 0.0025] # [Lx, Ly, Lz] in m
-  mesh: [512, 256, 1900]      # [nx, ny, nz] (dimensionless)
+  mesh: [10, 10, 10]      # [nx, ny, nz] (dimensionless)
 
 material:
   name: "GenericSteel"
@@ -37,8 +37,8 @@ laser:
     initial_position: [0.0, 0.0025] # [x, y] in m TODO remove, it should be in the gcode
 
 io:
-  interval: null # 0.0012            # s (Output frequency)
-  outputs: [] #[full_volume]      
+  interval: null # 0.0012             # s (Output frequency)
+  outputs: []                         #[full_volume]      
   at_end: [full_volume, profiles, cut_views] #[full_volume, profiles, cut_views]  
   profiles_locations:
     - 'hotspot'                 # Location in m, 'laser' or 'hotspot' for dynamic center

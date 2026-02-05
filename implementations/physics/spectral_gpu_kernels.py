@@ -12,58 +12,16 @@ import utils.spectral_helpers as spec_hp  # Assuming this contains only scalar l
 # ======================================
 
 @cuda.jit
-def update_modes_etd1_kernel(aK, B_scaled, a_temp_out, K, kx2, ky2, kz2, alpha, dt, rho_Cp):
+def update_modes_etd1_kernel(aK, KK_by_Cp, B_scaled, a_temp_out):
     """
     Update spectral coefficients for ETD1 scheme.
-    Computes KK on the fly to save memory.
     Grid: 3D (nz, ny, nx)
     """
     z, y, x = cuda.grid(3)
     nz, ny, nx = aK.shape
 
     if z < nz and y < ny and x < nx:
-        # Compute KK inline
-        # KK = (K - 1) / (-alpha * k^2 * rho * Cp)
-        # alpha * k^2
-        k2 = kx2[x] + ky2[y] + kz2[z]
-        denom = alpha * k2
-        
-        if denom == 0.0:
-            KK_val = dt / rho_Cp
-        else:
-            KK_val = (K[z, y, x] - 1.0) / (-denom * rho_Cp)
-            
-        a_temp_out[z, y, x] = aK[z, y, x] + KK_val * B_scaled[y, x]
-
-@cuda.jit
-def add_projected_source_kernel(a_temp, temp2, Bx, K, kx2, ky2, kz2, alpha, dt, rho_Cp):
-    """
-    Project partial source term (temp2) onto x-modes and add to a_temp weighted by KK.
-    temp2: (nx_box, nz, ny)
-    Bx: (nx, nx_box)
-    a_temp: (nz, ny, nx)
-    """
-    z, y, x = cuda.grid(3)
-    nz, ny, nx = a_temp.shape
-    nx_box = temp2.shape[0]
-    
-    if z < nz and y < ny and x < nx:
-        # 1. Finish Projection (Dot product over box x-modes)
-        Q_val = 0.0
-        for i in range(nx_box):
-            Q_val += temp2[i, z, y] * Bx[x, i] # Bx is (nx, nx_box)
-            
-        # 2. Compute KK inline
-        k2 = kx2[x] + ky2[y] + kz2[z]
-        denom = alpha * k2
-        
-        if denom == 0.0:
-            KK_val = dt / rho_Cp
-        else:
-            KK_val = (K[z, y, x] - 1.0) / (-denom * rho_Cp)
-            
-        # 3. Add to state
-        a_temp[z, y, x] += KK_val * Q_val
+        a_temp_out[z, y, x] = aK[z, y, x] + KK_by_Cp[z, y, x] * B_scaled[y, x]
 
 @cuda.jit
 def add_source_term_modes_kernel(a_temp, KK, Q_modes):
@@ -134,22 +92,12 @@ class SpectralSolverState:
     """
     # Spectral Propagators
     K: cp.ndarray = None
-    # KK: cp.ndarray = None      # Removed to save memory
-    # KK_by_Cp: cp.ndarray = None # Removed to save memory
-     
-    # K-vector squared components for on-the-fly KK computation
-    kx2: cp.ndarray = None
-    ky2: cp.ndarray = None
-    kz2: cp.ndarray = None
-    
-    # Physics scalars for KK computation
-    alpha: float = 0.0
-    dt: float = 0.0
-    rho_Cp: float = 0.0
+    KK: cp.ndarray = None
+    KK_by_Cp: cp.ndarray = None
     
     # State Arrays
     a: cp.ndarray = None       # Current temperature modes (nz, ny, nx)
-    # aK: cp.ndarray = None      # Removed, we reuse 'a' as accumulator
+    aK: cp.ndarray = None      # Decayed temperature modes (nz, ny, nx)
     a_temp: cp.ndarray = None  # Temporary working array (nz, ny, nx)
     
     # Buffers
@@ -182,10 +130,6 @@ class SpectralSolverState:
     nx_box: int = 0
     ny_box: int = 0
     nz_box: int = 0
-    
-    # helper for slicing
-    box_y_ind_start: int = 0
-    box_y_ind_end: int = 0
     
     fine_mesh_initialized: bool = False
     
@@ -317,45 +261,47 @@ class SpectralSolverState:
         self.Bx_fine = cp.zeros((nx, self.nx_box), dtype=cp.float32)
         self.By_fine = cp.zeros((ny, self.ny_box), dtype=cp.float32)
         self.Bz_fine = self.Bz_fine_full[:, :self.nz_box] # Slicing works on GPU
-        self.box_x = cK and setup scalar params for on-the-fly KK."""
+        self.box_x = cp.zeros(self.nx_box, dtype=cp.float32)
+        self.box_y = cp.zeros(self.ny_box, dtype=cp.float32)
+        self.box_z = z_fine_global # Use actual cell centers
+        
+        self.fine_mesh_initialized = False
+        self.ix_laser_box = max(0, min(self.nx_box - 1, int(round(0.5 * (self.nx_box - 1)))))
+        
+        self.dV_fine = self.dx_fine * self.dy_fine * self.dz_fine
+
+    def prepare_K_buffers(self, phys, geom, num):
+        """Precompute spectral propagators and allocate buffers on GPU."""
         import logging
         logger = logging.getLogger(__name__)
-        logger.info("Precomputing K on GPU... ")
+        logger.info("Precomputing K, KK on GPU... ")
         
-        self.K, self.kx2, self.ky2, self.kz2 = precompute_K_and_k2(phys, num, geom)
-        
-        # Store scalars
-        self.alpha = phys.k / (phys.rho * phys.Cp)
-        self.dt = num.dt
-        self.rho_Cp = phys.rho * phys.Cp
+        self.K, self.KK = precompute_K_KK(phys, num, geom)
+        # Project KK onto top-surface weighted Cp for source projection
+        nx, ny, nz = num.nx, num.ny, num.nz
+        sign = cp.power(-1.0, cp.arange(nz, dtype=cp.float32)).astype(cp.float32)
+        Cp_top = (self.Cp.astype(cp.float32) * sign)
+        self.KK_by_Cp = (self.KK * Cp_top[:, None, None]).astype(cp.float32)
         
         # Allocate working arrays on GPU
-        # Reduced memory: aK removed, KK removed
-        self.q_diff = cp.empty((num.ny, num.nx), dtype=cp.float32)
-        self.B_buffer = cp.empty((num.ny, num.nx), dtype=cp.float32)
-        self.a_temp = cp.empty((num.nz, num.ny, num.nx), dtype=cp.float32)
-        
-        # Re-use 'a' logic will happen in solver class
-        # self.aK = cp.empty((nz, ny, nx), dtype=cp.float32) # Removed
-        
-        self.q_evap_old = cp.zeros((num.ny, num.nx), dtype=cp.float32)
-        self.q_evap_buffer = cp.zeros((num.ny, num.nx), dtype=cp.float32)
+        self.q_diff = cp.empty((ny, nx), dtype=cp.float32)
+        self.B_buffer = cp.empty((ny, nx), dtype=cp.float32)
+        self.a_temp = cp.empty((nz, ny, nx), dtype=cp.float32)
+        self.aK = cp.empty((nz, ny, nx), dtype=cp.float32)
+        self.q_evap_old = cp.zeros((ny, nx), dtype=cp.float32)
+        self.q_evap_buffer = cp.zeros((ny, nx), dtype=cp.float32)
         # ZYX layout
         self.Q_latent_buffer = cp.zeros((self.nz_box, self.ny_box, self.nx_box), dtype=cp.float32)
 
 
-def precompute_K_and_k2(phys, num, geom):
+def precompute_K_KK(phys, num, geom):
     """
-    Compute K and return k^2 components.
+    Compute spectral Propagators (K, KK) on GPU.
     """
     # Use CuPy
     kx = (np.pi * cp.arange(num.nx) / geom.Lx)
     ky = (np.pi * cp.arange(num.ny) / geom.Ly)
     kz = (np.pi * cp.arange(num.nz) / geom.Lz)
-
-    kx2 = kx**2
-    ky2 = ky**2
-    kz2 = kz**2
 
     # meshgrid(..., indexing='ij')
     KX, KY, KZ = cp.meshgrid(kx, ky, kz, indexing='ij')
@@ -364,7 +310,6 @@ def precompute_K_and_k2(phys, num, geom):
     alpha = phys.k / (phys.rho * phys.Cp)
     K = cp.exp(-alpha * k2 * num.dt).astype(cp.float32)
 
-    return K, kx2.astype(cp.float32), ky2.astype(cp.float32), kz2.astype(cp.float32)
     denom = alpha * k2
     mask_zero = (denom == 0)
     # Avoid div by zero
@@ -380,8 +325,8 @@ def precompute_K_and_k2(phys, num, geom):
 # Wrapper Functions
 # ======================================
 
-def update_modes_etd1(aK, SsState, B_scaled, a_temp_out):
-    """Wrapper for ETD1 kernel with on-the-fly KK."""
+def update_modes_etd1(aK, KK_by_Cp, B_scaled, a_temp_out):
+    """Wrapper for ETD1 kernel."""
     nz, ny, nx = aK.shape
     # Block dims
     threadsperblock = (8, 8, 8)
@@ -390,58 +335,20 @@ def update_modes_etd1(aK, SsState, B_scaled, a_temp_out):
         (ny + threadsperblock[1] - 1) // threadsperblock[1],
         (nx + threadsperblock[2] - 1) // threadsperblock[2]
     )
-    update_modes_etd1_kernel[blockspergrid, threadsperblock](
-        aK, B_scaled, a_temp_out,
-        SsState.K, SsState.kx2, SsState.ky2, SsState.kz2,
-        SsState.alpha, SsState.dt, SsState.rho_Cp
-    )
+    update_modes_etd1_kernel[blockspergrid, threadsperblock](aK, KK_by_Cp, B_scaled, a_temp_out)
 
 
-def add_projected_source(a_target, field_box, SsState):
-    """
-    Project fine box field to global spectral modes and add to a_target weighted by KK.
-    Does NOT allocate full 3D intermediate array.
-    """
-    if not SsState.fine_mesh_initialized:
-        raise RuntimeError("Fine mesh not initialized.")
-    
-    # partial contraction steps
-    # 1. Contract Z: (nz_box, ny_box, nx_box) . (nz, nz_box) -> (ny_box, nx_box, nz)
-    # Bz_fine should be sliced (nz, nz_box)
-    Bz_fine = SsState.Bz_fine_full[:, :SsState.nz_box]
-    temp1 = cp.tensordot(field_box, Bz_fine, axes=(0, 1))
-    
-    # 2. Contract Y: (ny_box, nx_box, nz) . (ny, ny_box) -> (nx_box, nz, ny)
-    By_fine = SsState.By_fine_full[:, SsState.box_y_ind_start:SsState.box_y_ind_end] 
-    # Oops, need indices from solver state update?
-    # Actually SsState.By_fine IS the sliced/copied array in current code. 
-    # Let's check update_fine_mesh below. 
-    # It updates SsState.By_fine. So use it.
-    
-    temp2 = cp.tensordot(temp1, SsState.By_fine, axes=(0, 1))
-    
-    # temp2 is (nx_box, nz, ny).
-    
-    # 3. Final transform and addition via kernel
-    nz, ny, nx = a_target.shape
+def add_source_term_modes(a_temp, KK, Q_modes):
+    """Wrapper for Source Term Accumulation."""
+    nz, ny, nx = a_temp.shape
     threadsperblock = (8, 8, 8)
     blockspergrid = (
         (nz + threadsperblock[0] - 1) // threadsperblock[0],
         (ny + threadsperblock[1] - 1) // threadsperblock[1],
         (nx + threadsperblock[2] - 1) // threadsperblock[2]
     )
-    
-    # Scale by volume element dV_fine before adding?
-    # In original: modes *= SsState.dV_fine
-    # We can scale temp2 or do it in kernel. 
-    # Scaling temp2 is one operation on smaller array.
-    temp2 *= SsState.dV_fine
+    add_source_term_modes_kernel[blockspergrid, threadsperblock](a_temp, KK, Q_modes)
 
-    add_projected_source_kernel[blockspergrid, threadsperblock](
-        a_target, temp2, SsState.Bx_fine,
-        SsState.K, SsState.kx2, SsState.ky2, SsState.kz2,
-        SsState.alpha, SsState.dt, SsState.rho_Cp
-    )
 
 def compute_evaporation_flux(T_surface, q_out, P0, R_gas, T_boil, DeltaH_LV, R_v, T_liquidus):
     """Wrapper for Evaporation kernel."""
@@ -461,6 +368,23 @@ def compute_gaussian_laser_flux(X, Y, laser_x, laser_y, laser_r, laser_coef):
     # CuPy handles element-wise operations automatically
     r_sq = (X - laser_x) ** 2 + (Y - laser_y) ** 2
     return (laser_coef * cp.exp(-2.0 * r_sq / laser_r ** 2)).astype(cp.float32)
+
+
+def project_box_to_modes(field_box, SsState):
+    """Project fine box field to global spectral modes (GPU)."""
+    if not SsState.fine_mesh_initialized:
+        raise RuntimeError("Fine mesh not initialized.")
+    
+    # cp.tensordot is highly optimized
+    # 1. Contract Z_box: (nz_box, ny_box, nx_box) . (nz, nz_box) -> (ny_box, nx_box, nz)
+    temp1 = cp.tensordot(field_box, SsState.Bz_fine, axes=(0, 1))
+    # 2. Contract Y_box: (ny_box, nx_box, nz) . (ny, ny_box) -> (nx_box, nz, ny)
+    temp2 = cp.tensordot(temp1, SsState.By_fine, axes=(0, 1))
+    # 3. Contract X_box: (nx_box, nz, ny) . (nx, nx_box) -> (nz, ny, nx)
+    modes = cp.tensordot(temp2, SsState.Bx_fine, axes=(0, 1))
+    
+    modes *= SsState.dV_fine
+    return modes.astype(cp.float32)
 
 
 def reconstruct_temperature_box(a, SsState):
@@ -627,10 +551,6 @@ def update_fine_mesh(SsState, x_laser, y_laser):
         y_laser, SsState.dy_fine, SsState.ny_fine_total, SsState.ny_box
     )
     
-    # Store indices for optimized slicing in add_projected_source if needed
-    SsState.box_y_ind_start = iy_start 
-    SsState.box_y_ind_end = iy_end
-
     SsState.box_y[:] = SsState.y_fine[iy_start:iy_end]
     SsState.By_fine[:, :] = SsState.By_fine_full[:, iy_start:iy_end]
 

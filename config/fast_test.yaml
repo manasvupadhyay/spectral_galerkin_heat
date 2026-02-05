@@ -37,9 +37,9 @@ laser:
     initial_position: [0.0, 0.0025] # [x, y] in m
 
 io:
-  interval: null          # s (Output interval) (null means no intermediate outputs)
-  outputs: []          
-  at_end: []  
+  interval: null                      # s (Output interval) (null means no intermediate outputs)
+  outputs: []                         #[full_volume, profiles, cut_views]
+  at_end: ["profiles", "cut_views"]   # Output profiles and cut views at the end of the simulation
   profiles_locations:
     - 'hotspot'                # m, 'laser' or 'hotspot' keyword
   cut_views_planes:
