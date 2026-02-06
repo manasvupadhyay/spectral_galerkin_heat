@@ -9,6 +9,19 @@ from core.parameters import SimulationContext
 logger = logging.getLogger(__name__)
 
 class SimulationWorkflow:
+    """
+    Orchestrates the entire simulation lifecycle.
+
+    This class implements the Strategy pattern by delegating specific tasks
+    (solving, I/O) to components created by the SimulationFactory. It manages
+    the time-stepping loop, logging, and coordinating outputs.
+
+    Attributes:
+        context (SimulationContext): Global configuration and state parameters.
+        factory (SimulationFactory): Factory for creating backend-specific components.
+        heat_solver (HeatSolver): The numerical solver instance.
+        io_manager (IOManager): The input/output manager instance.
+    """
     def __init__(self, context: SimulationContext, factory: SimulationFactory):
         self.context = context
         self.factory = factory
@@ -135,4 +148,4 @@ class SimulationWorkflow:
 
         # 4. Finalize
         self.io_manager.finalize()
-        logger.info("Simulation completed successfully.")   
+        logger.info("Simulation completed successfully.")

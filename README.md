@@ -1,103 +1,93 @@
 # fastHeatSolv
 
 **A semi-analytical, modular solution for the heat equation with support for CPU/GPU backends and G-code-driven laser paths.**
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
 ---
 
 ## Table of Contents
 
 - [Overview](#overview)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Output & Visualization](#output--visualization)
 - [Architecture](#architecture)
-  - [Directory Structure](#directory-structure)
-  - [Component Descriptions](#component-descriptions)
-- [Parameter Management & G-Code Integration](#parameter-management--g-code-integration)
-  - [Configuration Example](#1-configuration-structure-yaml-example)
-  - [Laser Path Strategy](#2-laser-path-strategy)
-  - [Unified Parameter Object](#3-unified-parameter-object)
-  - [Flexible Output Control](#flexible-output-control)
-- [Development Roadmap](#development-roadmap)
+- [Citation](#citation)
 
 ---
 
 ## Overview
 
-fastHeatSolv is a modular, extensible framework for simulating heat transfer using semi-analytical and numerical methods. It is designed for flexibility, supporting both CPU and GPU computation, and is capable of simulating complex laser paths (including G-code) for additive manufacturing and related applications.
+fastHeatSolv is a modular framework for simulating heat transfer in additive manufacturing. It uses semi-analytical spectral methods for high performance on both CPU and GPU, and supports complex laser trajectories defined via G-code.
 
-## Architecture
+Key features:
+- **Fast Spectral Solvers**: GPU-accelerated (via CuPy) and CPU-optimized (NumPy/SciPy).
+- **G-Code Support**: Direct simulation of toolpaths from printer instructions.
+- **Modular Design**: Extensible via Abstract Factory pattern (see [Architecture](docs/ARCHITECTURE.md)).
 
-The project is structured around the **Abstract Factory** pattern, enabling easy extension to new backends (CPU, GPU, distributed) and numerical methods (Spectral, FEM, etc.).
+## Installation
 
-### Directory Structure
+### Prerequisites
+- Python 3.9+
+- [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (optional, for GPU support)
 
+### Setup
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/TheoADX/fastHeatSolv.git
+   cd fastHeatSolv
+   ```
+
+2. Create and activate a virtual environment (recommended):
+   ```bash
+   python -m venv venv
+   # Windows
+   .\venv\Scripts\activate
+   # Linux/Mac
+   source venv/bin/activate
+   ```
+
+3. Install dependencies:
+   ```bash
+   # For CPU-only usage
+   pip install -r requirements.txt
+   
+   # For GPU usage, ensure you install the matching cupy version, e.g.:
+   # pip install cupy-cuda12x
+   ```
+
+## Usage
+
+Run a simulation by pointing `main.py` to a configuration file:
+
+```bash
+python main.py config/fast_test.yaml
 ```
-fastHeatSolv/
-├── main.py                     # Entry point: parses args, instantiates SimulationFactory
-├── config/                     # YAML configuration files for simulation parameters
-├── data/
-│   └── paths/                  # G-code files for laser paths
-├── out/                        # Simulation results (per-run subfolders)
-│   └── {timestamp}_{tag}/
-│       ├── fields/             # 3D volumetric fields (HDF5/NPY)
-│       ├── profiles/           # 1D temperature profiles
-│       ├── plots/              # PNG/SVG plots
-│       ├── logs/               # Run logs (stdout, errors)
-│       └── diagnostics/        # Timing/convergence (JSON/CSV)
-├── core/
-│   ├── workflow.py             # Simulation loop (orchestrator, strategy pattern)
-│   ├── parameters.py           # Data classes: PhysParams, NumParams, GeomParams, IOParams
-│   └── io.py                   # Abstract base class for IOManager
-├── interfaces/
-│   ├── factory.py              # Abstract Factory: interface for creating solvers, IO managers
-│   └── solver.py               # Abstract Product: HeatSolver interface
-├── implementations/
-│   ├── factories/
-│   │   ├── cpu_factory.py      # Concrete Factory: SpectralSolverCPU, LocalFSIOManager
-│   │   ├── gpu_factory.py      # Concrete Factory: SpectralSolverGPU, LocalFSIOManager
-│   │   └── fem_factory.py      # Concrete Factory: FEMSolver, LocalFSIOManager
-│   ├── solvers/
-│   │   ├── spectral_cpu.py     # CPU-based Spectral Solver (numba)
-│   │   ├── spectral_gpu.py     # GPU-based Spectral Solver (cupy)
-│   │   └── fem_solver.py       # FEM Wrapper (FEniCS/Ansys)
-│   ├── file_io/
-│   │   └── fs_io.py            # Local file system IO manager
-│   └── physics/
-│       ├── spectral_cpu_kernels.py   # Low-level physics (latent heat, evaporation)
-│       └── spectral_gpu_kernels.py   # Low-level physics (latent heat, evaporation)
-└── utils/
-    ├── spectral_helpers.py     # Math utilities (DCT, grid manipulation)
-    └── visualisation.py        # Visualization utilities
+
+To enable GPU acceleration, ensure your config file (`config/*.yaml`) has:
+```yaml
+simulation:
+  backend: "gpu"
 ```
 
-### Component Descriptions
+### Configuration
+Configuration is handled via YAML files in the `config/` directory. See `config/fast_test.yaml` for a documented example of parameters (domain size, material properties, laser path).
 
-- **Client (`main.py`)**
-  - Reads configuration/command-line arguments
-  - Selects and injects the appropriate Factory (CPU/GPU/FEM) into the Workflow
-  - Runs the Workflow
+## Output & Visualization
 
-- **Workflow Strategy (`core/workflow.py`)**
-  - Contains `SimulationWorkflow` (high-level director)
-  - Defines *what* happens (initialize, time loop, solve, apply physics, save, post-process)
-  - Uses abstract interfaces for solver and IO
+Results are saved to `out/<timestamp>_<tag>/`:
+- **Fields**: `.h5` / `.xmf` (Open with ParaView).
+- **Profiles**: `.txt` temperature profiles.
+- **Cut Views**: `.png` meltpool profiles
+- **Logs**: Execution logs.
 
-- **Simulation Factory (`interfaces/factory.py`, `implementations/factories/`)**
-  - Abstract interface: `create_solver()`, `create_io_manager()`, `create_physics_handler()`
-  - Concrete factories for CPU, GPU, FEM
 
-- **Solvers (`implementations/solvers/`)**
-  - Mathematical engines (SpectralSolverCPU: fftw/numpy/numba, SpectralSolverGPU: cupy)
+## Citation
 
-This modular structure allows easy addition of new backends (e.g., distributed MPI) or new physics (e.g., alternative latent heat models) without rewriting the main simulation loop.
+If you use this code in your research, please cite:
 
----
+TBW
 
-## Parameter Management & G-Code Integration
-
-Parameter passing and laser path definition are handled via structured configuration files (YAML/JSON) and Data Transfer Objects (DTOs).
-
-### 1. Configuration Structure (YAML Example)
-
-Jobs are defined by a config file, allowing selection of simulation **method** (algorithm) and **backend** (hardware):
 
 ```yaml
 simulation:
@@ -245,10 +235,3 @@ This enables efficient disk usage and post-processing tailored to your needs.
     - Account for an added layer of material
 ---
 
-## License
-
-Lorem Ipsum
-
-## Citation
-
-Lorem Ipsum 
