@@ -11,7 +11,7 @@ def C_coef(N, L, xp=np):
     """Compute normalization coefficients for DCT-II."""
     C = xp.sqrt(2.0 / L) * xp.ones(N)
     C[0] = xp.sqrt(1.0 / L)
-    return C
+    return C.astype(np.float32)
 
 def _cosine_basis_along_axis(n_modes, length, coords):
     """Compute cosine basis values cos(k*pi*x/L) for given coordinates."""

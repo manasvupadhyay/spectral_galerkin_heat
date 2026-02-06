@@ -76,7 +76,7 @@ def q_laser(SsState, laser):
     """Gaussian laser heat flux using current Laser position (laser.x, laser.y)."""
     xp = get_array_module(SsState.X)
     r_sq = (SsState.X - laser.x) ** 2 + (SsState.Y - laser.y) ** 2
-    return (laser.laser_coef * xp.exp(-2.0 * r_sq / laser.r_b ** 2)).astype(np.float32)
+    return (laser.laser_coef * xp.exp(-2.0 * r_sq / laser.r_b ** 2))
 
 
 def compute_evaporation_flux(T_surface, q_out, P0, R, T_boil, DeltaH_LV, R_v, T_liquidus) -> np.ndarray:
@@ -85,7 +85,7 @@ def compute_evaporation_flux(T_surface, q_out, P0, R, T_boil, DeltaH_LV, R_v, T_
     q = 0.82 * DeltaH_LV * P0 / xp.sqrt(2 * np.pi * R_v * T_surface) * \
         xp.exp((DeltaH_LV / (R_v * T_boil)) * (1.0 - T_boil / T_surface))
     q[T_surface < T_liquidus] = 0.0
-    return q.astype(np.float32)
+    return q
 
 
 def check_resolution(laser, num, geom):

@@ -34,7 +34,6 @@ laser:
   path:
     type: "gcode"
     file: "linear_track.gcode"
-    initial_position: [0.0, 0.0025] # [x, y] in m
 
 io:
   interval: null                      # s (Output interval) (null means no intermediate outputs)

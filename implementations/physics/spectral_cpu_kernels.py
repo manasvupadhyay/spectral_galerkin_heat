@@ -19,11 +19,9 @@ class SpectralSolverState:
     # Spectral Propagators
     K: np.ndarray = None
     KK: np.ndarray = None
-    KK_by_Cp: np.ndarray = None
     
     # State Arrays
     a: np.ndarray = None       # Current temperature modes (nz, ny, nx)
-    aK: np.ndarray = None      # Decayed temperature modes (nz, ny, nx)
     a_temp: np.ndarray = None  # Temporary working array (nz, ny, nx)
     
     # Buffers
@@ -67,6 +65,14 @@ class SpectralSolverState:
     z: np.ndarray = None
     X: np.ndarray = None
     Y: np.ndarray = None
+    # Node-centered reconstruction coords and full-domain bases (lazy)
+    x_rec: np.ndarray = None
+    y_rec: np.ndarray = None
+    z_rec: np.ndarray = None
+    Bx_recon: np.ndarray = None
+    By_recon: np.ndarray = None
+    Bz_recon: np.ndarray = None
+    full_recon_initialized: bool = False
     
     # Helper coefficients
     Cp32_broadcast: np.ndarray = None
@@ -120,28 +126,9 @@ class SpectralSolverState:
         self.cos_ny = np.cos(np.pi * np.arange(ny)[:, None] * y_np[None, :] / Ly).astype(np.float32)
         self.cos_pz = np.cos(np.pi * np.arange(nz)[:, None] * z_np[None, :] / Lz).astype(np.float32)
 
-        # --- Full-domasin reconstruction grids (node-centered) and buffered bases ---
-        # Keep cell-centered coordinates for solver internals, but precompute
-        # a node-centered reconstruction grid for full-volume evaluation (x=0,dx,2dx,...)
-        # Need to assert if it's really necessary
-        dx_rec = dx  # dx = Lx / nx
-        dy_rec = dy
-        dz_rec = dz
-        x_rec = ((np.arange(nx+1)) * dx_rec).astype(np.float32)
-        y_rec = ((np.arange(ny+1)) * dy_rec).astype(np.float32)
-        z_rec = ((np.arange(nz+1)) * dz_rec).astype(np.float32)
-        self.x_rec = x_rec
-        self.y_rec = y_rec
-        self.z_rec = z_rec
-
-        # Precompute full-domain basis matrices including normalization coefficients
-        m = np.arange(nx)
-        n = np.arange(ny)
-        p = np.arange(nz)
-        # Bx_recon: (modes_x, nx_rec), By_recon: (modes_y, ny_rec), Bz_recon: (modes_z, nz_rec)
-        self.Bx_recon = (self.Cm[:, None] * np.cos(np.pi * m[:, None] * x_rec[None, :] / Lx)).astype(np.float32)
-        self.By_recon = (self.Cn[:, None] * np.cos(np.pi * n[:, None] * y_rec[None, :] / Ly)).astype(np.float32)
-        self.Bz_recon = (self.Cp[:, None] * np.cos(np.pi * p[:, None] * z_rec[None, :] / Lz)).astype(np.float32)
+        # Full-domain (node-centered) reconstruction bases are expensive and
+        # are allocated lazily via `prepare_full_reconstruction()` when needed
+        self.full_recon_initialized = False
 
         # Fine mesh setup for latent heat correction
         self.refinement = 5                                                     # Refinement factor for fine mesh
@@ -202,17 +189,48 @@ class SpectralSolverState:
         # Broadcasted coefficient array for fast contraction with modal arrays (shape: (nz,1,1))
         self.Cp32_broadcast = Cp_top[:, None, None]
         # Precompute KK multiplied by Cp evaluated at top surface for source projection
-        self.KK_by_Cp = (self.KK * Cp_top[:, None, None]).astype(np.float32)
-        nx, ny, nz = num.nx, num.ny, num.nz
         # Allocate working arrays
+        nx , ny, nz = num.nx, num.ny, num.nz
         self.q_diff = np.empty((ny, nx), dtype=np.float32)
         self.B_buffer = np.empty((ny, nx), dtype=np.float32)
         self.a_temp = np.empty((nz, ny, nx), dtype=np.float32)
-        self.aK = np.empty((nz, ny, nx), dtype=np.float32)
         self.q_evap_old = np.zeros((ny, nx), dtype=np.float32)
         self.q_evap_buffer = np.zeros((ny, nx), dtype=np.float32)
         # ZYX layout for contiguous X-scanning
         self.Q_latent_buffer = np.zeros((self.nz_box, self.ny_box, self.nx_box), dtype=np.float32)
+
+    def prepare_full_reconstruction(self, geom):
+        """Compute node-centered grids and full-domain reconstruction bases on demand.
+
+        This is intentionally separated from the lightweight `prepare_reconstruction_basis`
+        to avoid allocating large arrays unless the user requests full-volume output.
+        """
+        if getattr(self, 'full_recon_initialized', False):
+            return
+
+        dx, dy, dz = geom.dx, geom.dy, geom.dz
+        nx, ny, nz = geom.nx, geom.ny, geom.nz
+        Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
+
+        dx_rec = dx
+        dy_rec = dy
+        dz_rec = dz
+        x_rec = ((np.arange(nx+1)) * dx_rec).astype(np.float32)
+        y_rec = ((np.arange(ny+1)) * dy_rec).astype(np.float32)
+        z_rec = ((np.arange(nz+1)) * dz_rec).astype(np.float32)
+        self.x_rec = x_rec
+        self.y_rec = y_rec
+        self.z_rec = z_rec
+
+        # Precompute full-domain basis matrices including normalization coefficients
+        m = np.arange(nx)
+        n = np.arange(ny)
+        p = np.arange(nz)
+        self.Bx_recon = (self.Cm[:, None] * np.cos(np.pi * m[:, None] * x_rec[None, :] / Lx)).astype(np.float32)
+        self.By_recon = (self.Cn[:, None] * np.cos(np.pi * n[:, None] * y_rec[None, :] / Ly)).astype(np.float32)
+        self.Bz_recon = (self.Cp[:, None] * np.cos(np.pi * p[:, None] * z_rec[None, :] / Lz)).astype(np.float32)
+
+        self.full_recon_initialized = True
 
 
 def precompute_K_KK(phys, num, geom):
@@ -251,14 +269,14 @@ def precompute_K_KK(phys, num, geom):
 
 
 @njit(parallel=True, fastmath=True)
-def update_modes_etd1(aK, KK_by_Cp, B_scaled, a_temp_out):
+def update_modes_etd1(aK, KK, Cp_broadcast, B_scaled, a_temp_out):
     """
     Update spectral coefficients for ETD1 scheme.
-    Calculates: a_out = aK + (KK/Cp) * B_scaled
+    Calculates: a_out = aK + (KK * Cp) * B_scaled
     """
     nz = aK.shape[0]
     for p in prange(nz):
-        a_temp_out[p, :, :] = aK[p, :, :] + KK_by_Cp[p, :, :] * B_scaled
+        a_temp_out[p, :, :] = aK[p, :, :] + KK[p, :, :] * Cp_broadcast[p, 0, 0] * B_scaled
 
 @njit(parallel=True, fastmath=True)
 def add_source_term_modes(a_temp, KK, Q_modes):
@@ -315,7 +333,7 @@ def compute_evaporation_flux(T_surface, q_out, P0, R, T_boil, DeltaH_LV, R_v, T_
 def compute_gaussian_laser_flux(X, Y, laser_x, laser_y, laser_r, laser_coef):
     """Compute Gaussian flux on grid X,Y."""
     r_sq = (X - laser_x) ** 2 + (Y - laser_y) ** 2
-    return (laser_coef * np.exp(-2.0 * r_sq / laser_r ** 2)).astype(np.float32)
+    return (laser_coef * np.exp(-2.0 * r_sq / laser_r ** 2))
 
 
 def project_box_to_modes(field_box, SsState):
@@ -331,7 +349,7 @@ def project_box_to_modes(field_box, SsState):
     modes = np.tensordot(temp2, SsState.Bx_fine, axes=(0, 1))
     
     modes *= SsState.dV_fine
-    return modes.astype(np.float32)
+    return modes
 
 
 def reconstruct_temperature_box(a, SsState):
@@ -349,7 +367,7 @@ def reconstruct_temperature_box(a, SsState):
     T_step2 = np.tensordot(T_step1, SsState.By_fine, axes=(0, 0)) # Contraction over Y
     T_box = np.tensordot(T_step2, SsState.Bx_fine, axes=(0, 0)) # Contraction over X
     
-    return T_box.astype(np.float32), (SsState.box_x, SsState.box_y, SsState.box_z)
+    return T_box, (SsState.box_x, SsState.box_y, SsState.box_z)
 
 def compute_latent_heat_source(Q_buffer, phys, x_laser, y_laser, num, SsState, alpha=0.4):
     """
@@ -399,26 +417,25 @@ def compute_latent_heat_source(Q_buffer, phys, x_laser, y_laser, num, SsState, a
 def DCT_II(q):
     """Apply Discrete Cosine Transform Type II (Ortho)."""
     arr = np.ascontiguousarray(q, dtype=np.float32)
-    return pyfftw.interfaces.scipy_fft.dctn(arr, type=2, norm='ortho', axes=tuple(range(arr.ndim)), workers=-1).astype(np.float32, copy=False)
+    return pyfftw.interfaces.scipy_fft.dctn(arr, type=2, norm='ortho', axes=tuple(range(arr.ndim)), workers=-1)
 
 def IDCT_II(a):
     """Apply Discrete Cosine Transform Type II (Ortho)."""
     arr = np.ascontiguousarray(a, dtype=np.float32)
-    return pyfftw.interfaces.scipy_fft.dctn(arr, type=3, norm='ortho', axes=tuple(range(arr.ndim)), workers=-1).astype(np.float32, copy=False)
+    return pyfftw.interfaces.scipy_fft.dctn(arr, type=3, norm='ortho', axes=tuple(range(arr.ndim)), workers=-1)
 
 # Gain of few percent compared to scipy.fft.dctn(...) directly
 
 def reconstruct_surface_temperature(a, SsState):
     """Reconstruct 2D temperature field at z=0."""
-    # Sum over Z modes (weighted by Cp coefficients at z=0, which is just Cp/sqrt(1/L)?? No)
-    # In helpers.py: A = (SsState.Cp32[:, None, None] * a).sum(axis=0)
-    # This assumes cos(p*pi*z/Lz) at z=0 is 1.0. 
-    # The reconstruction formula is T = sum(a * Bx * By * Bz).
-    # Bz[p] at z=0 is Cp[p] * cos(p*pi*z/Lz) -> z top surface
-    A = (SsState.Cp32_broadcast * a).sum(axis=0)
+    # Sum over Z modes weighted by Cp evaluated at the top surface.
+    # Use a preallocated 2D buffer when available to avoid allocating a full
+    # temporary (nz, ny, nx) array. `np.einsum` with `out=` performs the
+    # contraction
+    A = np.einsum('p,pij->ij', SsState.Cp32_broadcast[:, 0, 0], a, optimize=True)
     # Use DCT-II for surface temperature (mathematical definition)
     dct_result = IDCT_II(A)
-    return (SsState.recon_scale * dct_result).astype(np.float32, copy=False)
+    return (SsState.recon_scale * dct_result)
 
 def reconstruct_temperature_xz(a, num, geom, SsState, laser):
     """
@@ -436,7 +453,7 @@ def reconstruct_temperature_xz(a, num, geom, SsState, laser):
     scale_xz = np.sqrt(nx * nz / (geom.Lx * geom.Lz))
     T_xz = scale_xz * pyfftw.interfaces.scipy_fft.dctn(A_xz, type=3, norm='ortho', axes=(0, 1))
     
-    return geom.x, geom.z, T_xz.astype(np.float32)
+    return geom.x, geom.z, T_xz
 
 
 def calculate_subgrid_indices(pos, dx, n_total_fine, n_box):
@@ -511,4 +528,4 @@ def shift_flux(field: np.ndarray, shift: tuple, geom) -> np.ndarray:
     dx, dy = shift
     shift_pixels = (dy / geom.dy, dx / geom.dx)
     
-    return scipy_shift(field, shift_pixels, order=1, mode='constant', cval=0.0).astype(np.float32) 
+    return scipy_shift(field, shift_pixels, order=1, mode='constant', cval=0.0)

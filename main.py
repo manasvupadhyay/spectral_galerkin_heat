@@ -27,6 +27,11 @@ def load_config(path: str) -> Dict[str, Any]:
 def build_context(cfg: Dict[str, Any]) -> SimulationContext:
     """Construct the SimulationContext object from dictionary configuration."""
     
+    # Define standard floating point precision for the simulation.
+    # np.float32 is compatible with both CPU (NumPy) and GPU (CuPy) backends 
+    # for scalar parameter passing.
+    real_t = np.float32
+
     # 1. Numerical & Simulation Meta-Parameters
     sim_cfg = cfg.get('simulation', {})
     domain_cfg = cfg.get('domain', {})
@@ -41,10 +46,10 @@ def build_context(cfg: Dict[str, Any]) -> SimulationContext:
     
     # Calculate Time Steps
     t_end = sim_cfg.get('duration', 0.01) # Default 10ms
-    dt = float(sim_cfg['dt'])
+    dt = real_t(sim_cfg['dt'])
     
     num_params = NumParams(
-        dt=dt,
+        dt=float(dt), # NumParams types helper
         nx=int(nx),
         ny=int(ny),
         nz=int(nz),
@@ -59,27 +64,28 @@ def build_context(cfg: Dict[str, Any]) -> SimulationContext:
 
     # 2. Material Parameters
     mat_cfg = cfg.get('material', {})
+    # Load material properties as real_t (float32) to avoid upcasting
     mat_params = MaterialParams(
         name=mat_cfg.get('name', 'Material'),
-        rho=float(mat_cfg['rho']),
-        k=float(mat_cfg['k']),
-        Cp=float(mat_cfg['Cp']),
-        L_f=float(mat_cfg.get('L_f')),
-        T_solidus=float(mat_cfg.get('T_solidus')),
-        T_liquidus=float(mat_cfg.get('T_liquidus')),
-        Pa=float(mat_cfg.get('Pa')),
-        R_v=float(mat_cfg.get('R_v')),
-        T_boil=float(mat_cfg.get('T_boil')),
-        DeltaH_LV=float(mat_cfg.get('DeltaH_LV')),
-        T0=float(mat_cfg.get('T0')) # Reference temperature
+        rho=real_t(mat_cfg['rho']),
+        k=real_t(mat_cfg['k']),
+        Cp=real_t(mat_cfg['Cp']),
+        L_f=real_t(mat_cfg.get('L_f')),
+        T_solidus=real_t(mat_cfg.get('T_solidus')),
+        T_liquidus=real_t(mat_cfg.get('T_liquidus')),
+        Pa=real_t(mat_cfg.get('Pa')),
+        R_v=real_t(mat_cfg.get('R_v')),
+        T_boil=real_t(mat_cfg.get('T_boil')),
+        DeltaH_LV=real_t(mat_cfg.get('DeltaH_LV')),
+        T0=real_t(mat_cfg.get('T0')) # Reference temperature
     )
 
     # 3. Laser Parameters
     laser_cfg = cfg.get('laser', {})
     laser_params = LaserParams(
-        radius=float(laser_cfg['radius']),
-        absorptivity=float(laser_cfg['absorptivity']),
-        power=float(laser_cfg.get('power_nominal'))
+        radius=real_t(laser_cfg['radius']),
+        absorptivity=real_t(laser_cfg['absorptivity']),
+        power=real_t(laser_cfg.get('power_nominal'))
     )
 
     # 4. Laser Path Strategy

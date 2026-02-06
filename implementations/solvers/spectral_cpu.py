@@ -58,7 +58,6 @@ class SpectralSolverCPU:
         laser_path = context.laser_path
         laser_params = context.laser
         SsState = self.state
-        a = SsState.a
 
         # Fetch laser state at current time
         laser_state = laser_path.get_state(t, dt)
@@ -81,21 +80,27 @@ class SpectralSolverCPU:
         q_dct = kernels.DCT_II(q_las - q_evap)
 
         # 2. Linear step (ETD1)
-        np.multiply(a, SsState.K, out=SsState.aK, casting='same_kind')
+        # Decay term: a * exp(-K*dt) -> a
+        np.multiply(SsState.a, SsState.K, out=SsState.a, casting='same_kind')
+        # Evaluate source term in spectral space: S_n = C * q_dct
         S_n = SsState.dct_scale * q_dct
         np.multiply(SsState.dct_scale, q_dct, out=SsState.B_buffer, casting='same_kind')
-        kernels.update_modes_etd1(SsState.aK, SsState.KK_by_Cp, SsState.B_buffer, SsState.a_temp)
+        # First guess for a_temp (no latent heat)
+        #  a + S_n * (1 - exp(-K*dt)) / K -> a_temp
+        kernels.update_modes_etd1(SsState.a, SsState.KK, SsState.Cp32_broadcast, SsState.B_buffer, SsState.a_temp)
         S_current = S_n.copy()
 
         # 3. Latent Heat Correction
         kernels.update_fine_mesh(SsState, x, y) # can be moved easily to kernels
         SsState.Q_latent_buffer.fill(0.0)
+        # Use guess to compute latent heat source on fine mesh
         kernels.compute_latent_heat_source(SsState.Q_latent_buffer, mat, x, y, num, SsState)
-        Q_modes = kernels.project_box_to_modes(SsState.Q_latent_buffer, SsState)
-        kernels.add_source_term_modes(SsState.aK, SsState.KK, Q_modes)
-        # TODO Check if next line is necessary
-        kernels.add_source_term_modes(SsState.a_temp, SsState.KK, Q_modes)
-
+        # Add latent heat source to a 
+        # a + Q_latent * (1 - exp(-K*dt)) / K -> a
+        # a now is decayed and includes latent heat sources, but no laser and evaporation yet
+        kernels.add_source_term_modes(SsState.a, SsState.KK, kernels.project_box_to_modes(SsState.Q_latent_buffer, SsState))
+        # a_temp not updated, as it will be recomputed in the next steps from a with the latent heat included
+        
         # 4. Nonlinear iteration for evaporation
         T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
         for k in range(30):
@@ -108,13 +113,14 @@ class SpectralSolverCPU:
             S_target = SsState.dct_scale * kernels.DCT_II(SsState.q_diff)
             S_current = 0.1 * S_target + 0.9 * S_current
             np.multiply(1.0, S_current, out=SsState.B_buffer, casting='same_kind')
-            kernels.update_modes_etd1(SsState.aK, SsState.KK_by_Cp, SsState.B_buffer, SsState.a_temp)
+            kernels.update_modes_etd1(SsState.a, SsState.KK, SsState.Cp32_broadcast, SsState.B_buffer, SsState.a_temp)
             T_old = T_temp
             T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
             if np.max(np.abs(T_temp - T_old)) < 2e+1:
                 break
 
-        SsState.q_evap_old = q_evap.astype(np.float32, copy=True)
+        # Avoid reallocating when possible — copy into preallocated buffer
+        SsState.q_evap_old[:] = q_evap
         P_laser = np.sum(q_las) * geom.dx * geom.dy
 
         # Optionally, return metrics for logging/diagnostics

@@ -1,5 +1,7 @@
 import time
 import logging
+import sys
+import platform
 from typing import Optional, Dict, Any
 from interfaces.factory import SimulationFactory
 from interfaces.solver import HeatSolver
@@ -62,6 +64,29 @@ class SimulationWorkflow:
         # 2. Initialize Solver State
         state = self.heat_solver.initialize()
 
+        # --- Startup context & environment summary (useful for reproducibility) ---
+        try:
+            import numpy as _np
+            try:
+                import cupy as _cp
+                cupy_ver = getattr(_cp, '__version__', 'unknown')
+            except Exception:
+                _cp = None
+                cupy_ver = None
+        except Exception:
+            _np = None
+            cupy_ver = None
+
+        geom = getattr(self.context, 'geom', None)
+        mat = getattr(self.context, 'mat', None)
+        num = getattr(self.context, 'num', None)
+
+        logger.info(f"Config Summary: method={self.context.method}, backend={self.context.backend}, "
+                    f"mesh={(getattr(geom,'nx',None))}x{getattr(geom,'ny',None)}x{getattr(geom,'nz',None)}, "
+                    f"dt={getattr(num,'dt',None):.3e}, t_end={getattr(num,'t_end',None):.3e}, "
+                    f"material={getattr(mat,'name', None)}")
+        logger.info(f"Environment: python={platform.python_version()}, numpy={getattr(_np,'__version__',None)}, cupy={cupy_ver}")
+
         # 3. Time Loop
         t = 0.0
         step = 0
@@ -92,10 +117,20 @@ class SimulationWorkflow:
         # Check for dynamic laser_path in context
         laser_path = getattr(self.context, 'laser_path')
         
-        # ETA logging setup
+        # ETA logging & telemetry setup
         start_wall_time = time.time()
         last_eta_log_time = start_wall_time
         eta_log_interval = self.context.num.update_interval
+        # telemetry counters
+        total_step_time = 0.0
+        n_steps_timed = 0
+
+        # optional memory measurement
+        try:
+            import psutil
+            _psutil_proc = psutil.Process()
+        except Exception:
+            _psutil_proc = None
 
         while t < t_end:
             # A. Output Check
@@ -112,9 +147,13 @@ class SimulationWorkflow:
                     next_output_time += float(interval)
                 else:
                     next_output_time = float('inf')
-            # B. Evolve State
+            # B. Evolve State (timed)
+            step_start = time.time()
             state, metrics = self.heat_solver.step(t, dt)
-            
+            step_elapsed = time.time() - step_start
+            total_step_time += step_elapsed
+            n_steps_timed += 1
+
             # C. Advance Time
             t += dt
             step += 1
@@ -128,11 +167,43 @@ class SimulationWorkflow:
                     est_total = elapsed / frac_done
                     est_remaining = est_total - elapsed
                     eta_str = time.strftime('%H:%M:%S', time.gmtime(est_remaining))
-                    logger.info(f"[ETA] Step {step} | t={t:.6e}s | Elapsed: {elapsed:.1f}s | Remaining: {eta_str}")
-                    logger.info(f"[METRICS] {metrics}")
+                    # Memory usage (RSS in MB) if available
+                    if _psutil_proc is not None:
+                        try:
+                            mem_mb = _psutil_proc.memory_info().rss / (1024.0 ** 2)
+                        except Exception:
+                            mem_mb = None
+                    else:
+                        mem_mb = None
+
+                    logger.info(f"[ETA] Step {step} | t={t:.6e}s | Elapsed: {elapsed:.1f}s | Remaining: {eta_str} | "
+                                f"step_time={step_elapsed:.3f}s | avg_step={ (total_step_time / n_steps_timed):.3f}s | mem_mb={mem_mb if mem_mb is not None else 'NA'}")
+
+                    # Format metrics into plain Python scalars and controlled precision
+                    metrics_items = []
+                    for k, v in (metrics or {}).items():
+                        try:
+                            if isinstance(v, (int,)):
+                                metrics_items.append(f"{k}={int(v)}")
+                            else:
+                                metrics_items.append(f"{k}={float(v):.3f}")
+                        except Exception:
+                            metrics_items.append(f"{k}={v}")
+                    metrics_str = ", ".join(metrics_items)
+                    logger.info(f"[METRICS] {metrics_str}")
                 else:
                     logger.info(f"[ETA] Step {step} | t={t:.6e}s | Elapsed: {elapsed:.1f}s | Remaining: unknown")
-                    logger.info(f"[METRICS] {metrics}")
+                    metrics_items = []
+                    for k, v in (metrics or {}).items():
+                        try:
+                            if isinstance(v, (int,)):
+                                metrics_items.append(f"{k}={int(v)}")
+                            else:
+                                metrics_items.append(f"{k}={float(v):.3f}")
+                        except Exception:
+                            metrics_items.append(f"{k}={v}")
+                    metrics_str = ", ".join(metrics_items)
+                    logger.info(f"[METRICS] {metrics_str}")
                 last_eta_log_time = now
 
         # At end: save all requested outputs
@@ -148,4 +219,15 @@ class SimulationWorkflow:
 
         # 4. Finalize
         self.io_manager.finalize()
+        # Optionally log profiler diagnostics path if present
+        try:
+            run_dir = getattr(self.io_manager, 'base_dir', None)
+            if run_dir:
+                prof_path = os.path.join(run_dir, 'diagnostics', 'profiler.txt')
+                import os
+                if os.path.exists(prof_path):
+                    logger.info(f"Profiler output written to: {prof_path}")
+        except Exception:
+            pass
+
         logger.info("Simulation completed successfully.")
