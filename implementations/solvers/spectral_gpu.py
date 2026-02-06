@@ -87,19 +87,26 @@ class SpectralSolverGPU:
         q_dct = kernels.DCT_II(q_las - q_evap)
 
         # 2. Linear step (ETD1)
-        cp.multiply(cp.asarray(a), cp.asarray(SsState.K), out=SsState.aK, casting='same_kind')
+        # In-place decay: a = a * K
+        cp.multiply(SsState.a, SsState.K, out=SsState.a)
+        
         S_n = SsState.dct_scale * q_dct
-        cp.multiply(SsState.dct_scale, q_dct, out=SsState.B_buffer, casting='same_kind')
-        kernels.update_modes_etd1(SsState.aK, SsState.KK_by_Cp, SsState.B_buffer, SsState.a_temp)
+        cp.multiply(SsState.dct_scale, q_dct, out=SsState.B_buffer)
+        
+        # update_modes_etd1 now takes separate KK and Cp_broadcast instead of KK_by_Cp
+        # and uses in-place decayed 'a' (passed as first arg)
+        kernels.update_modes_etd1(SsState.a, SsState.KK, SsState.Cp32_broadcast, SsState.B_buffer, SsState.a_temp)
         S_current = S_n.copy()
 
         # 3. Latent Heat Correction
-        kernels.update_fine_mesh(SsState, x, y) # can be moved easily to kernels
+        kernels.update_fine_mesh(SsState, x, y)
         SsState.Q_latent_buffer.fill(0.0)
         kernels.compute_latent_heat_source(SsState.Q_latent_buffer, mat, x, y, num, SsState)
         Q_modes = kernels.project_box_to_modes(SsState.Q_latent_buffer, SsState)
-        kernels.add_source_term_modes(SsState.aK, SsState.KK, Q_modes)
-        kernels.add_source_term_modes(SsState.a_temp, SsState.KK, Q_modes)
+        # Add source to 'a' (which is effectively aK at this point)
+        kernels.add_source_term_modes_host(SsState.a, SsState.KK, Q_modes)
+        # Add source to 'a_temp' (to include latent heat in the guess)
+        kernels.add_source_term_modes_host(SsState.a_temp, SsState.KK, Q_modes)
 
         # 4. Nonlinear iteration for evaporation
         T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
@@ -109,11 +116,11 @@ class SpectralSolverGPU:
                 mat.DeltaH_LV, mat.R_v, mat.T_liquidus
             )
             q_evap = SsState.q_evap_buffer
-            cp.subtract(q_las, q_evap, out=SsState.q_diff, casting='same_kind')
+            cp.subtract(q_las, q_evap, out=SsState.q_diff)
             S_target = SsState.dct_scale * kernels.DCT_II(SsState.q_diff)
             S_current = 0.1 * S_target + 0.9 * S_current
-            cp.multiply(1.0, S_current, out=SsState.B_buffer, casting='same_kind')
-            kernels.update_modes_etd1(SsState.aK, SsState.KK_by_Cp, SsState.B_buffer, SsState.a_temp)
+            cp.multiply(1.0, S_current, out=SsState.B_buffer)
+            kernels.update_modes_etd1(SsState.a, SsState.KK, SsState.Cp32_broadcast, SsState.B_buffer, SsState.a_temp)
             T_old = T_temp
             T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
             if cp.max(cp.abs(T_temp - T_old)) < 2e+1:

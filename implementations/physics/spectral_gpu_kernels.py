@@ -12,7 +12,7 @@ import utils.spectral_helpers as spec_hp  # Assuming this contains only scalar l
 # ======================================
 
 @cuda.jit
-def update_modes_etd1_kernel(aK, KK_by_Cp, B_scaled, a_temp_out):
+def update_modes_etd1_kernel(aK, KK, Cp_broadcast, B_scaled, a_temp_out):
     """
     Update spectral coefficients for ETD1 scheme.
     Grid: 3D (nz, ny, nx)
@@ -21,7 +21,9 @@ def update_modes_etd1_kernel(aK, KK_by_Cp, B_scaled, a_temp_out):
     nz, ny, nx = aK.shape
 
     if z < nz and y < ny and x < nx:
-        a_temp_out[z, y, x] = aK[z, y, x] + KK_by_Cp[z, y, x] * B_scaled[y, x]
+        # Reconstruct KK_by_Cp factor on the fly: KK * Cp_broadcast
+        factor = KK[z, y, x] * Cp_broadcast[z, 0, 0]
+        a_temp_out[z, y, x] = aK[z, y, x] + factor * B_scaled[y, x]
 
 @cuda.jit
 def add_source_term_modes_kernel(a_temp, KK, Q_modes):
@@ -93,11 +95,10 @@ class SpectralSolverState:
     # Spectral Propagators
     K: cp.ndarray = None
     KK: cp.ndarray = None
-    KK_by_Cp: cp.ndarray = None
     
     # State Arrays
+    # aK: cp.ndarray = None       # REMOVED (aliased to 'a' in solver)
     a: cp.ndarray = None       # Current temperature modes (nz, ny, nx)
-    aK: cp.ndarray = None      # Decayed temperature modes (nz, ny, nx)
     a_temp: cp.ndarray = None  # Temporary working array (nz, ny, nx)
     
     # Buffers
@@ -148,6 +149,15 @@ class SpectralSolverState:
     x_fine: cp.ndarray = None
     y_fine: cp.ndarray = None
     z_fine: cp.ndarray = None
+    
+    # Lazy full domain
+    x_rec: cp.ndarray = None
+    y_rec: cp.ndarray = None
+    z_rec: cp.ndarray = None
+    Bx_recon: cp.ndarray = None
+    By_recon: cp.ndarray = None
+    Bz_recon: cp.ndarray = None
+    full_recon_initialized: bool = False
     dx_fine: float = 0.0
     dy_fine: float = 0.0
     dz_fine: float = 0.0
@@ -192,28 +202,9 @@ class SpectralSolverState:
         Cp_top = (self.Cp.astype(cp.float32) * sign)
         self.Cp32_broadcast = Cp_top[:, None, None]
         
-        # Scaling factors (Scalars)
-        self.dct_scale = cp.float32((dx * dy) * np.sqrt((nx * ny) / (Lx * Ly)))
-        self.recon_scale = cp.float32(np.sqrt(nx * ny) / np.sqrt(Lx * Ly))
-        # Precomputed cosine bases for reconstruction
-        x_np, y_np, z_np = self.x, self.y, self.z
-        self.cos_mx = cp.cos(cp.pi * cp.arange(nx)[:, None] * x_np[None, :] / Lx).astype(cp.float32)
-        self.cos_ny = cp.cos(cp.pi * cp.arange(ny)[:, None] * y_np[None, :] / Ly).astype(cp.float32)
-        self.cos_pz = cp.cos(cp.pi * cp.arange(nz)[:, None] * z_np[None, :] / Lz).astype(cp.float32)
+        # Full-domain bases are allocated lazily via prepare_full_reconstruction()
+        self.full_recon_initialized = False
 
-        # --- Full-domasin reconstruction grids (node-centered) and buffered bases ---
-        # Keep cell-centered coordinates for solver internals, but precompute
-        # a node-centered reconstruction grid for full-volume evaluation (x=0,dx,2dx,...)
-        # Need to assert if it's really necessary
-        dx_rec = dx  # dx = Lx / nx
-        dy_rec = dy
-        dz_rec = dz
-        x_rec = ((cp.arange(nx+1)) * dx_rec).astype(cp.float32)
-        y_rec = ((cp.arange(ny+1)) * dy_rec).astype(cp.float32)
-        z_rec = ((cp.arange(nz+1)) * dz_rec).astype(cp.float32)
-        self.x_rec = x_rec
-        self.y_rec = y_rec
-        self.z_rec = z_rec
 
         # Precompute full-domain basis matrices including normalization coefficients
         m = cp.arange(nx)
@@ -288,6 +279,50 @@ class SpectralSolverState:
         self.B_buffer = cp.empty((ny, nx), dtype=cp.float32)
         self.a_temp = cp.empty((nz, ny, nx), dtype=cp.float32)
         self.aK = cp.empty((nz, ny, nx), dtype=cp.float32)
+        self.q_evap_old = cp.zeros((ny, nx), dtype=cp.float32)
+        self.q_efull_reconstruction(self, geom):
+        """Prepare full-domain bases on demand."""
+        if getattr(self, 'full_recon_initialized', False):
+            return
+            
+        dx, dy, dz = geom.dx, geom.dy, geom.dz
+        nx, ny, nz = geom.nx, geom.ny, geom.nz
+        Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
+        
+        dx_rec, dy_rec, dz_rec = dx, dy, dz
+        
+        self.x_rec = ((cp.arange(nx+1)) * dx_rec).astype(cp.float32)
+        self.y_rec = ((cp.arange(ny+1)) * dy_rec).astype(cp.float32)
+        self.z_rec = ((cp.arange(nz+1)) * dz_rec).astype(cp.float32)
+
+        m = cp.arange(nx)
+        n = cp.arange(ny)
+        p = cp.arange(nz)
+
+        self.Bx_recon = (self.Cm[:, None] * cp.cos(cp.pi * m[:, None] * self.x_rec[None, :] / Lx)).astype(cp.float32)
+        self.By_recon = (self.Cn[:, None] * cp.cos(cp.pi * n[:, None] * self.y_rec[None, :] / Ly)).astype(cp.float32)
+        self.Bz_recon = (self.Cp[:, None] * cp.cos(cp.pi * p[:, None] * self.z_rec[None, :] / Lz)).astype(cp.float32)
+        
+        self.full_recon_initialized = True
+
+    def prepare_K_buffers(self, phys, geom, num):
+        """Precompute spectral propagators and allocate buffers on GPU."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("Precomputing K, KK on GPU... ")
+        
+        self.K, self.KK = precompute_K_KK(phys, num, geom)
+        # Project KK onto top-surface weighted Cp for source projection
+        nx, ny, nz = num.nx, num.ny, num.nz
+        sign = cp.power(-1.0, cp.arange(nz, dtype=cp.float32)).astype(cp.float32)
+        Cp_top = (self.Cp.astype(cp.float32) * sign)
+        # Broadcasted coefficient array for fast contraction with modal arrays (shape: (nz,1,1))
+        self.Cp32_broadcast = Cp_top[:, None, None]
+        
+        # Allocate working arrays on GPU
+        self.q_diff = cp.empty((ny, nx), dtype=cp.float32)
+        self.B_buffer = cp.empty((ny, nx), dtype=cp.float32)
+        self.a_temp = cp.empty((nz, ny, nx), dtype=cp.float32)
         self.q_evap_old = cp.zeros((ny, nx), dtype=cp.float32)
         self.q_evap_buffer = cp.zeros((ny, nx), dtype=cp.float32)
         # ZYX layout

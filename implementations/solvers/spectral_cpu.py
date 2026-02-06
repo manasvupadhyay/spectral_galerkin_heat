@@ -104,23 +104,22 @@ class SpectralSolverCPU:
         # 4. Nonlinear iteration for evaporation
         T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
         for k in range(30):
-            kernels.compute_evaporation_flux(
-                T_temp, SsState.q_evap_buffer, mat.Pa, mat.R_v, mat.T_boil, 
-                mat.DeltaH_LV, mat.R_v, mat.T_liquidus
-            )
-            q_evap = SsState.q_evap_buffer
-            np.subtract(q_las, q_evap, out=SsState.q_diff, casting='same_kind')
+            T_old = T_temp
+            # Compute evaporation flux based on current surface temperature guess
+            kernels.compute_evaporation_flux(T_temp, SsState.q_evap_buffer, mat.Pa, mat.R_v, mat.T_boil, 
+                mat.DeltaH_LV, mat.R_v, mat.T_liquidus)
+            np.subtract(q_las,SsState.q_evap_buffer, out=SsState.q_diff, casting='same_kind')
             S_target = SsState.dct_scale * kernels.DCT_II(SsState.q_diff)
             S_current = 0.1 * S_target + 0.9 * S_current
             np.multiply(1.0, S_current, out=SsState.B_buffer, casting='same_kind')
+
             kernels.update_modes_etd1(SsState.a, SsState.KK, SsState.Cp32_broadcast, SsState.B_buffer, SsState.a_temp)
-            T_old = T_temp
             T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
             if np.max(np.abs(T_temp - T_old)) < 2e+1:
                 break
-
+        
         # Avoid reallocating when possible — copy into preallocated buffer
-        SsState.q_evap_old[:] = q_evap
+        SsState.q_evap_old[:] = SsState.q_evap_buffer
         P_laser = np.sum(q_las) * geom.dx * geom.dy
 
         # Optionally, return metrics for logging/diagnostics

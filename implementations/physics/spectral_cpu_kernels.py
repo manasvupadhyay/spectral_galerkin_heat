@@ -131,7 +131,7 @@ class SpectralSolverState:
         self.full_recon_initialized = False
 
         # Fine mesh setup for latent heat correction
-        self.refinement = 5                                                     # Refinement factor for fine mesh
+        self.refinement = 3                                                    # Refinement factor for fine mesh
         self.Lx_box, self.Ly_box, self.Lz_box = 0.9e-3, 0.2e-3, 0.04e-3         # Physical dimensions of fine mesh box
         self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
         
