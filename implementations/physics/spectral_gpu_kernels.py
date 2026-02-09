@@ -202,7 +202,7 @@ class SpectralSolverState:
         # Scaling factors for DCT/IDCT
         self.dct_scale = cp.asarray((dx * dy) * cp.sqrt((nx * ny) / (Lx * Ly)), dtype=cp.float32)
         self.recon_scale = cp.asarray(cp.sqrt(nx * ny) / cp.sqrt(Lx * Ly), dtype=cp.float32)
-        
+
         # Precomputed cosine bases for reconstruction (cell-centered points)
         x_np, y_np, z_np = self.x, self.y, self.z
         self.cos_mx = cp.cos(cp.pi * cp.arange(nx)[:, None] * x_np[None, :] / Lx).astype(cp.float32)
@@ -213,7 +213,7 @@ class SpectralSolverState:
         self.full_recon_initialized = False
         
         # Fine mesh setup for latent heat correction
-        self.refinement = 3
+        self.refinement = 6
         self.Lx_box, self.Ly_box, self.Lz_box = 0.9e-3, 0.2e-3, 0.04e-3
         self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
         
@@ -281,34 +281,31 @@ class SpectralSolverState:
         # ZYX layout for latent heat source
         self.Q_latent_buffer = cp.zeros((self.nz_box, self.ny_box, self.nx_box), dtype=cp.float32)
         
-    def full_reconstruction(self, geom):
+    def prepare_full_reconstruction(self, geom):
         """Prepare full-domain bases on demand."""
         if getattr(self, 'full_recon_initialized', False):
             return
-            
+        
         dx, dy, dz = geom.dx, geom.dy, geom.dz
         nx, ny, nz = geom.nx, geom.ny, geom.nz
         Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
         
         dx_rec, dy_rec, dz_rec = dx, dy, dz
         
-        self.x_rec = ((cp.arange(nx+1)) * dx_rec).astype(cp.float32)
-        self.y_rec = ((cp.arange(ny+1)) * dy_rec).astype(cp.float32)
-        self.z_rec = ((cp.arange(nz+1)) * dz_rec).astype(cp.float32)
+        self.x_rec = ((np.arange(nx+1)) * dx_rec).astype(np.float32)
+        self.y_rec = ((np.arange(ny+1)) * dy_rec).astype(np.float32)
+        self.z_rec = ((np.arange(nz+1)) * dz_rec).astype(np.float32)
 
-        m = cp.arange(nx)
-        n = cp.arange(ny)
-        p = cp.arange(nz)
+        m = np.arange(nx)
+        n = np.arange(ny)
+        p = np.arange(nz)
 
-        self.Bx_recon = (self.Cm[:, None] * cp.cos(cp.pi * m[:, None] * self.x_rec[None, :] / Lx)).astype(cp.float32)
-        self.By_recon = (self.Cn[:, None] * cp.cos(cp.pi * n[:, None] * self.y_rec[None, :] / Ly)).astype(cp.float32)
-        self.Bz_recon = (self.Cp[:, None] * cp.cos(cp.pi * p[:, None] * self.z_rec[None, :] / Lz)).astype(cp.float32)
+        self.Bx_recon = (self.Cm[:, None].get() * np.cos(np.pi * m[:, None] * self.x_rec[None, :] / Lx)).astype(np.float32)
+        self.By_recon = (self.Cn[:, None].get() * np.cos(np.pi * n[:, None] * self.y_rec[None, :] / Ly)).astype(np.float32)
+        self.Bz_recon = (self.Cp[:, None].get() * np.cos(np.pi * p[:, None] * self.z_rec[None, :] / Lz)).astype(np.float32)
         
+
         self.full_recon_initialized = True
-        self.q_evap_old = cp.zeros((ny, nx), dtype=cp.float32)
-        self.q_evap_buffer = cp.zeros((ny, nx), dtype=cp.float32)
-        # ZYX layout
-        self.Q_latent_buffer = cp.zeros((self.nz_box, self.ny_box, self.nx_box), dtype=cp.float32)
 
 
 def precompute_K_KK(phys, num, geom):

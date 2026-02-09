@@ -86,14 +86,7 @@ class LocalFSIOManager(IOManager):
 
         try:
             from utils.spectral_helpers import reconstruct_temperature_volume
-            # Ensure full-domain reconstruction bases are available (lazy allocation)
-            if hasattr(state, 'prepare_full_reconstruction') and not getattr(state, 'full_recon_initialized', False):
-                try:
-                    state.prepare_full_reconstruction(self.context.geom)
-                except Exception:
-                    # Fall back to computing on-the-fly in helper if something goes wrong
-                    pass
-
+            state.prepare_full_reconstruction(self.context.geom)
             field = reconstruct_temperature_volume(state.a, state).transpose(2,1,0)  # Ensure (z,y,x) ordering
             grid_coords = (getattr(state, 'x_rec', None), getattr(state, 'y_rec', None), getattr(state, 'z_rec', None))
             if output_type == 'full_volume':
