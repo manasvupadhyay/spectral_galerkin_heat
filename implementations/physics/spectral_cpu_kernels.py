@@ -188,7 +188,6 @@ class SpectralSolverState:
         Cp_top = (self.Cp.astype(np.float32) * sign)
         # Broadcasted coefficient array for fast contraction with modal arrays (shape: (nz,1,1))
         self.Cp32_broadcast = Cp_top[:, None, None]
-        # Precompute KK multiplied by Cp evaluated at top surface for source projection
         # Allocate working arrays
         nx , ny, nz = num.nx, num.ny, num.nz
         self.q_diff = np.empty((ny, nx), dtype=np.float32)

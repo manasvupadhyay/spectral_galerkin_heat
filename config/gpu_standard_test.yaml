@@ -8,7 +8,7 @@ simulation:
 
 domain:
   size: [0.01, 0.005, 0.0025] # [Lx, Ly, Lz] in m
-  mesh: [512, 256, 1024]      # [nx, ny, nz]
+  mesh: [780, 256,1800]      # [nx, ny, nz]
 
 material:
   name: "GenericSteel"
@@ -38,7 +38,7 @@ laser:
 io:
   interval: null # 0.0012            # s (Output interval)
   outputs: [] # [full_volume]      
-  at_end: [] # [full_volume, profiles, cut_views]  
+  at_end: [profiles, cut_views]  
   profiles_locations:
     - 'hotspot'                 # m, 'laser' or 'hotspot' keyword
   cut_views_planes:

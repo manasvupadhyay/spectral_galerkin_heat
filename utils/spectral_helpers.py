@@ -1,17 +1,33 @@
 import numpy as np
 import os 
-# TO DO - Refactor cpu - gpu dispatching logic here
+
+try:
+    import cupy as cp
+except ImportError:
+    cp = None
+
+# Default to CPU kernels for module-level access, but dispatch properly in functions
 import implementations.physics.spectral_cpu_kernels as kernels
 
 
 def get_array_module(arr):
+    if cp is not None and hasattr(arr, 'device'): # Check if it's a cupy array
+        return cp
     return np
+
+def _get_kernels(arr):
+    xp = get_array_module(arr)
+    if xp == cp:
+         import implementations.physics.spectral_gpu_kernels as gpu_kernels
+         return gpu_kernels
+    return kernels
+
 
 def C_coef(N, L, xp=np):
     """Compute normalization coefficients for DCT-II."""
     C = xp.sqrt(2.0 / L) * xp.ones(N)
     C[0] = xp.sqrt(1.0 / L)
-    return C.astype(np.float32)
+    return C
 
 def _cosine_basis_along_axis(n_modes, length, coords):
     """Compute cosine basis values cos(k*pi*x/L) for given coordinates."""
@@ -102,10 +118,24 @@ def save_temp_profiles(
         # Scan low-res surface to find approximate max
         # This requires reconstructing a 2D slice first
         # For efficiency, we reconstruct T_surf from kernels
-        T_surf = kernels.reconstruct_surface_temperature(a, SsState)
+        loc_kernels = _get_kernels(a)
+        T_surf = loc_kernels.reconstruct_surface_temperature(a, SsState)
+        
+        # Ensure T_surf is on CPU for coordinate extraction
+        if hasattr(T_surf, 'get'):
+            T_surf = T_surf.get()
+            
         iy_idx, ix_idx = np.unravel_index(np.argmax(T_surf), T_surf.shape)
-        x_center = SsState.x[ix_idx]
+        x_center = SsState.x[ix_idx] # SsState.x might be cupy array?
         y_center = SsState.y[iy_idx]
+        
+        # Helper to safely scalarize
+        def _scalar(val):
+            if hasattr(val, 'item'): return val.item()
+            return val
+            
+        x_center = _scalar(x_center)
+        y_center = _scalar(y_center)
         
     elif center == "laser":
         if laser_position is None:

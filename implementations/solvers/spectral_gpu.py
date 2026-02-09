@@ -64,26 +64,18 @@ class SpectralSolverGPU:
         laser_path = context.laser_path
         laser_params = context.laser
         SsState = self.state
-        a = SsState.a
 
         # Fetch laser state at current time
         laser_state = laser_path.get_state(t, dt)
-        x = laser_state.x
-        y = laser_state.y
-        power = laser_state.power
-        is_on = laser_state.is_on
-        r_b = laser_params.radius
-        absorptivity = laser_params.absorptivity
-        laser_coef = absorptivity * 2.0 * power / (cp.pi * r_b ** 2) if is_on else 0.0
+        laser_coef = laser_params.absorptivity * 2.0 * laser_state.power / (cp.pi * laser_params.radius ** 2) 
 
         # 1. Compute source terms (Laser + Evaporation)
         q_las = kernels.compute_gaussian_laser_flux(
-            cp.asarray(SsState.X), cp.asarray(SsState.Y),
-            x, y,
-            r_b, laser_coef
+            SsState.X, SsState.Y,
+            laser_state.x, laser_state.y,
+            laser_params.radius, laser_coef
         )
-        v_x, v_y = laser_state.v if hasattr(laser_state, 'v') else (0.0, 0.0)
-        q_evap = kernels.shift_flux(cp.asarray(SsState.q_evap_old), (v_x*num.dt, v_y*num.dt), geom)
+        q_evap = kernels.shift_flux(SsState.q_evap_old, (laser_state.v[0]*num.dt, laser_state.v[1]*num.dt), geom)
         q_dct = kernels.DCT_II(q_las - q_evap)
 
         # 2. Linear step (ETD1)
@@ -99,34 +91,33 @@ class SpectralSolverGPU:
         S_current = S_n.copy()
 
         # 3. Latent Heat Correction
-        kernels.update_fine_mesh(SsState, x, y)
+        kernels.update_fine_mesh(SsState, laser_state.x, laser_state.y)
         SsState.Q_latent_buffer.fill(0.0)
-        kernels.compute_latent_heat_source(SsState.Q_latent_buffer, mat, x, y, num, SsState)
-        Q_modes = kernels.project_box_to_modes(SsState.Q_latent_buffer, SsState)
-        # Add source to 'a' (which is effectively aK at this point)
-        kernels.add_source_term_modes_host(SsState.a, SsState.KK, Q_modes)
-        # Add source to 'a_temp' (to include latent heat in the guess)
-        kernels.add_source_term_modes_host(SsState.a_temp, SsState.KK, Q_modes)
-
+        kernels.compute_latent_heat_source(SsState.Q_latent_buffer, mat, laser_state.x, laser_state.y, num, SsState)
+        # Add latent heat source to a 
+        # a + Q_latent * (1 - exp(-K*dt)) / K -> a
+        # a now is decayed and includes latent heat sources, but no laser and evaporation yet
+        kernels.add_source_term_modes(SsState.a, SsState.KK, kernels.project_box_to_modes(SsState.Q_latent_buffer, SsState))
+        # a_temp not updated, as it will be recomputed in the next steps from a with the latent heat included
+        
         # 4. Nonlinear iteration for evaporation
         T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
         for k in range(30):
-            kernels.compute_evaporation_flux(
-                T_temp, SsState.q_evap_buffer, mat.Pa, mat.R_v, mat.T_boil, 
-                mat.DeltaH_LV, mat.R_v, mat.T_liquidus
-            )
-            q_evap = SsState.q_evap_buffer
-            cp.subtract(q_las, q_evap, out=SsState.q_diff)
+            T_old = T_temp
+            # Compute evaporation flux based on current surface temperature guess
+            kernels.compute_evaporation_flux(T_temp, SsState.q_evap_buffer, mat.Pa, mat.R_v, mat.T_boil, 
+                mat.DeltaH_LV, mat.R_v, mat.T_liquidus)
+            cp.subtract(q_las,SsState.q_evap_buffer, out=SsState.q_diff, casting='same_kind')
             S_target = SsState.dct_scale * kernels.DCT_II(SsState.q_diff)
             S_current = 0.1 * S_target + 0.9 * S_current
-            cp.multiply(1.0, S_current, out=SsState.B_buffer)
+            cp.multiply(1.0, S_current, out=SsState.B_buffer, casting='same_kind')
+
             kernels.update_modes_etd1(SsState.a, SsState.KK, SsState.Cp32_broadcast, SsState.B_buffer, SsState.a_temp)
-            T_old = T_temp
             T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
             if cp.max(cp.abs(T_temp - T_old)) < 2e+1:
                 break
 
-        SsState.q_evap_old = cp.asarray(q_evap, dtype=cp.float32).copy()
+        SsState.q_evap_old[:] = SsState.q_evap_buffer
         P_laser = cp.sum(q_las) * geom.dx * geom.dy
 
         # Optionally, return metrics for logging/diagnostics

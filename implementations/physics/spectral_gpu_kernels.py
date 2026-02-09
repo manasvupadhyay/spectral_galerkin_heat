@@ -109,6 +109,7 @@ class SpectralSolverState:
     
     # Latent Heat Specifics
     Q_latent_buffer: cp.ndarray = None
+    isotherm_cache: list = None
     
     # Fine Grid / Aliasing structures
     # Box Coordinate Arrays (Changing every step)
@@ -197,26 +198,23 @@ class SpectralSolverState:
         self.Cm = cp.asarray(spec_hp.C_coef(nx, Lx), dtype=cp.float32)
         self.Cn = cp.asarray(spec_hp.C_coef(ny, Ly), dtype=cp.float32)
         self.Cp = cp.asarray(spec_hp.C_coef(nz, Lz), dtype=cp.float32)
-        # Evaluate Cp at top surface (z = Lz): cos(p*pi) = (-1)^p
-        sign = cp.power(-1.0, cp.arange(nz, dtype=cp.float32)).astype(cp.float32)
-        Cp_top = (self.Cp.astype(cp.float32) * sign)
-        self.Cp32_broadcast = Cp_top[:, None, None]
+       
+        # Scaling factors for DCT/IDCT
+        self.dct_scale = cp.asarray((dx * dy) * cp.sqrt((nx * ny) / (Lx * Ly)), dtype=cp.float32)
+        self.recon_scale = cp.asarray(cp.sqrt(nx * ny) / cp.sqrt(Lx * Ly), dtype=cp.float32)
         
+        # Precomputed cosine bases for reconstruction (cell-centered points)
+        x_np, y_np, z_np = self.x, self.y, self.z
+        self.cos_mx = cp.cos(cp.pi * cp.arange(nx)[:, None] * x_np[None, :] / Lx).astype(cp.float32)
+        self.cos_ny = cp.cos(cp.pi * cp.arange(ny)[:, None] * y_np[None, :] / Ly).astype(cp.float32)
+        self.cos_pz = cp.cos(cp.pi * cp.arange(nz)[:, None] * z_np[None, :] / Lz).astype(cp.float32)
+
         # Full-domain bases are allocated lazily via prepare_full_reconstruction()
         self.full_recon_initialized = False
-
-
-        # Precompute full-domain basis matrices including normalization coefficients
-        m = cp.arange(nx)
-        n = cp.arange(ny)
-        p = cp.arange(nz)
-        # Bx_recon: (modes_x, nx_rec), By_recon: (modes_y, ny_rec), Bz_recon: (modes_z, nz_rec)
-        self.Bx_recon = (self.Cm[:, None] * cp.cos(cp.pi * m[:, None] * x_rec[None, :] / Lx)).astype(cp.float32)
-        self.By_recon = (self.Cn[:, None] * cp.cos(cp.pi * n[:, None] * y_rec[None, :] / Ly)).astype(cp.float32)
-        self.Bz_recon = (self.Cp[:, None] * cp.cos(cp.pi * p[:, None] * z_rec[None, :] / Lz)).astype(cp.float32)
+        
         # Fine mesh setup for latent heat correction
-        self.refinement = 4
-        self.Lx_box, self.Ly_box, self.Lz_box = 0.7e-3, 0.2e-3, 0.04e-3
+        self.refinement = 3
+        self.Lx_box, self.Ly_box, self.Lz_box = 0.9e-3, 0.2e-3, 0.04e-3
         self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
         
         self.nx_fine_total = int(cp.ceil(Lx / self.dx_fine))
@@ -272,15 +270,18 @@ class SpectralSolverState:
         nx, ny, nz = num.nx, num.ny, num.nz
         sign = cp.power(-1.0, cp.arange(nz, dtype=cp.float32)).astype(cp.float32)
         Cp_top = (self.Cp.astype(cp.float32) * sign)
-        self.KK_by_Cp = (self.KK * Cp_top[:, None, None]).astype(cp.float32)
-        
+        # Broadcasted coefficient array for fast contraction with modal arrays (shape: (nz,1,1))
+        self.Cp32_broadcast = Cp_top[:, None, None]
         # Allocate working arrays on GPU
         self.q_diff = cp.empty((ny, nx), dtype=cp.float32)
         self.B_buffer = cp.empty((ny, nx), dtype=cp.float32)
         self.a_temp = cp.empty((nz, ny, nx), dtype=cp.float32)
-        self.aK = cp.empty((nz, ny, nx), dtype=cp.float32)
         self.q_evap_old = cp.zeros((ny, nx), dtype=cp.float32)
-        self.q_efull_reconstruction(self, geom):
+        self.q_evap_buffer = cp.zeros((ny, nx), dtype=cp.float32)
+        # ZYX layout for latent heat source
+        self.Q_latent_buffer = cp.zeros((self.nz_box, self.ny_box, self.nx_box), dtype=cp.float32)
+        
+    def full_reconstruction(self, geom):
         """Prepare full-domain bases on demand."""
         if getattr(self, 'full_recon_initialized', False):
             return
@@ -304,25 +305,6 @@ class SpectralSolverState:
         self.Bz_recon = (self.Cp[:, None] * cp.cos(cp.pi * p[:, None] * self.z_rec[None, :] / Lz)).astype(cp.float32)
         
         self.full_recon_initialized = True
-
-    def prepare_K_buffers(self, phys, geom, num):
-        """Precompute spectral propagators and allocate buffers on GPU."""
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info("Precomputing K, KK on GPU... ")
-        
-        self.K, self.KK = precompute_K_KK(phys, num, geom)
-        # Project KK onto top-surface weighted Cp for source projection
-        nx, ny, nz = num.nx, num.ny, num.nz
-        sign = cp.power(-1.0, cp.arange(nz, dtype=cp.float32)).astype(cp.float32)
-        Cp_top = (self.Cp.astype(cp.float32) * sign)
-        # Broadcasted coefficient array for fast contraction with modal arrays (shape: (nz,1,1))
-        self.Cp32_broadcast = Cp_top[:, None, None]
-        
-        # Allocate working arrays on GPU
-        self.q_diff = cp.empty((ny, nx), dtype=cp.float32)
-        self.B_buffer = cp.empty((ny, nx), dtype=cp.float32)
-        self.a_temp = cp.empty((nz, ny, nx), dtype=cp.float32)
         self.q_evap_old = cp.zeros((ny, nx), dtype=cp.float32)
         self.q_evap_buffer = cp.zeros((ny, nx), dtype=cp.float32)
         # ZYX layout
@@ -339,13 +321,8 @@ def precompute_K_KK(phys, num, geom):
     kz = (np.pi * cp.arange(num.nz) / geom.Lz)
 
     # meshgrid(..., indexing='ij')
-    KX, KY, KZ = cp.meshgrid(kx, ky, kz, indexing='ij')
-    k2 = (kx[None, None, :]**2 + ky[None, :, None]**2 + kz[:, None, None]**2)
-
-    alpha = phys.k / (phys.rho * phys.Cp)
-    K = cp.exp(-alpha * k2 * num.dt).astype(cp.float32)
-
-    denom = alpha * k2
+    denom = phys.k / (phys.rho * phys.Cp) *(kx[None, None, :]**2 + ky[None, :, None]**2 + kz[:, None, None]**2)
+    K = cp.exp(-denom * num.dt).astype(cp.float32)
     mask_zero = (denom == 0)
     # Avoid div by zero
     denom[mask_zero] = 1.0
@@ -360,7 +337,7 @@ def precompute_K_KK(phys, num, geom):
 # Wrapper Functions
 # ======================================
 
-def update_modes_etd1(aK, KK_by_Cp, B_scaled, a_temp_out):
+def update_modes_etd1(aK, KK, Cp_broadcast, B_scaled, a_temp_out):
     """Wrapper for ETD1 kernel."""
     nz, ny, nx = aK.shape
     # Block dims
@@ -370,7 +347,8 @@ def update_modes_etd1(aK, KK_by_Cp, B_scaled, a_temp_out):
         (ny + threadsperblock[1] - 1) // threadsperblock[1],
         (nx + threadsperblock[2] - 1) // threadsperblock[2]
     )
-    update_modes_etd1_kernel[blockspergrid, threadsperblock](aK, KK_by_Cp, B_scaled, a_temp_out)
+    update_modes_etd1_kernel[blockspergrid, threadsperblock](aK, KK, Cp_broadcast, B_scaled, a_temp_out)
+
 
 
 def add_source_term_modes(a_temp, KK, Q_modes):
@@ -567,7 +545,6 @@ def update_fine_mesh(SsState, x_laser, y_laser):
     """
     Update fine mesh box coordinates and basis subsets on GPU.
     Only x and y are updated since z is static (considering flat top).
-
     """
     # 1. Update X-Axis
     ix_start, ix_end, ix_laser_rel = calculate_subgrid_indices(
