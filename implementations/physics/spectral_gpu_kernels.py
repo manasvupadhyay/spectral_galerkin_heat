@@ -37,24 +37,50 @@ def add_source_term_modes_kernel(a_temp, KK, Q_modes):
     if z < nz and y < ny and x < nx:
         a_temp[z, y, x] += KK[z, y, x] * Q_modes[z, y, x]
 
+
+# TODO test following function with the actual liquid fraction, might get more physical
+
+@cuda.jit(device=True)
+def get_liquid_fraction(T, T_S, T_L):
+    if T <= T_S:
+        return 0.0
+    elif T >= T_L:
+        return 1.0
+    else:
+        return (T - T_S) / (T_L - T_S)
+
 @cuda.jit
 def compute_source_term_kernel(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
-    """
-    Compute latent heat source term Q.
-    Grid: 3D (nz, ny, nx)
-    """
     z, y, x = cuda.grid(3)
     nz, ny, nx = T_curr.shape
-    
+
     if z < nz and y < ny and x < nx:
-        T = T_curr[z, y, x]
-        # Indicator function for mushy zone (inclusive)
-        if T >= T_S and T <= T_L:
-            dT = T - T_prev[z, y, x]
-            factor = -rho * L / ((T_L - T_S) * dt)
-            out[z, y, x] = factor * dT
-        else:
-            out[z, y, x] = 0.0
+        # Compute Liquid Fraction Difference
+        f_curr = get_liquid_fraction(T_curr[z, y, x], T_S, T_L)
+        f_prev = get_liquid_fraction(T_prev[z, y, x], T_S, T_L)
+        
+        # Q = -rho * L * df/dt
+    # If we jump from Liquid (1.0) to Solid (0.0), df = -1.0, and we release full latent heat.
+    out[z, y, x] = -rho * L * (f_curr - f_prev) / dt
+
+# @cuda.jit
+# def compute_source_term_kernel(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
+#     """
+#     Compute latent heat source term Q.
+#     Grid: 3D (nz, ny, nx)
+#     """
+#     z, y, x = cuda.grid(3)
+#     nz, ny, nx = T_curr.shape
+    
+#     if z < nz and y < ny and x < nx:
+#         T = T_curr[z, y, x]
+#         # Indicator function for mushy zone (inclusive)
+#         if T >= T_S and T <= T_L:
+#             dT = T - T_prev[z, y, x]
+#             factor = -rho * L / ((T_L - T_S) * dt)
+#             out[z, y, x] = factor * dT
+#         else:
+#             out[z, y, x] = 0.0
 
 @cuda.jit
 def compute_evaporation_flux_kernel(T_surface, q_out, P0, R_gas, T_boil, DeltaH_LV, R_v, T_liquidus):
