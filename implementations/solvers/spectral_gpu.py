@@ -90,32 +90,59 @@ class SpectralSolverGPU:
         kernels.update_modes_etd1(SsState.a, SsState.KK, SsState.Cp32_broadcast, SsState.B_buffer, SsState.a_temp)
         S_current = S_n.copy()
 
-        # 3. Latent Heat Correction
-        kernels.update_fine_mesh(SsState, laser_state.x, laser_state.y)
-        SsState.Q_latent_buffer.fill(0.0)
-        kernels.compute_latent_heat_source(SsState.Q_latent_buffer, mat, laser_state.x, laser_state.y, num, SsState)
-        # Add latent heat source to a 
-        # a + Q_latent * (1 - exp(-K*dt)) / K -> a
-        # a now is decayed and includes latent heat sources, but no laser and evaporation yet
-        kernels.add_source_term_modes(SsState.a, SsState.KK, kernels.project_box_to_modes(SsState.Q_latent_buffer, SsState))
-        # a_temp not updated, as it will be recomputed in the next steps from a with the latent heat included
+        # 3. Combined Nonlinear Iteration (Latent Heat + Evaporation)
+        kernels.update_fine_mesh(SsState, laser_state.x, laser_state.y)        
+        # Save the decayed state (independent of source terms
         
-        # 4. Nonlinear iteration for evaporation
+        # Initial guess for T (using current a_temp from linear step)
+        # T_temp used for convergence check of Surface T
         T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
+        
         for k in range(30):
             T_old = T_temp
-            # Compute evaporation flux based on current surface temperature guess
+            
+            # A. Compute Latent Heat Source (based on current a_temp from previous iter)
+            # update_history=False: We only commit the history state after convergence
+            SsState.Q_latent_buffer.fill(0.0)
+            kernels.compute_latent_heat_source(
+                SsState.Q_latent_buffer, mat, laser_state.x, laser_state.y, 
+                num, SsState, update_history=False
+            )
+            
+            # B. Compute Evaporation Source (based on current Surface T)
             kernels.compute_evaporation_flux(T_temp, SsState.q_evap_buffer, mat.Pa, mat.R_v, mat.T_boil, 
                 mat.DeltaH_LV, mat.R_v, mat.T_liquidus)
-            cp.subtract(q_las,SsState.q_evap_buffer, out=SsState.q_diff, casting='same_kind')
+            
+            # Update spectral boundary source (Laser - Evap)
+            cp.subtract(q_las, SsState.q_evap_buffer, out=SsState.q_diff, casting='same_kind')
             S_target = SsState.dct_scale * kernels.DCT_II(SsState.q_diff)
+            # Relax the Source term update
             S_current = 0.1 * S_target + 0.9 * S_current
             cp.multiply(1.0, S_current, out=SsState.B_buffer, casting='same_kind')
 
+            # C. Construct New Temperature State (a_temp)
+            # Add Volumetric Source (Latent Heat) to base state
+            # a_decayed -> a_decayed + KK * Q_latent
+            kernels.add_source_term_modes(SsState.a, SsState.KK, kernels.project_box_to_modes(SsState.Q_latent_buffer, SsState))
+            
+            # Add Boundary Source (Evaporation/Laser) to finish ETD1
+            # (a_decayed + KK*Q) -> (a_decayed + KK*Q) + KK*Cp*B_buffer -> a_temp
             kernels.update_modes_etd1(SsState.a, SsState.KK, SsState.Cp32_broadcast, SsState.B_buffer, SsState.a_temp)
+
+            # D. Check Convergence
             T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
-            if cp.max(cp.abs(T_temp - T_old)) < 2e+1:
+            
+            # Require at least 2 iterations to stabilize LH + Evap coupling
+            if k > 2 and cp.max(cp.abs(T_temp - T_old)) < 20:
                 break
+        
+        # 4. Finalize Latent Heat History
+        # We must run this once more with update_history=True to save the converged state for the next step
+        # Ideally, we call it with the EXACT same T field as the last iteration
+        kernels.compute_latent_heat_source(
+            SsState.Q_latent_buffer, mat, laser_state.x, laser_state.y, 
+            num, SsState, update_history=True
+        )
 
         SsState.q_evap_old[:] = SsState.q_evap_buffer
         P_laser = cp.sum(q_las) * geom.dx * geom.dy

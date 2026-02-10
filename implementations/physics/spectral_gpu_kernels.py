@@ -438,7 +438,7 @@ def reconstruct_temperature_box(a, SsState):
     return T_box.astype(cp.float32), (SsState.box_x, SsState.box_y, SsState.box_z)
 
 
-def compute_latent_heat_source(Q_buffer, phys, x_laser, y_laser, num, SsState, alpha=0.4):
+def compute_latent_heat_source(Q_buffer, phys, x_laser, y_laser, num, SsState, alpha=0.4, update_history=True):
     """
     Compute volumetric latent heat source Q (W/m^3) on GPU.
     """
@@ -486,10 +486,11 @@ def compute_latent_heat_source(Q_buffer, phys, x_laser, y_laser, num, SsState, a
         Q_buffer[:] = alpha * Q_buffer + (1.0 - alpha) * Q_prev_aligned
     
     # 6. Update History
-    SsState.T_prev[:] = T_box[:]
-    SsState.Q_prev[:] = Q_buffer[:] 
-    SsState.laser_x_prev = x_laser
-    SsState.laser_y_prev = y_laser
+    if update_history:
+        SsState.T_prev[:] = T_box[:]
+        SsState.Q_prev[:] = Q_buffer[:] 
+        SsState.laser_x_prev = x_laser
+        SsState.laser_y_prev = y_laser
 
 
 def DCT_II(q):
