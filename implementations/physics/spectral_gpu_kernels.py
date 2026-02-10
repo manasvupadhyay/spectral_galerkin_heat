@@ -195,6 +195,8 @@ class SpectralSolverState:
     # Additional history for Latent Heat
     T_prev: cp.ndarray = None
     Q_prev: cp.ndarray = None
+    T_prev_aligned: cp.ndarray = None
+    Q_prev_aligned: cp.ndarray = None
     laser_x_prev: float = None
     laser_y_prev: float = None
     dV_fine: float = 0.0
@@ -437,35 +439,40 @@ def reconstruct_temperature_box(a, SsState):
     
     return T_box.astype(cp.float32), (SsState.box_x, SsState.box_y, SsState.box_z)
 
-
-def compute_latent_heat_source(Q_buffer, phys, x_laser, y_laser, num, SsState, alpha=0.4, update_history=True):
+def prepare_latent_history(SsState, x_laser, y_laser):
     """
-    Compute volumetric latent heat source Q (W/m^3) on GPU.
+    Prepares the previous time step fields (T_prev, Q_prev) by shifting them
+    to align with the current laser position.
     """
-    # 1. Reconstruct Temperature on Fine Mesh
-    T_box, _ = reconstruct_temperature_box(SsState.a_temp, SsState)
-    
-    # 2. Initialize/Retrieve State buffers
-    if not hasattr(SsState, 'T_prev') or SsState.T_prev is None:
-        SsState.T_prev = cp.zeros_like(T_box)
-        SsState.T_prev[:] = T_box[:] 
-        SsState.Q_prev = cp.zeros_like(Q_buffer)
+    # Initialize buffers if they don't exist
+    if SsState.T_prev is None:
+        # Reconstruct T at start of step from 'a'
+        T_box, _ = reconstruct_temperature_box(SsState.a, SsState)
+        SsState.T_prev = T_box
+        SsState.Q_prev = cp.zeros_like(T_box)
         SsState.laser_x_prev = x_laser
         SsState.laser_y_prev = y_laser
-        Q_buffer.fill(0.0)
-        return
+        
+        # Allocate aligned buffers
+        SsState.T_prev_aligned = cp.zeros_like(T_box)
+        SsState.Q_prev_aligned = cp.zeros_like(T_box)
 
-    # 3. Shift Previous Fields to Current Frame
+    # Calculate shift
     shift_x = x_laser - SsState.laser_x_prev
     shift_y = y_laser - SsState.laser_y_prev
-    
     shift_pixels = (0, -shift_y / SsState.dy_fine, -shift_x / SsState.dx_fine)
-    
-    # Use cupyx.scipy.ndimage.shift
-    T_prev_aligned = cupy_ndimage.shift(SsState.T_prev, shift_pixels, order=1, mode='nearest')
-    Q_prev_aligned = cupy_ndimage.shift(SsState.Q_prev, shift_pixels, order=1, mode='constant', cval=0.0)
-    
-    # 4. Compute Source Term (Calls CUDA Kernel)
+
+    # Perform Shift
+    cupy_ndimage.shift(SsState.T_prev, shift_pixels, output=SsState.T_prev_aligned, order=1, mode='nearest')
+    cupy_ndimage.shift(SsState.Q_prev, shift_pixels, output=SsState.Q_prev_aligned, order=1, mode='constant', cval=0.0)
+
+
+def compute_latent_source_only(Q_out, T_box, SsState, phys, dt):
+    """
+    Computes the latent heat source based on the current temperature estimate T_box
+    and the aligned previous temperature (SsState.T_prev_aligned).
+    Does NOT update history or apply relaxation.
+    """
     nz_box, ny_box, nx_box = T_box.shape
     threadsperblock = (8, 8, 8)
     blockspergrid = (
@@ -475,22 +482,18 @@ def compute_latent_heat_source(Q_buffer, phys, x_laser, y_laser, num, SsState, a
     )
     
     compute_source_term_kernel[blockspergrid, threadsperblock](
-        T_box, T_prev_aligned, 
+        T_box, SsState.T_prev_aligned, 
         phys.T_solidus, phys.T_liquidus, 
-        phys.rho, phys.L_f, num.dt, 
-        Q_buffer
+        phys.rho, phys.L_f, dt, 
+        Q_out
     )
-    
-    # 5. Apply Relaxation
-    if alpha < 1.0:
-        Q_buffer[:] = alpha * Q_buffer + (1.0 - alpha) * Q_prev_aligned
-    
-    # 6. Update History
-    if update_history:
-        SsState.T_prev[:] = T_box[:]
-        SsState.Q_prev[:] = Q_buffer[:] 
-        SsState.laser_x_prev = x_laser
-        SsState.laser_y_prev = y_laser
+
+def update_latent_history(SsState, T_box, Q_buffer, x_laser, y_laser):
+    """Commit current T and Q to history for the next step."""
+    SsState.T_prev[:] = T_box[:]
+    SsState.Q_prev[:] = Q_buffer[:] 
+    SsState.laser_x_prev = x_laser
+    SsState.laser_y_prev = y_laser
 
 
 def DCT_II(q):
