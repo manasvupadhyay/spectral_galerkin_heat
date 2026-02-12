@@ -40,47 +40,47 @@ def add_source_term_modes_kernel(a_temp, KK, Q_modes):
 
 # TODO test following function with the actual liquid fraction, might get more physical
 
-@cuda.jit(device=True)
-def get_liquid_fraction(T, T_S, T_L):
-    if T <= T_S:
-        return 0.0
-    elif T >= T_L:
-        return 1.0
-    else:
-        return (T - T_S) / (T_L - T_S)
-
-@cuda.jit
-def compute_source_term_kernel(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
-    z, y, x = cuda.grid(3)
-    nz, ny, nx = T_curr.shape
-
-    if z < nz and y < ny and x < nx:
-        # Compute Liquid Fraction Difference
-        f_curr = get_liquid_fraction(T_curr[z, y, x], T_S, T_L)
-        f_prev = get_liquid_fraction(T_prev[z, y, x], T_S, T_L)
-        
-        # Q = -rho * L * df/dt
-    # If we jump from Liquid (1.0) to Solid (0.0), df = -1.0, and we release full latent heat.
-    out[z, y, x] = -rho * L * (f_curr - f_prev) / dt
+# @cuda.jit(device=True)
+# def get_liquid_fraction(T, T_S, T_L):
+#     if T <= T_S:
+#         return 0.0
+#     elif T >= T_L:
+#         return 1.0
+#     else:
+#         return (T - T_S) / (T_L - T_S)
 
 # @cuda.jit
 # def compute_source_term_kernel(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
-#     """
-#     Compute latent heat source term Q.
-#     Grid: 3D (nz, ny, nx)
-#     """
 #     z, y, x = cuda.grid(3)
 #     nz, ny, nx = T_curr.shape
-    
+
 #     if z < nz and y < ny and x < nx:
-#         T = T_curr[z, y, x]
-#         # Indicator function for mushy zone (inclusive)
-#         if T >= T_S and T <= T_L:
-#             dT = T - T_prev[z, y, x]
-#             factor = -rho * L / ((T_L - T_S) * dt)
-#             out[z, y, x] = factor * dT
-#         else:
-#             out[z, y, x] = 0.0
+#         # Compute Liquid Fraction Difference
+#         f_curr = get_liquid_fraction(T_curr[z, y, x], T_S, T_L)
+#         f_prev = get_liquid_fraction(T_prev[z, y, x], T_S, T_L)
+        
+#         # Q = -rho * L * df/dt
+#     # If we jump from Liquid (1.0) to Solid (0.0), df = -1.0, and we release full latent heat.
+#     out[z, y, x] = -rho * L * (f_curr - f_prev) / dt
+
+@cuda.jit
+def compute_source_term_kernel(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
+    """
+    Compute latent heat source term Q.
+    Grid: 3D (nz, ny, nx)
+    """
+    z, y, x = cuda.grid(3)
+    nz, ny, nx = T_curr.shape
+    
+    if z < nz and y < ny and x < nx:
+        T = T_curr[z, y, x]
+        # Indicator function for mushy zone (inclusive)
+        if T >= T_S and T <= T_L:
+            dT = T - T_prev[z, y, x]
+            factor = -rho * L / ((T_L - T_S) * dt)
+            out[z, y, x] = factor * dT
+        else:
+            out[z, y, x] = 0.0
 
 @cuda.jit
 def compute_evaporation_flux_kernel(T_surface, q_out, P0, R_gas, T_boil, DeltaH_LV, R_v, T_liquidus):
@@ -123,7 +123,6 @@ class SpectralSolverState:
     KK: cp.ndarray = None
     
     # State Arrays
-    # aK: cp.ndarray = None       # REMOVED (aliased to 'a' in solver)
     a: cp.ndarray = None       # Current temperature modes (nz, ny, nx)
     a_temp: cp.ndarray = None  # Temporary working array (nz, ny, nx)
     
@@ -263,8 +262,21 @@ class SpectralSolverState:
         logger.info("Precomputing fine cosine bases on GPU...")
         m, n, p = cp.arange(nx), cp.arange(ny), cp.arange(nz)
         
-        # Broadcasting for basis computation
-        # (nx, 1) * (1, nx_fine) -> (nx, nx_fine)
+        # Precompute fine-grid cosine bases for projection between modal (spectral)
+        # coefficients and the fine physical grid used for latent-heat correction.
+        #
+        # Shapes and broadcasting:
+        #  - `self.Cm` has shape (nx,) containing normalization coeffs for x-modes.
+        #  - `m[:, None]` has shape (nx, 1) (mode indices as column vector).
+        #  - `x_fine[None, :]` has shape (1, nx_fine) (fine-grid x positions as row vector).
+        #  - The inner product `cp.cos(pi * m[:,None] * x_fine[None,:] / Lx)` yields
+        #    an array of shape (nx, nx_fine) where entry [i, j] = cos(pi * i * x_fine[j] / Lx).
+        #  - Multiplying by `self.Cm[:, None]` scales each row by the mode normalization,
+        #    producing `Bx_fine_full` with shape (nx, nx_fine).
+        #
+        # These full-basis arrays live on the GPU (CuPy) and are later sliced to the
+        # local box (using host integer indices) to produce compact `Bx_fine` / `By_fine`.
+
         self.Bx_fine_full = (self.Cm[:, None] * cp.cos(cp.pi * m[:, None] * x_fine[None, :] / Lx)).astype(cp.float32)
         self.By_fine_full = (self.Cn[:, None] * cp.cos(cp.pi * n[:, None] * y_fine[None, :] / Ly)).astype(cp.float32)
         self.Bz_fine_full = (self.Cp[:, None] * cp.cos(cp.pi * p[:, None] * z_fine_global[None, :] / Lz)).astype(cp.float32)
@@ -388,7 +400,7 @@ def add_source_term_modes(a_temp, KK, Q_modes):
     add_source_term_modes_kernel[blockspergrid, threadsperblock](a_temp, KK, Q_modes)
 
 
-def compute_evaporation_flux(T_surface, q_out, P0, R_gas, T_boil, DeltaH_LV, R_v, T_liquidus):
+def compute_evaporation_flux(T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liquidus):
     """Wrapper for Evaporation kernel."""
     ny, nx = T_surface.shape
     threadsperblock = (16, 16)
@@ -397,7 +409,7 @@ def compute_evaporation_flux(T_surface, q_out, P0, R_gas, T_boil, DeltaH_LV, R_v
         (nx + threadsperblock[1] - 1) // threadsperblock[1]
     )
     compute_evaporation_flux_kernel[blockspergrid, threadsperblock](
-        T_surface, q_out, P0, R_gas, T_boil, DeltaH_LV, R_v, T_liquidus
+        T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liquidus
     )
 
 
@@ -414,14 +426,27 @@ def project_box_to_modes(field_box, SsState):
         raise RuntimeError("Fine mesh not initialized.")
     
     # cp.tensordot is highly optimized
+    # Distribute dV_fine (approx 1e-15 to 1e-17) multiplication into the contractions
+    # to maintain numerical stability in float32. By scaling the basis functions by dx, dy, dz,
+    # we keep intermediate accumulations (Riemann sums) in a range closer to the physical field values (O(1) to O(1000)),
+    # preventing catastrophic precision loss that would occur if we accumulated large sums (~1e14) 
+    # before multiplying by the tiny volume element at the very end.
+
     # 1. Contract Z_box: (nz_box, ny_box, nx_box) . (nz, nz_box) -> (ny_box, nx_box, nz)
-    temp1 = cp.tensordot(field_box, SsState.Bz_fine, axes=(0, 1))
+    # Scale basis by dz to effectively integrate: Sum(T * Bz * dz)
+    Bz_scaled = SsState.Bz_fine * SsState.dz_fine
+    temp1 = cp.tensordot(field_box, Bz_scaled, axes=(0, 1))
+
     # 2. Contract Y_box: (ny_box, nx_box, nz) . (ny, ny_box) -> (nx_box, nz, ny)
-    temp2 = cp.tensordot(temp1, SsState.By_fine, axes=(0, 1))
+    # Scale basis by dy
+    By_scaled = SsState.By_fine * SsState.dy_fine
+    temp2 = cp.tensordot(temp1, By_scaled, axes=(0, 1))
+
     # 3. Contract X_box: (nx_box, nz, ny) . (nx, nx_box) -> (nz, ny, nx)
-    modes = cp.tensordot(temp2, SsState.Bx_fine, axes=(0, 1))
+    # Scale basis by dx
+    Bx_scaled = SsState.Bx_fine * SsState.dx_fine
+    modes = cp.tensordot(temp2, Bx_scaled, axes=(0, 1))
     
-    modes *= SsState.dV_fine
     return modes.astype(cp.float32)
 
 

@@ -96,7 +96,7 @@ class SpectralSolverGPU:
         
         # Initial Guess: Use previous Q aligned
         cp.copyto(SsState.Q_latent_buffer, SsState.Q_prev_aligned)
-        
+    
         # Allocation for new Q estimate
         Q_new = cp.empty_like(SsState.Q_latent_buffer)
         
@@ -133,7 +133,7 @@ class SpectralSolverGPU:
         for k in range(30):
             T_old = T_temp
             # Compute evaporation flux based on current surface temperature guess
-            kernels.compute_evaporation_flux(T_temp, SsState.q_evap_buffer, mat.Pa, mat.R_v, mat.T_boil, 
+            kernels.compute_evaporation_flux(T_temp, SsState.q_evap_buffer, mat.Pa, mat.T_boil, 
                 mat.DeltaH_LV, mat.R_v, mat.T_liquidus)
             cp.subtract(q_las,SsState.q_evap_buffer, out=SsState.q_diff, casting='same_kind')
             S_target = SsState.dct_scale * kernels.DCT_II(SsState.q_diff)

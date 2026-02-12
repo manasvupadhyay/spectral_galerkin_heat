@@ -78,33 +78,71 @@ class LocalFSIOManager(IOManager):
     def save_step(self, time: float, step: int, state: Any, laser_path: Any, **kwargs) -> None:
         """
         Save the current simulation state to HDF5/XDMF, with time and step in filenames and XMF metadata.
-        Handles output types as defined in the YAML config (full_volume, profiles, cut_views).
+        Handles output types as defined in the YAML config (full_volume, profiles, cut_views, modes).
         """
         output_type = kwargs.get('output_type', 'full_volume')
         profiles_locations = kwargs.get('profiles_locations', [])
         cut_views_planes = kwargs.get('cut_views_planes', [])
 
         try:
+            # Helper for reconstruction (lazy loaded)
             from utils.spectral_helpers import reconstruct_temperature_volume
-            state.prepare_full_reconstruction(self.context.geom)
-            field = reconstruct_temperature_volume(state.a, state).transpose(2,1,0)  # Ensure (z,y,x) ordering
-            grid_coords = (getattr(state, 'x_rec', None), getattr(state, 'y_rec', None), getattr(state, 'z_rec', None))
+
             if output_type == 'full_volume':
+                state.prepare_full_reconstruction(self.context.geom)
+                field = reconstruct_temperature_volume(state.a, state).transpose(2,1,0)  # Ensure (z,y,x) ordering
+                grid_coords = (getattr(state, 'x_rec', None), getattr(state, 'y_rec', None), getattr(state, 'z_rec', None))
+                
                 filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
                 if hasattr(field, "get"):
                     field = field.get()
                 save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
                 logger.info(f"Saved field for step {step} to {filename_base}.h5/.xmf")
+
+            elif output_type == 'modes':
+                # Save spectral modes (coefficients) to a single HDF5 file (append mode)
+                modes_file = self.get_output_path("modes.h5", subdir='fields')
+                
+                # Ensure data is on CPU
+                modes_data = state.a
+                if hasattr(modes_data, 'get'):
+                    modes_data = modes_data.get()
+                
+                # Open file in append mode (or create)
+                with h5py.File(modes_file, 'a') as f:
+                    ds_name = "modes"
+                    if ds_name not in f:
+                        # Create resizable datasets (time, nz, ny, nx)
+                        # We use maxshape=(None, ...) to allow resizing along the first dimension
+                        shape = (0,) + modes_data.shape
+                        maxshape = (None,) + modes_data.shape
+                        # Enable compression for efficiency
+                        f.create_dataset(ds_name, shape=shape, maxshape=maxshape, dtype=modes_data.dtype, chunks=True, compression="gzip")
+                        f.create_dataset("time", shape=(0,), maxshape=(None,), dtype='f8', chunks=True)
+                        f.create_dataset("step", shape=(0,), maxshape=(None,), dtype='i8', chunks=True)
+
+                    dset = f[ds_name]
+                    d_time = f["time"]
+                    d_step = f["step"]
+                    
+                    # Resize
+                    new_size = dset.shape[0] + 1
+                    dset.resize(new_size, axis=0)
+                    d_time.resize(new_size, axis=0)
+                    d_step.resize(new_size, axis=0)
+                    
+                    # Write
+                    dset[-1] = modes_data
+                    d_time[-1] = time
+                    d_step[-1] = step
+                
+                logger.info(f"Appended modes for step {step} to {modes_file}")
+
             elif output_type == 'profiles':
                 # Compute 1D profiles using the helper (no I/O in helper)
                 from utils.spectral_helpers import save_temp_profiles
 
                 # Determine center and laser_position robustly.
-                # profiles_locations in config may be:
-                #  - the string 'laser'
-                #  - a list whose first element is 'laser'
-                #  - a list of numeric [x, y]
-                #  - empty / omitted -> use 'hotspot'
                 laser_position = None
                 center = 'hotspot'
                 # Case: profiles_locations provided as a plain string 'laser'
@@ -145,12 +183,18 @@ class LocalFSIOManager(IOManager):
                     # Format: Coord [m] | Temp [K]
                     np.savetxt(fname, np.vstack([coords, temps]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
                 logger.info(f"Saved 1D profiles (center={center}, {laser_position}) for step {step} to {profiles_dir}")
+            
             elif output_type == 'cut_views':
                 # 1. Ensure XDMF exists for this step
                 filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
                 xdmf_path = f"{filename_base}.xmf"
+                
+                # Check if file exists; if not, we must reconstruct and save it
                 if not os.path.exists(xdmf_path):
-                    # Generate HDF5/XDMF by saving the full volume
+                    state.prepare_full_reconstruction(self.context.geom)
+                    field = reconstruct_temperature_volume(state.a, state).transpose(2,1,0)
+                    grid_coords = (getattr(state, 'x_rec', None), getattr(state, 'y_rec', None), getattr(state, 'z_rec', None))
+                    
                     if hasattr(field, "get"):
                         field = field.get()
                     save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)

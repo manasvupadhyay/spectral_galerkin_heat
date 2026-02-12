@@ -101,17 +101,17 @@ class SimulationWorkflow:
         profiles_locations = io_cfg.get('profiles_locations', [])
         cut_views_planes = io_cfg.get('cut_views_planes', [])
 
-        # Defensive handling: if interval is None (YAML null) we disable periodic outputs
+        # Defensive handling: if interval is None (YAML null) we disable periodic outputs.
         if interval is None:
             logger.info("io.interval is None: periodic outputs disabled; only 'at_end' outputs will be saved.")
-            next_output_time = float('inf')
+            next_output_step = float('inf')
         else:
-            # Ensure numeric
+            # Ensure integral number of steps
             try:
-                next_output_time = float(interval)
+                next_output_step = int(interval)
             except Exception:
                 logger.warning(f"Invalid io.interval '{interval}' - disabling periodic outputs.")
-                next_output_time = float('inf')
+                next_output_step = float('inf')
         logger.info(f"Starting time loop: 0 -> {t_end:.4e} s (dt={dt:.2e})")
 
         # Check for dynamic laser_path in context
@@ -133,8 +133,8 @@ class SimulationWorkflow:
             _psutil_proc = None
 
         while t < t_end:
-            # A. Output Check
-            if t >= next_output_time:
+            # A. Output Check (step-based)
+            if step >= next_output_step:
                 for output_type in outputs:
                     self.io_manager.save_step(
                         t, step, state, laser_path,
@@ -144,9 +144,12 @@ class SimulationWorkflow:
                     )
                 logger.info(f"Step {step} | t={t:.6e}s | Output(s) saved: {outputs}")
                 if interval is not None:
-                    next_output_time += float(interval)
+                    try:
+                        next_output_step += int(interval)
+                    except Exception:
+                        next_output_step = float('inf')
                 else:
-                    next_output_time = float('inf')
+                    next_output_step = float('inf')
             # B. Evolve State (timed)
             step_start = time.time()
             state, metrics = self.heat_solver.step(t, dt)

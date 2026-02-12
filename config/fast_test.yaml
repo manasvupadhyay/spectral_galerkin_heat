@@ -36,8 +36,8 @@ laser:
     file: "linear_track.gcode"
 
 io:
-  interval: null                      # s (Output interval) (null means no intermediate outputs)
-  outputs: []                         #[full_volume, profiles, cut_views]
+  interval: 1                         # (Output frequency, number of steps) (null means no intermediate outputs)
+  outputs: []                  #[full_volume, profiles, cut_views, modes] (empty list means no periodic outputs)
   at_end: ["profiles", "cut_views"]   # Output profiles and cut views at the end of the simulation
   profiles_locations:
     - 'hotspot'                # m, 'laser' or 'hotspot' keyword

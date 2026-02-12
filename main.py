@@ -154,7 +154,7 @@ def get_factory(context: SimulationContext):
 
 def main():
     parser = argparse.ArgumentParser(description="FastHeatSolv: Spectral Heat Equation Solver")
-    parser.add_argument("config",default='config/gpu_standard_test.yaml', help="Path to YAML configuration file")
+    parser.add_argument("config",default='config/standard_test.yaml', help="Path to YAML configuration file")
     parser.add_argument("--backend", default=None, choices=["cpu", "gpu"], help="Override backend (cpu/gpu)")
     parser.add_argument("--viz", action="store_true", help="Force visualization after simulation")
     parser.add_argument("--no-viz", action="store_true", help="Disable automatic visualization")
