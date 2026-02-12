@@ -76,7 +76,20 @@ def compute_source_term_kernel(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
         T = T_curr[z, y, x]
         # Indicator function for mushy zone (inclusive)
         if T >= T_S and T <= T_L:
-            dT = T - T_prev[z, y, x]
+            T_p = T_prev[z, y, x]
+            
+            # Fix T_prev to the boundaries [T_S, T_L] if it was outside.
+            # This ensures we calculate Delta(f_liquid) = (T - T_p_clamped)/(T_L - T_S),
+            # correctly separating latent heat from sensible heat.
+            if T_p < T_S: 
+                T_p = T_S
+            elif T_p > T_L:
+                T_p = T_L
+            
+            dT = T - T_p
+            # Note: Since both T and T_p are in [T_S, T_L], |dT| <= (T_L - T_S),
+            # so the energy bound is naturally satisfied.
+            
             factor = -rho * L / ((T_L - T_S) * dt)
             out[z, y, x] = factor * dT
         else:
