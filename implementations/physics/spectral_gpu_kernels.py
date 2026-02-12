@@ -38,31 +38,6 @@ def add_source_term_modes_kernel(a_temp, KK, Q_modes):
         a_temp[z, y, x] += KK[z, y, x] * Q_modes[z, y, x]
 
 
-# TODO test following function with the actual liquid fraction, might get more physical
-
-# @cuda.jit(device=True)
-# def get_liquid_fraction(T, T_S, T_L):
-#     if T <= T_S:
-#         return 0.0
-#     elif T >= T_L:
-#         return 1.0
-#     else:
-#         return (T - T_S) / (T_L - T_S)
-
-# @cuda.jit
-# def compute_source_term_kernel(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
-#     z, y, x = cuda.grid(3)
-#     nz, ny, nx = T_curr.shape
-
-#     if z < nz and y < ny and x < nx:
-#         # Compute Liquid Fraction Difference
-#         f_curr = get_liquid_fraction(T_curr[z, y, x], T_S, T_L)
-#         f_prev = get_liquid_fraction(T_prev[z, y, x], T_S, T_L)
-        
-#         # Q = -rho * L * df/dt
-#     # If we jump from Liquid (1.0) to Solid (0.0), df = -1.0, and we release full latent heat.
-#     out[z, y, x] = -rho * L * (f_curr - f_prev) / dt
-
 @cuda.jit
 def compute_source_term_kernel(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
     """
@@ -96,7 +71,7 @@ def compute_source_term_kernel(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
             out[z, y, x] = 0.0
 
 @cuda.jit
-def compute_evaporation_flux_kernel(T_surface, q_out, P0, R_gas, T_boil, DeltaH_LV, R_v, T_liquidus):
+def compute_evaporation_flux_kernel(T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liquidus):
     """
     Compute evaporative heat flux (Arrhenius law).
     Grid: 2D (ny, nx)
@@ -159,6 +134,12 @@ class SpectralSolverState:
     Bx_fine: cp.ndarray = None 
     By_fine: cp.ndarray = None
     Bz_fine: cp.ndarray = None
+
+    # Box Slicing Indices
+    ix_box_start: int = 0
+    iy_box_start: int = 0
+    ix_box_start_prev: int = 0
+    iy_box_start_prev: int = 0
     
     # Precomputed Full Fine Bases (Static, but needed for slicing)
     Bx_fine_full: cp.ndarray = None
@@ -442,7 +423,7 @@ def project_box_to_modes(field_box, SsState):
     # Distribute dV_fine (approx 1e-15 to 1e-17) multiplication into the contractions
     # to maintain numerical stability in float32. By scaling the basis functions by dx, dy, dz,
     # we keep intermediate accumulations (Riemann sums) in a range closer to the physical field values (O(1) to O(1000)),
-    # preventing catastrophic precision loss that would occur if we accumulated large sums (~1e14) 
+    # preventing precision loss that would occur if we accumulated large sums (~1e14) 
     # before multiplying by the tiny volume element at the very end.
 
     # 1. Contract Z_box: (nz_box, ny_box, nx_box) . (nz, nz_box) -> (ny_box, nx_box, nz)
@@ -477,7 +458,7 @@ def reconstruct_temperature_box(a, SsState):
     
     return T_box.astype(cp.float32), (SsState.box_x, SsState.box_y, SsState.box_z)
 
-def prepare_latent_history(SsState, x_laser, y_laser):
+def prepare_latent_history(SsState):
     """
     Prepares the previous time step fields (T_prev, Q_prev) by shifting them
     to align with the current laser position.
@@ -488,17 +469,18 @@ def prepare_latent_history(SsState, x_laser, y_laser):
         T_box, _ = reconstruct_temperature_box(SsState.a, SsState)
         SsState.T_prev = T_box
         SsState.Q_prev = cp.zeros_like(T_box)
-        SsState.laser_x_prev = x_laser
-        SsState.laser_y_prev = y_laser
+        SsState.ix_box_start_prev = SsState.ix_box_start
+        SsState.iy_box_start_prev = SsState.iy_box_start
         
         # Allocate aligned buffers
         SsState.T_prev_aligned = cp.zeros_like(T_box)
         SsState.Q_prev_aligned = cp.zeros_like(T_box)
 
     # Calculate shift
-    shift_x = x_laser - SsState.laser_x_prev
-    shift_y = y_laser - SsState.laser_y_prev
-    shift_pixels = (0, -shift_y / SsState.dy_fine, -shift_x / SsState.dx_fine)
+    # Integer shift based on grid index change
+    shift_x = -(SsState.ix_box_start - SsState.ix_box_start_prev)
+    shift_y = -(SsState.iy_box_start - SsState.iy_box_start_prev)
+    shift_pixels = (0, shift_y, shift_x)
 
     # Perform Shift
     cupy_ndimage.shift(SsState.T_prev, shift_pixels, output=SsState.T_prev_aligned, order=1, mode='nearest')
@@ -526,12 +508,12 @@ def compute_latent_source_only(Q_out, T_box, SsState, phys, dt):
         Q_out
     )
 
-def update_latent_history(SsState, T_box, Q_buffer, x_laser, y_laser):
+def update_latent_history(SsState, T_box, Q_buffer):
     """Commit current T and Q to history for the next step."""
     SsState.T_prev[:] = T_box[:]
     SsState.Q_prev[:] = Q_buffer[:] 
-    SsState.laser_x_prev = x_laser
-    SsState.laser_y_prev = y_laser
+    SsState.ix_box_start_prev = SsState.ix_box_start
+    SsState.iy_box_start_prev = SsState.iy_box_start
 
 
 def DCT_II(q):
@@ -619,6 +601,7 @@ def update_fine_mesh(SsState, x_laser, y_laser):
     # Slicing CuPy arrays with host integers is standard
     SsState.box_x[:] = SsState.x_fine[ix_start:ix_end]
     SsState.ix_laser_box = ix_laser_rel
+    SsState.ix_box_start = ix_start
 
     # Copy basis subset
     SsState.Bx_fine[:, :] = SsState.Bx_fine_full[:, ix_start:ix_end]
@@ -630,6 +613,7 @@ def update_fine_mesh(SsState, x_laser, y_laser):
     
     SsState.box_y[:] = SsState.y_fine[iy_start:iy_end]
     SsState.By_fine[:, :] = SsState.By_fine_full[:, iy_start:iy_end]
+    SsState.iy_box_start = iy_start
 
     # 3. Status
     SsState.fine_mesh_initialized = True

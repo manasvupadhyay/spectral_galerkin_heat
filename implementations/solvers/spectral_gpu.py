@@ -85,14 +85,14 @@ class SpectralSolverGPU:
         S_n = SsState.dct_scale * q_dct
         cp.multiply(SsState.dct_scale, q_dct, out=SsState.B_buffer)
         
-        # update_modes_etd1 now takes separate KK and Cp_broadcast instead of KK_by_Cp
+        # update_modes_etd1 takes separate KK and Cp_broadcast instead of KK_by_Cp
         # and uses in-place decayed 'a' (passed as first arg)
         kernels.update_modes_etd1(SsState.a, SsState.KK, SsState.Cp32_broadcast, SsState.B_buffer, SsState.a_temp)
         S_current = S_n.copy()
 
         # 3. Latent Heat Correction (Iterative)
         kernels.update_fine_mesh(SsState, laser_state.x, laser_state.y)
-        kernels.prepare_latent_history(SsState, laser_state.x, laser_state.y)
+        kernels.prepare_latent_history(SsState)
         
         # Initial Guess: Use previous Q aligned
         cp.copyto(SsState.Q_latent_buffer, SsState.Q_prev_aligned)
@@ -101,7 +101,7 @@ class SpectralSolverGPU:
         Q_new = cp.empty_like(SsState.Q_latent_buffer)
         
         alpha_lat = 0.4
-        for _ in range(5):
+        for _ in range(8):
             # 1. Project current Q guess to modes
             Q_modes = kernels.project_box_to_modes(SsState.Q_latent_buffer, SsState)
             
@@ -126,7 +126,7 @@ class SpectralSolverGPU:
         kernels.add_source_term_modes(SsState.a, SsState.KK, Q_modes_final)
         
         # Commit history
-        kernels.update_latent_history(SsState, T_box, SsState.Q_latent_buffer, laser_state.x, laser_state.y)
+        kernels.update_latent_history(SsState, T_box, SsState.Q_latent_buffer)
         
         # 4. Nonlinear iteration for evaporation
         T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
