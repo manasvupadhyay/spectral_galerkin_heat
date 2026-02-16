@@ -1,24 +1,25 @@
 import logging
 import numpy as np
 import os
+import subprocess
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 from core.parameters import SimulationContext
 from interfaces.microstructure import MicrostructureSolver
 
 logger = logging.getLogger(__name__)
 
-# Try importing MicroStructPy
-try:
-    import microstructpy as msp
-    HAS_MICROSTRUCTPY = True
-except ImportError:
-    HAS_MICROSTRUCTPY = False
-    logger.warning("MicroStructPy not found. Microstructure simulation will be limited.")
+@dataclass
+class Seed:
+    """Represents a single grain seed with position and orientation."""
+    position: np.ndarray  # [x, y] or [x, y, z]
+    orientation: np.ndarray  # Euler angles [phi1, Phi, phi2]
+    phase: int = 0
 
 class TreeMicroSolver(MicrostructureSolver):
     """
-    Concrete implementation of MicrostructureSolver using a Tree-based spatial index (AABB/KD-Tree)
-    to manage grain seeds and their evolution.
+    Concrete implementation of MicrostructureSolver using a Tree-based spatial index.
+    Uses Neper (via subprocess) for microstructure generation.
     """
 
     def __init__(self, context: SimulationContext):
@@ -33,7 +34,7 @@ class TreeMicroSolver(MicrostructureSolver):
         Initialize the microstructure state.
         
         Args:
-           output_dir (str): Directory to save intermediate files (seeds.txt).
+           output_dir (str): Directory to save intermediate files.
         """
         if not self.active:
             logger.info("Microstructure solver is disabled.")
@@ -54,9 +55,10 @@ class TreeMicroSolver(MicrostructureSolver):
                 return None
                 
         elif self.params.initial_type == 'synthetic_voronoi':
-            # Generate seeds and save to output_dir/seeds/seeds.txt
-            seeds_file = os.path.join(self.output_dir, "seeds", "seeds.txt")
-            self._generate_and_save_seeds(seeds_file)
+            # Generate seeds using Neper and save to output_dir/seeds/seeds.txt
+            seeds_dir = os.path.join(self.output_dir, "seeds")
+            seeds_file = os.path.join(seeds_dir, "seeds.txt")
+            self._generate_and_save_seeds(seeds_file, seeds_dir)
         
         else:
              logger.warning(f"Unknown type {self.params.initial_type}")
@@ -72,145 +74,149 @@ class TreeMicroSolver(MicrostructureSolver):
         # 3. Create Spatial Tree
         if self.seeds:
             self.tree = self.create_tree(self.seeds)
-            logger.info(f"Microstructure initialized with {len(self.seeds)} seeds.")
+            count = len(self.seeds)
+            logger.info(f"Microstructure initialized with {count} seeds.")
         
         return self.seeds
 
-    def _generate_and_save_seeds(self, filepath: str):
+    def _generate_and_save_seeds(self, filepath: str, work_dir: str):
         """
-        Generate synthetic seeds using MicroStructPy API and write to file.
-        Based on minimal example: Phase (shape, size) + Domain.
+        Generate synthetic seeds using Neper and write to file.
         """
-        if not HAS_MICROSTRUCTPY:
-            logger.error("MicroStructPy not installed.")
-            return
-            
         gen_params = self.params.generation_params
+        # Default n_grains if not provided
+        n_grains = gen_params.get('n_grains', 100)
         
-        try:
-            # 1. Define Phase 
-            # Default to circle/0.15mm if not provided (minimal example)
-            shape = gen_params.get('shape')
-            size  = gen_params.get('size') # default somewhat adjusted to SI if needed
-            
-            phase = {'shape': shape, 'size': size, 'orientation': 'random'} # orientation can be randomized later if needed
-            
-            # 2. Define Domain
-            # Use simulation bounds
-            Lx = self.context.geom.Lx
-            Ly = self.context.geom.Ly
-            # MicroStructPy 2D Geometry
-            # Domain is [0, Lx] x [0, Ly].
-            
-            # Use Rectangle from corners to match simulation domain
-            domain = msp.geometry.Rectangle(
-                corner=(0, 0),
-                side_lengths=(Lx, Ly)
-            )
-            
-            logger.info(f"Generating seeds: Phase={phase}, Domain=[{Lx}x{Ly}]")
+        # Use simulation bounds
+        Lx = self.context.geom.Lx
+        Ly = self.context.geom.Ly
+        domain_size = (Lx, Ly)
+        
+        logger.info(f"Generating Neper microstructure: n={n_grains}, Domain=[{Lx}x{Ly}]")
 
-            # 3. Create Unpositioned Seeds
-            # Ensure domain area is positive
-            if domain.area <= 0:
-                 logger.error("Domain area is zero or negative.")
-                 return
-
-            seeds = msp.seeding.SeedList.from_info(phase, domain.area)
-            # Info number of seeds created 
-            logger.info(f"Created {len(seeds)} unpositioned seeds.")
-            # 4. Position Seeds
-            seeds.position(domain, verbose = True)
-            logger.info(f"Finished positionning {len(seeds)} seeds.")
-            # Plot the positioned seeds and save to a PNG.
-            # Use a non-interactive backend so this works headless.
-            # --- VORONOI PLOTTING START ---
+        neper_data = self._run_neper(n_grains, domain_size, work_dir)
+        
+        if neper_data:
+            centers = neper_data['centers']
+            orientations = neper_data['orientations']
+            
+            # Save to simple text file: x y phi1 Phi phi2
+            # 2D centers: (N, 2), Orientations: (N, 3)
+            # Combine
             try:
-                import matplotlib
-                matplotlib.use('Agg')
-                import matplotlib.pyplot as plt
-                import matplotlib as mpl
-
-                # 1. Create Voronoi Mesh from positioned seeds
-                pmesh = msp.meshing.PolyMesh.from_seeds(seeds, domain)
-
-                # 2. Calculate Colors based on grain area
-                n = len(seeds)
-                areas = pmesh.volumes
-                std_area = domain.area / n
-                min_area, max_area = min(areas), max(areas)
-
-                cell_colors = np.zeros((n, 3))
-                for i in range(n):
-                    if areas[i] < std_area:
-                        # Blue to White scale
-                        f = (areas[i] - min_area) / (max_area - min_area) # Normalizing across full range for simplicity
-                        cell_colors[i] = (f, f, 1.0)
-                    else:
-                        # White to Red scale
-                        f = (max_area - areas[i]) / (max_area - min_area)
-                        cell_colors[i] = (1.0, f, f)
-
-                # 3. Setup Plot
-                fig, ax = plt.subplots(figsize=(8, 8))
-                
-                # Plot the Voronoi cells
-                pmesh.plot(edgecolors='k', facecolors=cell_colors, linewidth=0.5)
-                
-                # Optional: Overlay the seed points (transparent with black edge)
-                seeds.plot(edgecolors='k', facecolors='none', alpha=0.3)
-
-                plt.axis('square')
-                plt.xlim(domain.limits[0])
-                plt.ylim(domain.limits[1])
-
-                # 4. Add Colorbar
-                colors = [(0, (0, 0, 1)), (0.5, (1, 1, 1)), (1, (1, 0, 0))]
-                cmap = mpl.colors.LinearSegmentedColormap.from_list('area_cmap', colors)
-                norm = mpl.colors.Normalize(vmin=min_area, vmax=max_area)
-                sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-                cb = fig.colorbar(sm, ax=ax, orientation='horizontal', fraction=0.046, pad=0.08)
-                cb.set_label('Cell Area ($mm^2$)')
-
-                # 5. Save
-                fig_dir = os.path.join(self.output_dir or '.', 'seeds')
-                os.makedirs(fig_dir, exist_ok=True)
-                fig_path = os.path.join(fig_dir, 'voronoi_diagram.png')
-                
-                plt.savefig(fig_path, dpi=200, bbox_inches='tight', pad_inches=0.1)
-                plt.close(fig)
-                logger.info(f"Saved Voronoi plot to {fig_path}")
-
+                data = np.hstack((centers, orientations))
+                os.makedirs(os.path.dirname(filepath), exist_ok=True)
+                header = "x y phi1 Phi phi2"
+                np.savetxt(filepath, data, header=header)
+                logger.info(f"Saved seeds to {filepath}")
             except Exception as e:
-                logger.error(f"Voronoi plotting failed: {e}")
-            
-            # 5. Write to File using SeedList.write()
-            # MicroStructPy's SeedList.write expects a filename (str), not a file object.
-            # Verify directory exists
-            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+                logger.error(f"Failed to save seeds: {e}")
 
-            # Pass the filepath string directly as required by the library
-            seeds.write(filepath)
-            logger.info(f"Saved seeds to {filepath}")
+    def _run_neper(self, n_grains: int, domain_size: Tuple[float, float], output_dir: str):
+        """
+        Runs Neper to generate seeds.
+        """
+        os.makedirs(output_dir, exist_ok=True)
+        file_prefix = os.path.join(output_dir, "poly_2d")
+
+        # 1. CONSTRUCT NEPER COMMAND
+        # -dim 2
+        # -domain "square(Lx,Ly)"
+        Lx, Ly = domain_size
+        
+        cmd_gen = [
+            "neper", "-T",
+            "-n", str(n_grains),
+            "-dim", "2",
+            "-domain", f"square({Lx},{Ly})",
+            "-ori", "uniform",
+            "-format", "tess",
+        ]
+        # Adding -o argument
+        cmd_gen.extend(["-o", file_prefix])
+
+        try:
+            logger.info(f"Running: {' '.join(cmd_gen)}")
+            subprocess.run(cmd_gen, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Neper failed: {e.stderr.decode()}")
+            return None
+        except FileNotFoundError:
+            logger.error("Neper executable not found. Is it installed and in your PATH?")
+            return None
+
+        # 2. EXTRACT DATA
+        # -print cell_centers,cell_euler
+        cmd_extract = [
+            "neper", "-T",
+            "-load", file_prefix + ".tess",
+            "-print", "cell_centers,cell_euler" 
+        ]
+
+        try:
+            result = subprocess.run(cmd_extract, check=True, stdout=subprocess.PIPE, text=True)
+            
+            # Parse output
+            lines = result.stdout.strip().split('\n')
+            data = []
+            for line in lines:
+                if line.startswith('**') or not line.strip():
+                    continue
+                try:
+                    data.append([float(x) for x in line.split()])
+                except ValueError:
+                    continue
+                
+            data_arr = np.array(data)
+            
+            # Neper 2D usually outputs: x y z? or x y?
+            if data_arr.size == 0:
+                 logger.error("Neper returned empty data")
+                 return None
+
+            ncols = data_arr.shape[1]
+            if ncols >= 5:
+                # Assume first 2 are X, Y. Last 3 are Euler.
+                if ncols == 5:
+                    centers = data_arr[:, 0:2]
+                    orientations = data_arr[:, 2:5]
+                elif ncols == 6:
+                     # x y z phi1 Phi phi2
+                     centers = data_arr[:, 0:2]
+                     orientations = data_arr[:, 3:6]
+                else:
+                    centers = data_arr[:, 0:2]
+                    orientations = data_arr[:, -3:]
+
+                logger.info(f"Loaded {len(centers)} seeds from Neper.")
+                return {'centers': centers, 'orientations': orientations}
+            else:
+                logger.error(f"Unexpected Neper output shape: {data_arr.shape}")
+                return None
 
         except Exception as e:
-            logger.error(f"MicroStructPy generation failed: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"Failed to parse Neper output: {e}")
+            return None
 
     def _load_seeds_from_file(self, filepath: str):
-        """Read seeds using MicroStructPy SeedList.from_file."""
-        if not HAS_MICROSTRUCTPY:
-             return
-
+        """Read seeds using numpy."""
         try:
             logger.info(f"Loading seeds from {filepath}")
-            # MicroStructPy loader
-            self.seeds = msp.seeding.SeedList.from_file(filepath)
-            
-            # Check content
-            if len(self.seeds) > 0:
-                logger.info(f"Loaded {len(self.seeds)} seeds. First at: {self.seeds[0].position}")
+            data = np.loadtxt(filepath)
+            if data.ndim == 1:
+                data = data.reshape(1, -1)
+                
+            self.seeds = []
+            for row in data:
+                # row: x y phi1 Phi phi2
+                if row.size >= 2:
+                    pos = row[0:2]
+                    ori = row[2:5] if row.size >= 5 else np.zeros(3)
+                    self.seeds.append(Seed(pos, ori))
+                
+            if self.seeds:
+                logger.info(f"Loaded {len(self.seeds)} seeds. First: {self.seeds[0].position}")
+
         except Exception as e:
             logger.error(f"Failed to load seeds: {e}")
 
@@ -219,7 +225,7 @@ class TreeMicroSolver(MicrostructureSolver):
         Placeholder for building the AABB or KD-Tree from the list of seeds.
         
         Args:
-            seeds: List of seed objects (MicroStructPy objects or tuples)
+            seeds: List of Seed objects
             
         Returns:
             The constructed tree object (None for now).
