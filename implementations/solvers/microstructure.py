@@ -55,9 +55,10 @@ class TreeMicroSolver(MicrostructureSolver):
                 return None
                 
         elif self.params.initial_type == 'synthetic_voronoi':
-            # Generate seeds using Neper and save to output_dir/seeds/seeds.txt
+            # Generate seeds using Neper and save to output_dir/seeds/tessellation_3d.tess
             seeds_dir = os.path.join(self.output_dir, "seeds")
-            seeds_file = os.path.join(seeds_dir, "seeds.txt")
+            # We know _run_neper produces tessellation_3d.tess
+            seeds_file = os.path.join(seeds_dir, "tessellation_3d.tess")
             self._generate_and_save_seeds(seeds_file, seeds_dir)
         
         else:
@@ -84,141 +85,209 @@ class TreeMicroSolver(MicrostructureSolver):
         Generate synthetic seeds using Neper and write to file.
         """
         gen_params = self.params.generation_params
-        # Default n_grains if not provided
-        n_grains = gen_params.get('n_grains', 100)
         
         # Use simulation bounds
         Lx = self.context.geom.Lx
         Ly = self.context.geom.Ly
         domain_size = (Lx, Ly)
         
-        logger.info(f"Generating Neper microstructure: n={n_grains}, Domain=[{Lx}x{Ly}]")
+        n_grains_log = gen_params.get('n_grains', 'custom')
+        logger.info(f"Generating Neper microstructure: n={n_grains_log}, Domain=[{Lx}x{Ly}]")
 
-        neper_data = self._run_neper(n_grains, domain_size, work_dir)
-        
-        if neper_data:
-            centers = neper_data['centers']
-            orientations = neper_data['orientations']
-            
-            # Save to simple text file: x y phi1 Phi phi2
-            # 2D centers: (N, 2), Orientations: (N, 3)
-            # Combine
-            try:
-                data = np.hstack((centers, orientations))
-                os.makedirs(os.path.dirname(filepath), exist_ok=True)
-                header = "x y phi1 Phi phi2"
-                np.savetxt(filepath, data, header=header)
-                logger.info(f"Saved seeds to {filepath}")
-            except Exception as e:
-                logger.error(f"Failed to save seeds: {e}")
+        self._run_neper(domain_size, work_dir)
 
-    def _run_neper(self, n_grains: int, domain_size: Tuple[float, float], output_dir: str):
+    def _run_neper(self, domain_size: Tuple[float, float], output_dir: str):
         """
         Runs Neper to generate seeds.
         """
         os.makedirs(output_dir, exist_ok=True)
-        file_prefix = os.path.join(output_dir, "poly_2d")
+        # Use tessellation_3d prefix as in the snippet
+        file_prefix = os.path.join(output_dir, "tessellation_3d")
 
         # 1. CONSTRUCT NEPER COMMAND
-        # -dim 2
-        # -domain "square(Lx,Ly)"
         Lx, Ly = domain_size
         
-        cmd_gen = [
-            "neper", "-T",
-            "-n", str(n_grains),
-            "-dim", "2",
-            "-domain", f"square({Lx},{Ly})",
-            "-ori", "uniform",
-            "-format", "tess",
+        if hasattr(self.context.geom, 'Lz'):
+            Lz = self.context.geom.Lz
+            dim = "3"
+            domain = f"cube({Lx},{Ly},{Lz})"
+        else:
+            # Fallback or assume 2D if no Z
+            Lz = 1.0 # Dummy
+            dim = "3" 
+            domain = f"cube({Lx},{Ly},{Lz})"
+
+        gen_params = self.params.generation_params
+        
+        # Base Command
+        cmd_base = ["neper", "-T"]
+        
+        # Determine Arguments
+        if 'command' in gen_params and gen_params['command']:
+            # USER PROVIDED COMMAND STRINGS
+            # e.g. "-n 100 -morpho gg"
+            custom_args = gen_params['command'].split()
+            # Remove "neper" or "-T" if user included them by mistake
+            cleaned_args = []
+            skip_next = False
+            for i, arg in enumerate(custom_args):
+                if arg in ["neper", "-T"]: continue
+                # We also want to strip -dim or -domain if user provided them, to avoid conflicts/double entry
+                # Simpler: just use user command as args. But we must ensure domain matches simulation.
+                # Neper allows multiple flags, last one usually wins? Or error.
+                # To be safe, we append our critical flags (domain, format) at the end.
+                cleaned_args.append(arg)
+
+            cmd_args = cleaned_args
+            logger.info(f"Using custom Neper arguments: {cleaned_args}")
+        else:
+            # DEFAULT / SIMPLE MODE
+            n_grains = gen_params.get('n_grains', 100)
+            morpho = gen_params.get('shape', 'voronoi')
+            if morpho == 'circle': morpho = 'voronoi' # compat
+            
+            cmd_args = [
+                "-n", str(n_grains),
+                "-morpho", morpho,
+                "-ori", "uniform"
+            ]
+        
+        # formatting options
+        cmd_final = cmd_base + cmd_args + [
+            "-dim", dim,
+            "-domain", domain,
+            "-format", "tess,tesr", # Request both regular tessellation and raster
+            "-tesrformat", "ascii",
+            "-o", file_prefix
         ]
-        # Adding -o argument
-        cmd_gen.extend(["-o", file_prefix])
 
         try:
-            logger.info(f"Running: {' '.join(cmd_gen)}")
-            subprocess.run(cmd_gen, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            logger.info(f"Running: {' '.join(cmd_final)}")
+            subprocess.run(cmd_final, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            # 2. VISUALIZATION (Optional if povray is installed)
+            tess_file = f"{file_prefix}.tess"
+            if os.path.exists(tess_file):
+                viz_output = os.path.join(output_dir, "visualization") # Neper adds extension automatically
+                cmd_viz = [
+                    "neper", "-V", tess_file,
+                    "-datacellcol", "ori",
+                    "-print", viz_output
+                ]
+                logger.info(f"Generating visualization: {' '.join(cmd_viz)}")
+                # Allow failure for visualization (e.g. missing povray) without crashing simulation
+                try:
+                    subprocess.run(cmd_viz, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                except subprocess.CalledProcessError as e:
+                    logger.warning(f"Neper visualization failed (is metrics/povray installed?): {e.stderr.decode()}")
+                except FileNotFoundError:
+                    logger.warning("Neper executable not found for visualization.")
+
         except subprocess.CalledProcessError as e:
             logger.error(f"Neper failed: {e.stderr.decode()}")
             return None
         except FileNotFoundError:
             logger.error("Neper executable not found. Is it installed and in your PATH?")
             return None
-
-        # 2. EXTRACT DATA
-        # -print cell_centers,cell_euler
-        cmd_extract = [
-            "neper", "-T",
-            "-load", file_prefix + ".tess",
-            "-print", "cell_centers,cell_euler" 
-        ]
-
-        try:
-            result = subprocess.run(cmd_extract, check=True, stdout=subprocess.PIPE, text=True)
-            
-            # Parse output
-            lines = result.stdout.strip().split('\n')
-            data = []
-            for line in lines:
-                if line.startswith('**') or not line.strip():
-                    continue
-                try:
-                    data.append([float(x) for x in line.split()])
-                except ValueError:
-                    continue
-                
-            data_arr = np.array(data)
-            
-            # Neper 2D usually outputs: x y z? or x y?
-            if data_arr.size == 0:
-                 logger.error("Neper returned empty data")
-                 return None
-
-            ncols = data_arr.shape[1]
-            if ncols >= 5:
-                # Assume first 2 are X, Y. Last 3 are Euler.
-                if ncols == 5:
-                    centers = data_arr[:, 0:2]
-                    orientations = data_arr[:, 2:5]
-                elif ncols == 6:
-                     # x y z phi1 Phi phi2
-                     centers = data_arr[:, 0:2]
-                     orientations = data_arr[:, 3:6]
-                else:
-                    centers = data_arr[:, 0:2]
-                    orientations = data_arr[:, -3:]
-
-                logger.info(f"Loaded {len(centers)} seeds from Neper.")
-                return {'centers': centers, 'orientations': orientations}
-            else:
-                logger.error(f"Unexpected Neper output shape: {data_arr.shape}")
-                return None
-
-        except Exception as e:
-            logger.error(f"Failed to parse Neper output: {e}")
-            return None
+        
 
     def _load_seeds_from_file(self, filepath: str):
-        """Read seeds using numpy."""
+        """Read seeds from file. Supports .txt and .tess formats."""
+        if not os.path.exists(filepath):
+            logger.error(f"Seed file not found: {filepath}")
+            return
+
+        ext = os.path.splitext(filepath)[1]
+        
+        if ext == '.tess':
+            self._load_neper_tess(filepath)
+        else:
+            # Fallback to simple txt
+            try:
+                data = np.loadtxt(filepath, skiprows=1)  # Skip header
+                # TODO: Convert to Seed objects
+            except Exception as e:
+                logger.error(f"Failed to load seeds: {e}")
+
+    def _load_neper_tess(self, filepath: str):
+        """
+        Parses a Neper .tess file to extract seed positions and properties.
+        """
+        logger.info(f"Loading seeds from Neper tessellation: {filepath}")
+        
+        seeds_positions = []
+        seeds_orientations = []
+        n_grains = 0
+        
         try:
-            logger.info(f"Loading seeds from {filepath}")
-            data = np.loadtxt(filepath)
-            if data.ndim == 1:
-                data = data.reshape(1, -1)
+            with open(filepath, 'r') as f:
+                lines = [line.strip() for line in f.readlines()]
+            
+            i = 0
+            while i < len(lines):
+                line = lines[i]
                 
+                if line == "**cell":
+                    i += 1
+                    if i < len(lines):
+                        try:
+                            n_grains = int(lines[i])
+                            logger.info(f"Expecting {n_grains} grains based on **cell header.")
+                        except ValueError:
+                            logger.warning(f"Could not parse element count after **cell: {lines[i]}")
+                
+                elif line == "*seed":
+                    i += 1 # Move to data
+                    # Read n_grains lines
+                    # Format: id x y z w
+                    count = 0
+                    while count < n_grains and i < len(lines):
+                        parts = lines[i].split()
+                        if len(parts) >= 4:
+                            # 1:4 are x, y, z
+                            pos = np.array([float(p) for p in parts[1:4]])
+                            seeds_positions.append(pos)
+                        count += 1
+                        i += 1
+                    continue # Skip the increments at bottom
+
+                elif line == "*ori":
+                    i += 1
+                    if i < len(lines):
+                        descriptor = lines[i] # e.g. "rodrigues:active"
+                        logger.info(f"Orientation descriptor: {descriptor}")
+                        i += 1
+                    
+                    # Read n_grains lines
+                    count = 0
+                    while count < n_grains and i < len(lines):
+                        parts = lines[i].split()
+                        if len(parts) > 0:
+                            ori = np.array([float(p) for p in parts])
+                            seeds_orientations.append(ori)
+                        count += 1
+                        i += 1
+                    continue
+
+                i += 1
+
+            # Create Seed objects
             self.seeds = []
-            for row in data:
-                # row: x y phi1 Phi phi2
-                if row.size >= 2:
-                    pos = row[0:2]
-                    ori = row[2:5] if row.size >= 5 else np.zeros(3)
-                    self.seeds.append(Seed(pos, ori))
+            if len(seeds_positions) == n_grains:
+                # If orientations are missing, provide identity/zeros
+                if len(seeds_orientations) != n_grains:
+                    logger.warning(f"Orientation count ({len(seeds_orientations)}) != Seed count ({n_grains}). Using defaults.")
+                    seeds_orientations = [np.zeros(3) for _ in range(n_grains)]
                 
-            if self.seeds:
-                logger.info(f"Loaded {len(self.seeds)} seeds. First: {self.seeds[0].position}")
+                for pos, ori in zip(seeds_positions, seeds_orientations):
+                    self.seeds.append(Seed(position=pos, orientation=ori))
+                
+                logger.info(f"Successfully loaded {len(self.seeds)} seeds.")
+            else:
+                logger.error(f"Seed parsing mismatch: Found {len(seeds_positions)} positions, expected {n_grains}.")
 
         except Exception as e:
-            logger.error(f"Failed to load seeds: {e}")
+            logger.error(f"Error parsing .tess file: {e}")
 
     def create_tree(self, seeds: Any) -> Any:
         """

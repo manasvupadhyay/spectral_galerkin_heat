@@ -95,6 +95,8 @@ flowchart TD
 ### Prerequisites
 - Python 3.9+
 - [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (optional, for GPU support)
+- Neper
+- povray
 
 ### Setup
 1. Clone the repository:

@@ -47,11 +47,17 @@ io:
 microstructure:
   enabled: true
   initial_state:
-    type: "synthetic_voronoi" # or "from_file"
-    file: "seeds.txt"  # used only if from_file
+    # Options: "synthetic_voronoi", "from_file"
+    # If "synthetic_voronoi", you can provide 'n_grains' OR a specific 'command'
+    type: "synthetic_voronoi"
     
-    # MicroStructPy Generation params (passed if synthetic)
-    # Minimal example parameters
-    shape: "circle"
-    size: 0.001 # 1000 microns
-    # domain_type removed - we assume rectangle domain by default
+    # Simple Mode:
+    n_grains: 100
+
+    # Advanced Mode (Neper Args):
+    # Domain and Output are handled automatically.
+    # Examples: "-n 100 -morpho gg", "-n 100 -morpho 'columnar(x)'"
+    #command: "-n 100 -morpho gg"
+
+    # File Mode:
+    file: "seeds.txt"
