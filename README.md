@@ -25,6 +25,62 @@ Key features:
 - **G-Code Support**: Direct simulation of toolpaths from printer instructions.
 - **Modular Design**: Extensible via Abstract Factory pattern (see [Architecture](docs/ARCHITECTURE.md)).
 
+### Solver Logic
+
+The solver logic is detailed hereafter.
+
+```mermaid
+flowchart TD
+    %% Global Styles
+    classDef process fill:#f9f9f9,stroke:#333,stroke-width:1px;
+    classDef decision fill:#fff3e0,stroke:#f57c00,stroke-width:1px,shape:diamond;
+    classDef terminator fill:#eee,stroke:#333,stroke-width:2px,rx:5,ry:5;
+    classDef heat fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
+    classDef micro fill:#fff8e1,stroke:#ff8f00,stroke-width:2px;
+
+    Start((Start)):::terminator
+    Init[1. Initialize System<br/>Load Neper/MicrostructPy]:::process
+    
+    %% Main Loop
+    LoopCondition{t < t_end?}:::decision
+    
+    subgraph TimeStep [Time Step Execution]
+        direction TB
+        
+        %% Heat Solver
+        HeatSolver[3a. Heat Solver Step<br/>Compute Temperature Field]:::heat
+        
+        %% Microstructure Logic
+        subgraph MicroLogic [3b. Microstructure Update]
+            direction TB
+            GetIso[i. Get Isotherm T_melt]:::micro
+            QueryTree[ii. Query AABB Tree]:::micro
+            Melt[iii. Remove Melted Seeds]:::micro
+            Project[iv. Project Seeds to Front]:::micro
+            Grow[v. Evolve & Write New Seeds]:::micro
+            
+            GetIso --> QueryTree
+            QueryTree --> Melt
+            Melt --> Project
+            Project --> Grow
+        end
+
+        HeatSolver --> MicroLogic
+    end
+
+    IOCheck[4. IO Check<br/>Write Data if Needed]:::process
+    Logging[5. Logging / Update ETA]:::process
+    End((End)):::terminator
+
+    %% Connections
+    Start --> Init
+    Init --> LoopCondition
+    LoopCondition -- Yes --> HeatSolver
+    Grow --> IOCheck
+    IOCheck --> Logging
+    Logging --> LoopCondition
+    LoopCondition -- No --> End
+```
 ## Installation
 
 ### Prerequisites
@@ -81,6 +137,9 @@ Results are saved to `out/<timestamp>_<tag>/`:
 - **Cut Views**: `.png` meltpool profiles
 - **Logs**: Execution logs.
 
+## Architecture
+
+(see [Architecture](docs/ARCHITECTURE.md)).
 
 ## Citation
 

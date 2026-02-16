@@ -44,109 +44,60 @@ To add a new solver (e.g., Finite Difference):
 
 ```mermaid
 flowchart TD
-    %% --- Styles ---
-    classDef default font-family:Arial,color:#333;
-    classDef main fill:#2d3436,stroke:#2d3436,color:#fff,rx:5,ry:5;
-    classDef note fill:#fff3e0,stroke:#ffb74d,stroke-dasharray: 5 5;
-    classDef interface fill:#e3f2fd,stroke:#2196f3,stroke-width:2px,stroke-dasharray: 5 5;
-    classDef impl fill:#e8f5e9,stroke:#4caf50,stroke-width:2px;
-    classDef core fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px;
-    classDef micro fill:#fff3e0,stroke:#ff9800,stroke-width:2px;
-    classDef step fill:#f5f6fa,stroke:#7f8fa6,rx:5,ry:5;
-    classDef decision fill:#ffebee,stroke:#ef5350,shape:diamond;
+    %% Styles
+    classDef client fill:#f5f5f5,stroke:#333,stroke-width:2px;
+    classDef interface fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,stroke-dasharray: 5 5;
+    classDef factory fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+    classDef product fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px;
 
-    %% --- 1. Entry & Context ---
-    subgraph Setup ["🚀 Setup"]
-        direction LR
-        Main[main.py]:::main
-        Context(SimulationContext<br/>Params):::note
+    %% Client Layer
+    subgraph ClientLayer [Client Side]
+        Main[main.py]:::client
+        Workflow[SimulationWorkflow]:::client
+        Context[SimulationContext]:::client
+        
         Main --> Context
-    end
-
-    %% --- 2. Core Logic ---
-    subgraph Core ["⚙️ Core Logic"]
-        Workflow[SimulationWorkflow]:::core
-        RunLoop((Run Loop)):::core
-        
         Main --> Workflow
-        Context -.-> Workflow
-        Workflow --> RunLoop
     end
 
-    %% --- 3. Architecture (Abstract Factory) ---
-    subgraph Architecture ["🏗️ Abstract Factory Architecture"]
-        direction TB
-        
-        %% Layer 1: Interfaces
-        subgraph Interfaces ["Abstractions"]
-            direction LR
-            ISimFactory["SimulationFactory"]:::interface
-            IHeat["HeatSolver"]:::interface
-            IMicro["MicrostructureSolver"]:::interface
-        end
-
-        %% Layer 2: Concrete Factories
-        subgraph Factories ["Concrete Factories"]
-            direction LR
-            CPUFact[CPUSimulationFactory]:::impl
-            GPUFact[GPUSimulationFactory]:::impl
-        end
-
-        %% Layer 3: Concrete Products
-        subgraph Solvers ["Concrete Solvers"]
-            direction LR
-            CPUSolv[SpectralCPUSolver]:::impl
-            GPUSolv[SpectralGPUSolver]:::impl
-            TreeSolv[TreeMicroSolver]:::micro
-        end
-
-        %% Wiring Architecture
-        Workflow -->|Uses| ISimFactory
-        RunLoop -->|Calls| IHeat & IMicro
-
-        %% Implementation Links
-        CPUFact -.->|Implements| ISimFactory
-        GPUFact -.->|Implements| ISimFactory
-        
-        CPUSolv -.->|Implements| IHeat
-        GPUSolv -.->|Implements| IHeat
-        TreeSolv -.->|Implements| IMicro
-
-        %% Creation Links
-        CPUFact -->|Creates| CPUSolv & TreeSolv
-        GPUFact -->|Creates| GPUSolv
+    %% Interface Layer
+    subgraph InterfaceLayer [Interfaces]
+        ISimFactory["<< Interface >>\nSimulationFactory"]:::interface
+        IHeat["<< Interface >>\nHeatSolver"]:::interface
+        IMicro["<< Interface >>\nMicrostructureSolver"]:::interface
     end
 
-    %% --- 4. Process Flow ---
-    subgraph Process ["🔄 Simulation Loop (Time Stepping)"]
+    %% Implementation Layer
+    subgraph ImplementationLayer [Concrete Implementations]
         direction LR
-        Init[1. Init]:::step
-        TimeCheck{t < t_end?}:::decision
         
-        subgraph Steps ["Step Execution"]
-            direction TB
-            HeatStep[3a. Heat Solver]:::impl
-            MicroStep[3b. Micro Update]:::micro
-        end
+        %% Factories
+        CPUFact[CPUSimulationFactory]:::factory
+        GPUFact[GPUSimulationFactory]:::factory
         
-        IOCheck[4. IO Check]:::step
-        Log[5. Log]:::step
-
-        Init --> TimeCheck
-        TimeCheck -->|Yes| HeatStep
-        HeatStep --> MicroStep
-        MicroStep --> IOCheck
-        IOCheck --> Log
-        Log --> TimeCheck
-        TimeCheck -->|No| Done((End)):::main
+        %% Products
+        CPUSolv[SpectralCPUSolver]:::product
+        GPUSolv[SpectralGPUSolver]:::product
+        TreeSolv[TreeMicroSolver]:::product
     end
 
-    %% --- Logic Note ---
-    MicroDetail["<b>Microstructure Logic:</b>
-    1. Get Isotherm (T_melt)
-    2. Query AABB Tree
-    3. Remove melted seeds
-    4. Project & Grow"]:::note
-    
-    MicroStep -.- MicroDetail
+    %% Relationships
+    %% Client uses Interfaces
+    Workflow -->|Uses| ISimFactory
+    Workflow -->|Calls| IHeat
+    Workflow -->|Calls| IMicro
+
+    %% Factories Implement Interface
+    CPUFact -.->|Implements| ISimFactory
+    GPUFact -.->|Implements| ISimFactory
+
+    %% Factories Create Products
+    CPUFact -->|Creates| CPUSolv
+    CPUFact -->|Creates| TreeSolv
+    GPUFact -->|Creates| GPUSolv
+
+    %% Products Implement Interfaces
+    CPUSolv -.->|Implements| IHeat
+    GPUSolv -.->|Implements| IHeat
+    TreeSolv -.->|Implements| IMicro
 ```
