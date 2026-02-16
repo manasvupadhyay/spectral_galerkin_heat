@@ -9,7 +9,7 @@ G21 ; Units in mm
 G90 ; Absolute positioning
 
 ; Move to start position
-G0 X0 Y2.5
+G0 X0.006 Y2.5
 
 ; Turn laser on (M3 pseudo-code, S values map to Power)
 M3 S200

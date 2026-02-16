@@ -85,13 +85,17 @@ class SpectralSolverCPU:
         # Evaluate source term in spectral space: S_n = C * q_dct
         S_n = SsState.dct_scale * q_dct
         np.multiply(SsState.dct_scale, q_dct, out=SsState.B_buffer, casting='same_kind')
-        # First guess for a_temp (no latent heat)
+        # First guess for a_temp (with previous time step latent heat)
         #  a + S_n * (1 - exp(-K*dt)) / K -> a_temp
         kernels.update_modes_etd1(SsState.a, SsState.KK, SsState.Cp32_broadcast, SsState.B_buffer, SsState.a_temp)
         S_current = S_n.copy()
 
         # 3. Latent Heat Correction
-        kernels.update_fine_mesh(SsState, x, y) # can be moved easily to kernels
+        kernels.update_fine_mesh(SsState, x, y)
+        # # Add latent heat source of previous time step to the guess
+        # if hasattr(SsState, 'Q_prev') and SsState.Q_prev is not None:
+        #     kernels.add_source_term_modes(SsState.a_temp, SsState.KK, kernels.project_box_to_modes(SsState.Q_prev, SsState))
+        
         SsState.Q_latent_buffer.fill(0.0)
         # Use guess to compute latent heat source on fine mesh
         kernels.compute_latent_heat_source(SsState.Q_latent_buffer, mat, x, y, num, SsState)

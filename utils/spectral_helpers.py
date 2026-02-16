@@ -36,16 +36,18 @@ def _cosine_basis_along_axis(n_modes, length, coords):
 
 def reconstruct_temperature_volume(a, SsState):
     """Reconstruct the temperature field on the full simulation grid."""
-    #xp = get_array_module(a)
+    if hasattr(a, 'get'):
+        a = a.get()  # Move to CPU if it's a CuPy array
     
     Bx = SsState.Bx_recon  # (modes_x, nx_points)
     By = SsState.By_recon  # (modes_y, ny_points)
     Bz = SsState.Bz_recon  # (modes_z, nz_points)
     # Validate reconstruction bases
+
     if Bx is None or By is None or Bz is None:
         raise RuntimeError("Reconstruction bases not initialized on SsState. Call prepare_full_reconstruction()/full_reconstruction() first.")
 
-    T_step1 = np.tensordot(a.get(), Bx, axes=(2, 0))  # (nz, ny, nx)
+    T_step1 = np.tensordot(a, Bx, axes=(2, 0))  # (nz, ny, nx)
     T_step2 = np.tensordot(T_step1, By, axes=(1, 0))  # (nz, nx, ny)
     T_full = np.tensordot(T_step2, Bz, axes=(0, 0))  # (nx, ny, nz)
 

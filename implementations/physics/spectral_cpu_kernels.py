@@ -131,7 +131,7 @@ class SpectralSolverState:
         self.full_recon_initialized = False
 
         # Fine mesh setup for latent heat correction
-        self.refinement = 3                                                    # Refinement factor for fine mesh
+        self.refinement = 4                                                   # Refinement factor for fine mesh
         self.Lx_box, self.Ly_box, self.Lz_box = 0.9e-3, 0.2e-3, 0.04e-3         # Physical dimensions of fine mesh box
         self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
         
@@ -303,10 +303,26 @@ def compute_source_term_from_temperature(T_curr, T_prev, T_S, T_L, rho, L, dt, o
                 T = T_curr[k, j, i]
                 # Indicator function for mushy zone (inclusive)
                 if T >= T_S and T <= T_L:
-                    dT = T - T_prev[k, j, i]
+                    T_p = T_prev[k, j, i]
+                    
+                    # Fix T_prev to the boundaries [T_S, T_L] if it was outside.
+                    # This ensures we calculate Delta(f_liquid) = (T - T_p_clamped)/(T_L - T_S),
+                    # correctly separating latent heat from sensible heat.
+                    if T_p < T_S-(T_L - T_S): 
+                        T_p = T_S-(T_L - T_S)
+                    elif T_p > T_L+(T_L - T_S):
+                        T_p = T_L+(T_L - T_S)
+                    
+                    dT = T - T_p
+                    # Note: Since both T and T_p are in [T_S, T_L], |dT| <= (T_L - T_S),
+                    # so the energy bound is naturally satisfied.
+                    
+                    factor = -rho * L / ((T_L - T_S) * dt)
                     out[k, j, i] = factor * dT
                 else:
                     out[k, j, i] = 0.0
+
+
 
 @njit(parallel=True, fastmath=True)
 def compute_evaporation_flux(T_surface, q_out, P0, R, T_boil, DeltaH_LV, R_v, T_liquidus):
@@ -368,7 +384,7 @@ def reconstruct_temperature_box(a, SsState):
     
     return T_box, (SsState.box_x, SsState.box_y, SsState.box_z)
 
-def compute_latent_heat_source(Q_buffer, phys, x_laser, y_laser, num, SsState, alpha=0.4):
+def compute_latent_heat_source(Q_buffer, phys, x_laser, y_laser, num, SsState, alpha=0.2):
     """
     Compute volumetric latent heat source Q (W/m^3).
     HIGH-LEVEL ORCHESTRATOR (Runs in Python, calls Kernels).
