@@ -4,13 +4,16 @@ import logging
 import sys
 import os
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, List
+from dataclasses import asdict
 
 # Ensure we can import from local modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.workflow import SimulationWorkflow
-from core.parameters import SimulationContext, NumParams, MaterialParams, GeomParams, LaserParams
+from core.parameters import (
+    SimulationContext, NumParams, MaterialParams, GeomParams, LaserParams, MicrostructureParams
+)
 from utils.cut_views import generate_plots
 
 # Configure Logging
@@ -104,13 +107,32 @@ def build_context(cfg: Dict[str, Any]) -> SimulationContext:
     # 5. IO Parameters (flat dict: interval, outputs, at_end, etc.)
     io_cfg = cfg.get('io', {})
     # Optionally validate/normalize io_cfg here
+
+    # 6. Microstructure Configuration
+    micro_cfg = cfg.get('microstructure', {})
+    if micro_cfg.get('enabled', False):
+        micro_params = MicrostructureParams(
+            enabled=True,
+            initial_type=micro_cfg.get('initial_state', {}).get('type', 'synthetic'),
+            input_file=micro_cfg.get('initial_state', {}).get('file', None),
+            
+            # Pack 'synthetic' params into a dictionary
+            generation_params=micro_cfg.get('initial_state', {}),
+            
+            # Any additional microstructure parameters live in generation_params
+        )
+    else:
+        # Defaults
+        micro_params = MicrostructureParams()
+
     ctx = SimulationContext(
         num=num_params,
         mat=mat_params,
         geom=geom_params,
         laser=laser_params,
         laser_path=laser_path,
-        io=io_cfg,  # Flat dict for new IO config
+        micro=micro_params,  # New Field
+        io=io_cfg,
         method=sim_method,
         backend=sim_backend
     )

@@ -5,6 +5,10 @@ validation_results/
 # Python bytecode
 __pycache__/
 *.py[cod]
+*.pyc
+
+# Explicitly ignore compiled python cache directories
+__pycache__/
 
 # Output artifacts
 *.log
