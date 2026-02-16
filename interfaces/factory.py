@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 from .solver import HeatSolver
 from .io import IOManager
+from interfaces.microstructure import MicrostructureSolver
 
 class SimulationFactory(ABC):
     """
@@ -21,4 +22,9 @@ class SimulationFactory(ABC):
     @abstractmethod
     def create_io_manager(self) -> IOManager:
         """Create and return a configured IOManager instance."""
+        pass
+    
+    @abstractmethod
+    def create_microstructure_solver(self) -> MicrostructureSolver:
+        """Create a MicrostructureSolver instance."""
         pass

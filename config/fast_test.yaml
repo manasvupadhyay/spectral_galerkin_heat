@@ -43,3 +43,15 @@ io:
     - 'hotspot'                # m, 'laser' or 'hotspot' keyword
   cut_views_planes:
     - yz
+
+microstructure:
+  enabled: true
+  initial_state:
+    type: "synthetic_voronoi" # or "from_file"
+    file: "seeds.txt"  # used only if from_file
+    
+    # MicroStructPy Generation params (passed if synthetic)
+    # Minimal example parameters
+    shape: "circle"
+    size: 0.001 # 1000 microns
+    # domain_type removed - we assume rectangle domain by default
