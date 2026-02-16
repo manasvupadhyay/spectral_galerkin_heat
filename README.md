@@ -31,55 +31,64 @@ The solver logic is detailed hereafter.
 
 ```mermaid
 flowchart TD
-    %% Global Styles
-    classDef process fill:#f9f9f9,stroke:#333,stroke-width:1px;
-    classDef decision fill:#fff3e0,stroke:#f57c00,stroke-width:1px,shape:diamond;
-    classDef terminator fill:#eee,stroke:#333,stroke-width:2px,rx:5,ry:5;
-    classDef heat fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
-    classDef micro fill:#fff8e1,stroke:#ff8f00,stroke-width:2px;
+    %% --- Theme & Styling ---
+    classDef container fill:#2d2d2d,stroke:#555,color:#fff;
+    classDef terminator fill:#ff6b6b,stroke:#c0392b,stroke-width:2px,color:#000;
+    classDef process fill:#4ecdc4,stroke:#1abc9c,stroke-width:2px,color:#000;
+    classDef decision fill:#ffeaa7,stroke:#f39c12,stroke-width:2px,color:#000,shape:diamond;
+    classDef heat fill:#74b9ff,stroke:#0984e3,stroke-width:2px,color:#000;
+    classDef micro fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#000;
 
-    Start((Start)):::terminator
-    Init[1. Initialize System<br/>Load Neper/MicrostructPy]:::process
-    
-    %% Main Loop
-    LoopCondition{t < t_end?}:::decision
-    
-    subgraph TimeStep [Time Step Execution]
+    %% --- Main Container ---
+    subgraph MainLoop [Simulation Lifecycle]
         direction TB
+        style MainLoop fill:#333333,stroke:#666,color:#fff
+
+        Start((Start)):::terminator
+        Init[1. Initialize System<br/>Load Neper/MicrostructPy]:::process
         
-        %% Heat Solver
-        HeatSolver[3a. Heat Solver Step<br/>Compute Temperature Field]:::heat
+        %% Time Loop Check
+        LoopCondition{t < t_end?}:::decision
         
-        %% Microstructure Logic
-        subgraph MicroLogic [3b. Microstructure Update]
-            direction TB
-            GetIso[i. Get Isotherm T_melt]:::micro
-            QueryTree[ii. Query AABB Tree]:::micro
-            Melt[iii. Remove Melted Seeds]:::micro
-            Project[iv. Project Seeds to Front]:::micro
-            Grow[v. Evolve & Write New Seeds]:::micro
+        %% --- Inner Loop Container ---
+        subgraph TimeStep [Time Step Execution]
+            style TimeStep fill:#404040,stroke:#777,color:#fff
             
-            GetIso --> QueryTree
-            QueryTree --> Melt
-            Melt --> Project
-            Project --> Grow
+            %% Heat Solver Step
+            HeatSolver[3a. Heat Solver Step<br/>Compute Temperature Field]:::heat
+            
+            %% Microstructure Logic
+            subgraph MicroLogic [3b. Microstructure Update]
+                style MicroLogic fill:#505050,stroke:#888,color:#fff
+                
+                GetIso[i. Get Isotherm T_melt]:::micro
+                QueryTree[ii. Query AABB Tree]:::micro
+                Melt[iii. Remove Melted Seeds]:::micro
+                Project[iv. Project Seeds to Front]:::micro
+                Grow[v. Evolve & Write New Seeds]:::micro
+                
+                GetIso --> QueryTree
+                QueryTree --> Melt
+                Melt --> Project
+                Project --> Grow
+            end
+
+            HeatSolver --> MicroLogic
         end
 
-        HeatSolver --> MicroLogic
+        IOCheck[4. IO Check<br/>Write Data if Needed]:::process
+        Logging[5. Logging / Update ETA]:::process
+        End((End)):::terminator
+
+        %% Connections
+        Start --> Init
+        Init --> LoopCondition
+        LoopCondition -- Yes --> HeatSolver
+        Grow --> IOCheck
+        IOCheck --> Logging
+        Logging --> LoopCondition
+        LoopCondition -- No --> End
     end
-
-    IOCheck[4. IO Check<br/>Write Data if Needed]:::process
-    Logging[5. Logging / Update ETA]:::process
-    End((End)):::terminator
-
-    %% Connections
-    Start --> Init
-    Init --> LoopCondition
-    LoopCondition -- Yes --> HeatSolver
-    Grow --> IOCheck
-    IOCheck --> Logging
-    Logging --> LoopCondition
-    LoopCondition -- No --> End
 ```
 ## Installation
 
