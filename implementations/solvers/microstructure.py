@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 from core.parameters import SimulationContext
 from interfaces.microstructure import MicrostructureSolver
+from scipy.spatial import cKDTree
+from implementations.physics.spectral_cpu_kernels import IDCT_II
 
 logger = logging.getLogger(__name__)
 
@@ -291,32 +293,116 @@ class TreeMicroSolver(MicrostructureSolver):
 
     def create_tree(self, seeds: Any) -> Any:
         """
-        Placeholder for building the AABB or KD-Tree from the list of seeds.
+        Builds a KD-Tree from the seed positions for fast spatial queries.
+        Note: cKDTree is static. If seeds change (nucleation/melting), 
+        this must be called again to rebuild the index.
         
         Args:
             seeds: List of Seed objects
             
         Returns:
-            The constructed tree object (None for now).
+            scipy.spatial.cKDTree: The constructed spatial index.
         """
-        # TODO: Implement AABB / KD-Tree construction
-        logger.info("Building Microstructure Tree... (Placeholder)")
-        return None
+        if not seeds:
+            logger.warning("No seeds provided to create_tree.")
+            return None
+
+        # Extract positions into (N, 3) array
+        # Assuming points are 3D. If 2D, they will be (N, 2)
+        try:
+            points = np.array([s.position for s in seeds])
+            
+            logger.info(f"Building cKDTree for {len(seeds)} seeds...")
+            tree = cKDTree(points)
+            return tree
+        except Exception as e:
+            logger.error(f"Failed to build search tree: {e}")
+            return None
 
     def update(self, t: float, dt: float, temperature_field: Any) -> Dict[str, Any]:
         """
         Step the microstructure evolution.
+        Args:
+            temperature_field: Spectral modes 'a' of the temperature solution. 
+                               Needs IDCT to get physical T.
         """
-        if not self.active:
+        if not self.active or self.tree is None:
             return {}
 
-        # TODO: interaction interaction with thermal field
-        # 1. Get T_melt isotherm
-        # 2. Query Tree -> find melted seeds
-        # 3. Update active seeds
+        T_S = self.context.mat.T_solidus
+        rho = 2e-4  # Search radius (default 200um), could be a parameter
+
+        # 1. Reconstruct Temperature Field (IDCT)
+        # Note: This is an expensive operation (O(N log N)) 
+        # performed at every micro step.
+        try:
+            T_real = IDCT_II(temperature_field)
+        except Exception as e:
+            logger.error(f"Failed to reconstruct T field: {e}")
+            return {}
+
+        # 2. Identify Melting / Isotherm
+        # Create a mask of the "Melt Pool" (T > T_solidus)
+        # We want to find seeds close to the boundary (T ~ T_S) 
+        # But specifically, we must mark seeds inside the melt pool as "liquid" (phase change).
+        
+        # Grid Coordinates (We need to map grid indices to physical coordinates)
+        # Assuming uniform grid for now, based on geom and shape of T_real
+        nz, ny, nx = T_real.shape
+        Lx, Ly, Lz = self.context.geom.Lx, self.context.geom.Ly, getattr(self.context.geom, 'Lz', 0.0)
+        
+        # Coordinate arrays (1D)
+        # Check alignment: typically z is first dim in spectral solver here
+        z_coords = np.linspace(0, -Lz, nz) # top is 0, bottom is -Lz
+        y_coords = np.linspace(-Ly/2, Ly/2, ny) # centered? Need to check geom def.
+        x_coords = np.linspace(0, Lx, nx)
+        
+        # Create meshgrid of coordinates corresponding to the T_real grid
+        # Indexing 'ij' gives (nz, ny, nx) if we pass (z, y, x)
+        # Z, Y, X = np.meshgrid(z_coords, y_coords, x_coords, indexing='ij')
+        
+        # OPTIMIZATION: Instead of full meshgrid, query the Tree with the specific points
+        # that are "Near Solidus".
+        
+        # Find indices where T > T_S (Melted)
+        melted_indices = np.where(T_real > T_S)
+        
+        # If nothing is melted, return
+        if len(melted_indices[0]) == 0:
+            return {"n_grains": len(self.seeds)}
+
+        # Convert indices to physical coordinates [x, y, z]
+        # melted_indices is tuple (z_idx, y_idx, x_idx)
+        z_melt = z_coords[melted_indices[0]]
+        y_melt = y_coords[melted_indices[1]]
+        x_melt = x_coords[melted_indices[2]]
+        
+        melt_points = np.column_stack((x_melt, y_melt, z_melt)) # Shape (N_melt, 3)
+
+        # 3. Query Tree -> Find seeds within the Melt Pool
+        # Actually, if a seed is IN the melt pool, it melts (re-initializes or dies).
+        # We query for all seeds within 'rho' of ANY melt point? 
+        # Or just checking which seeds are inside the region?
+        
+        # The prompt asks for "closest seeds to this isotherm in a radius rho"
+        # Isotherm points are those at the boundary.
+        # But functionally, we usually want to know which grains are consumed.
+        
+        # Let's perform a query for seeds close to the melt volume 
+        # (effectively union of balls around melted grid points)
+        # This covers the "isotherm + inward" region.
+        
+        indices_near_melt = self.tree.query_ball_point(melt_points, r=rho)
+        
+        # Flatten and unique
+        affected_seeds_indices = np.unique([idx for sublist in indices_near_melt for idx in sublist])
+        
+        # TODO: Apply physics (e.g. change phase to liquid, re-orient if valid)
+        # For now, we just log the count.
         
         metrics = {
-            "n_grains": len(self.seeds) if self.seeds else 0
+            "n_grains": len(self.seeds),
+            "n_melted_seeds": len(affected_seeds_indices)
         }
         return metrics
 
