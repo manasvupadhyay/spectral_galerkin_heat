@@ -45,7 +45,7 @@ io:
     - yz
 
 microstructure:
-  enabled: true
+  enabled: false
   initial_state:
     # Options: "synthetic_voronoi", "from_file"
     # If "synthetic_voronoi", you can provide 'n_grains' OR a specific 'command'

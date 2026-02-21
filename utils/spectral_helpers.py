@@ -39,9 +39,12 @@ def reconstruct_temperature_volume(a, SsState):
     if hasattr(a, 'get'):
         a = a.get()  # Move to CPU if it's a CuPy array
     
-    Bx = SsState.Bx_recon  # (modes_x, nx_points)
-    By = SsState.By_recon  # (modes_y, ny_points)
-    Bz = SsState.Bz_recon  # (modes_z, nz_points)
+    # Support both old monolithic state and new decoupled state
+    grid = SsState.grid if hasattr(SsState, 'grid') else SsState
+
+    Bx = grid.Bx_recon  # (modes_x, nx_points)
+    By = grid.By_recon  # (modes_y, ny_points)
+    Bz = grid.Bz_recon  # (modes_z, nz_points)
     # Validate reconstruction bases
 
     if Bx is None or By is None or Bz is None:
@@ -73,10 +76,13 @@ def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
         if hasattr(x, 'get') and callable(x.get):
             return np.asarray(x.get())
         return np.asarray(x)
+    
+    # Support both old monolithic state and new decoupled state
+    grid = SsState.grid if hasattr(SsState, 'grid') else SsState
 
-    Cm = _to_numpy(getattr(SsState, 'Cm', None))
-    Cn = _to_numpy(getattr(SsState, 'Cn', None))
-    Cp = _to_numpy(getattr(SsState, 'Cp', None))
+    Cm = _to_numpy(getattr(grid, 'Cm', None))
+    Cn = _to_numpy(getattr(grid, 'Cn', None))
+    Cp = _to_numpy(getattr(grid, 'Cp', None))
     a_np = _to_numpy(a).astype(np.float32)
 
     Bx = (Cm[:, None] * _cosine_basis_along_axis(num.nx, geom.Lx, x_vals)).astype(np.float32)
@@ -128,8 +134,11 @@ def save_temp_profiles(
             T_surf = T_surf.get()
             
         iy_idx, ix_idx = np.unravel_index(np.argmax(T_surf), T_surf.shape)
-        x_center = SsState.x[ix_idx] 
-        y_center = SsState.y[iy_idx]
+        
+        # Handle decoupled state or monolithic state
+        grid = SsState.grid if hasattr(SsState, 'grid') else SsState
+        x_center = grid.x[ix_idx] 
+        y_center = grid.y[iy_idx]
         
         # Helper to safely scalarize
         def _scalar(val):

@@ -158,13 +158,15 @@ class SimulationWorkflow:
                         next_output_step = float('inf')
                 else:
                     next_output_step = float('inf')
-            # B. Evolve State (timed)
+            # B. Evolve State with Heat Solver (timed)
             step_start = time.time()
             state, metrics = self.heat_solver.step(t, dt)
             
-            # --- Microstructure Update ---
+            # C. Microstructure Update
             if self.context.micro.enabled:
-                micro_stats = self.micro_solver.update(t, dt, state.temperature)
+                # We pass the current temperature field to the microstructure
+                # It will update its internal state
+                micro_stats = self.micro_solver.update(t, dt, state.T)
                 if metrics and micro_stats:
                     metrics.update(micro_stats)
             
@@ -172,7 +174,7 @@ class SimulationWorkflow:
             total_step_time += step_elapsed
             n_steps_timed += 1
 
-            # C. Advance Time
+            # D. Advance Time
             t += dt
             step += 1
 

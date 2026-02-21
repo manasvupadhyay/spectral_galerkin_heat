@@ -89,9 +89,12 @@ class LocalFSIOManager(IOManager):
             from utils.spectral_helpers import reconstruct_temperature_volume
 
             if output_type == 'full_volume':
-                state.prepare_full_reconstruction(self.context.geom)
+                # Use grid from state (refactoring support)
+                grid = state.grid if hasattr(state, 'grid') else state
+                
+                grid.prepare_full_reconstruction(self.context.geom)
                 field = reconstruct_temperature_volume(state.a, state).transpose(2,1,0)  # Ensure (z,y,x) ordering
-                grid_coords = (getattr(state, 'x_rec', None), getattr(state, 'y_rec', None), getattr(state, 'z_rec', None))
+                grid_coords = (getattr(grid, 'x_rec', None), getattr(grid, 'y_rec', None), getattr(grid, 'z_rec', None))
                 
                 filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
                 if hasattr(field, "get"):

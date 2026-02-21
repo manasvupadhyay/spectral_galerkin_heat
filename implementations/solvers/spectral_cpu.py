@@ -1,20 +1,23 @@
 import numpy as np
 import implementations.physics.spectral_cpu_kernels as kernels
+from core.parameters import SimulationContext
+from interfaces.solver import HeatSolver
+from interfaces.laser import LaserState, LaserPath
 
-class SpectralSolverCPU:
+class SpectralSolverCPU(HeatSolver):
     """
     SpectralSolverCPU implements a spectral method for solving the heat equation on the CPU.
     It manages the solver state, initialization, and time-stepping logic, including laser source,
     latent heat, and evaporation effects. The solver is designed for modularity and performance.
     """
-    def __init__(self, context):
+    def __init__(self, context: SimulationContext):
         """
         Initialize the SpectralSolverCPU with the simulation context.
         Args:
             context: SimulationContext containing geometry, material, laser, and numerical parameters.
         """
         self.context = context
-        self.state = None
+        self.state: kernels.SpectralSolverState = None
         
     def initialize(self):
         """
@@ -27,9 +30,7 @@ class SpectralSolverCPU:
         mat = self.context.mat  
 
         # Initialize spectral solver state
-        self.state = kernels.SpectralSolverState()
-        self.state.prepare_reconstruction_basis(geom)
-        self.state.prepare_K_buffers(mat, geom, num)
+        self.state = kernels.SpectralSolverState(mat, geom, num)
 
         # Initial condition: mean T in mode (0,0,0)
         self.state.a = np.zeros((num.nz, num.ny, num.nx), dtype=np.float32)
@@ -55,75 +56,73 @@ class SpectralSolverCPU:
         geom = context.geom
         num = context.num
         mat = context.mat
-        laser_path = context.laser_path
+        # Hint laser_path for cleaner method lookups
+        laser_path: LaserPath = context.laser_path
         laser_params = context.laser
         SsState = self.state
+        grid = SsState.grid
+        buffers = SsState.buffers
 
         # Fetch laser state at current time
-        laser_state = laser_path.get_state(t, dt)
-        x = laser_state.x
-        y = laser_state.y
+        laser_state: LaserState = laser_path.get_state(t, dt)
         power = laser_state.power
         is_on = laser_state.is_on
-        r_b = laser_params.radius
+        v_x, v_y = laser_state.v  # Laser velocity components
         absorptivity = laser_params.absorptivity
-        laser_coef = absorptivity * 2.0 * power / (np.pi * r_b ** 2) if is_on else 0.0
+        laser_coef = absorptivity * 2.0 * power / (np.pi * laser_params.radius ** 2) if is_on else 0.0
 
         # 1. Compute source terms (Laser + Evaporation)
         q_las = kernels.compute_gaussian_laser_flux(
-            SsState.X, SsState.Y,
-            x, y,
-            r_b, laser_coef
+            grid.x, grid.y, laser_state.x, laser_state.y,
+            laser_params.radius, laser_coef
         )
-        v_x, v_y = laser_state.v if hasattr(laser_state, 'v') else (0.0, 0.0)
-        q_evap = kernels.shift_flux(SsState.q_evap_old, (v_x*num.dt, v_y*num.dt), geom)
+        
+        q_evap = kernels.shift_flux(buffers.q_evap_old, (v_x*num.dt, v_y*num.dt), geom)
         q_dct = kernels.DCT_II(q_las - q_evap)
 
         # 2. Linear step (ETD1)
         # Decay term: a * exp(-K*dt) -> a
         np.multiply(SsState.a, SsState.K, out=SsState.a, casting='same_kind')
         # Evaluate source term in spectral space: S_n = C * q_dct
-        S_n = SsState.dct_scale * q_dct
-        np.multiply(SsState.dct_scale, q_dct, out=SsState.B_buffer, casting='same_kind')
+        S_n = grid.dct_scale * q_dct
+        np.multiply(grid.dct_scale, q_dct, out=buffers.B_buffer, casting='same_kind')
         # First guess for a_temp (with previous time step latent heat)
         #  a + S_n * (1 - exp(-K*dt)) / K -> a_temp
-        kernels.update_modes_etd1(SsState.a, SsState.KK, SsState.Cp32_broadcast, SsState.B_buffer, SsState.a_temp)
+        kernels.update_modes_etd1(SsState.a, SsState.KK, grid.Cp32_broadcast, buffers.B_buffer, buffers.a_temp)
         S_current = S_n.copy()
 
         # 3. Latent Heat Correction
-        kernels.update_fine_mesh(SsState, x, y)
-        # # Add latent heat source of previous time step to the guess
-        # if hasattr(SsState, 'Q_prev') and SsState.Q_prev is not None:
-        #     kernels.add_source_term_modes(SsState.a_temp, SsState.KK, kernels.project_box_to_modes(SsState.Q_prev, SsState))
-        
-        SsState.Q_latent_buffer.fill(0.0)
-        # Use guess to compute latent heat source on fine mesh
-        kernels.compute_latent_heat_source(SsState.Q_latent_buffer, mat, x, y, num, SsState)
-        # Add latent heat source to a 
-        # a + Q_latent * (1 - exp(-K*dt)) / K -> a
-        # a now is decayed and includes latent heat sources, but no laser and evaporation yet
-        kernels.add_source_term_modes(SsState.a, SsState.KK, kernels.project_box_to_modes(SsState.Q_latent_buffer, SsState))
-        # a_temp not updated, as it will be recomputed in the next steps from a with the latent heat included
+        if SsState.fine_mesh:
+            SsState.fine_mesh.update(laser_state)
+            
+            buffers.Q_latent_buffer.fill(0.0)
+            # Use guess to compute latent heat source on fine mesh
+            kernels.compute_latent_heat_source(buffers.Q_latent_buffer, mat, laser_state, num, SsState)
+            # Add latent heat source to a 
+            # a + Q_latent * (1 - exp(-K*dt)) / K -> a
+            # a now is decayed and includes latent heat sources, but no laser and evaporation yet
+            kernels.add_source_term_modes(SsState.a, SsState.KK, kernels.project_box_to_modes(buffers.Q_latent_buffer, SsState))
+            # a_temp not updated, as it will be recomputed in the next steps from a with the latent heat included
         
         # 4. Nonlinear iteration for evaporation
-        T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
+        T_temp = kernels.reconstruct_surface_temperature(buffers.a_temp, SsState)
         for k in range(30):
             T_old = T_temp
             # Compute evaporation flux based on current surface temperature guess
-            kernels.compute_evaporation_flux(T_temp, SsState.q_evap_buffer, mat.Pa, mat.R_v, mat.T_boil, 
+            kernels.compute_evaporation_flux(T_temp, buffers.q_evap_buffer, mat.Pa, mat.R_v, mat.T_boil, 
                 mat.DeltaH_LV, mat.R_v, mat.T_liquidus)
-            np.subtract(q_las,SsState.q_evap_buffer, out=SsState.q_diff, casting='same_kind')
-            S_target = SsState.dct_scale * kernels.DCT_II(SsState.q_diff)
+            np.subtract(q_las,buffers.q_evap_buffer, out=buffers.q_diff, casting='same_kind')
+            S_target = grid.dct_scale * kernels.DCT_II(buffers.q_diff)
             S_current = 0.1 * S_target + 0.9 * S_current
-            np.multiply(1.0, S_current, out=SsState.B_buffer, casting='same_kind')
+            np.multiply(1.0, S_current, out=buffers.B_buffer, casting='same_kind')
 
-            kernels.update_modes_etd1(SsState.a, SsState.KK, SsState.Cp32_broadcast, SsState.B_buffer, SsState.a_temp)
-            T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
+            kernels.update_modes_etd1(SsState.a, SsState.KK, grid.Cp32_broadcast, buffers.B_buffer, buffers.a_temp)
+            T_temp = kernels.reconstruct_surface_temperature(buffers.a_temp, SsState)
             if np.max(np.abs(T_temp - T_old)) < 2e+1:
                 break
         
         # Avoid reallocating when possible — copy into preallocated buffer
-        SsState.q_evap_old[:] = SsState.q_evap_buffer
+        buffers.q_evap_old[:] = buffers.q_evap_buffer
         P_laser = np.sum(q_las) * geom.dx * geom.dy
 
         # Optionally, return metrics for logging/diagnostics
@@ -134,5 +133,11 @@ class SpectralSolverCPU:
         }
 
         # Update state for next step
-        SsState.a = SsState.a_temp.copy()
+        SsState.a = buffers.a_temp.copy()
         return SsState, metrics
+
+    def finalize(self) -> None:
+        """
+        Clean up resources (CPU memory, thread pools) if necessary.
+        """
+        pass

@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
-from typing import List, Optional, Any, Dict
-
+from typing import List, Optional, Any, Dict, TYPE_CHECKING
 import numpy as np
+
+if TYPE_CHECKING:
+    from interfaces.laser import LaserPath
 
 @dataclass
 class NumParams:
@@ -122,7 +124,7 @@ class SimulationContext:
     mat: 'MaterialParams'
     geom: 'GeomParams'
     laser: 'LaserParams'
-    laser_path: Any 
+    laser_path: 'LaserPath' # Use forward reference
     micro: MicrostructureParams
     
     # Existing fields

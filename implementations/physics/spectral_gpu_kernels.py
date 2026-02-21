@@ -190,7 +190,7 @@ class SpectralSolverState:
     Q_prev: cp.ndarray = None
     T_prev_aligned: cp.ndarray = None
     Q_prev_aligned: cp.ndarray = None
-    laser_x_prev: float = None
+    laser_x_prev: float = None   #TODO this goes away, see CPU version, we can calculate shift from velocity and dt
     laser_y_prev: float = None
     dV_fine: float = 0.0
 

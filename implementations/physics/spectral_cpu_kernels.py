@@ -9,227 +9,239 @@ from dataclasses import dataclass
 # Spectral Method CPU State Definition
 # ======================================
 
-
 @dataclass
-class SpectralSolverState:
-    """
-    Encapsulates solver-specific buffers and precomputed grids needed for the spectral method.
-    Keeps global GeomParams/NumParams clean from implementation details.
-    """
-    # Spectral Propagators
-    K: np.ndarray = None
-    KK: np.ndarray = None
-    
-    # State Arrays
-    a: np.ndarray = None       # Current temperature modes (nz, ny, nx)
-    a_temp: np.ndarray = None  # Temporary working array (nz, ny, nx)
-    
-    # Buffers
-    q_evap_old: np.ndarray = None
-    q_evap_buffer: np.ndarray = None
-    q_diff: np.ndarray = None
-    B_buffer: np.ndarray = None
-    
-    # Latent Heat Specifics
-    Q_latent_buffer: np.ndarray = None
-    isotherm_cache: list = None
-    
-        
-    # Fine Grid / Aliasing structures
-    # Box Coordinate Arrays (Changing every step)
-    box_x: np.ndarray = None
-    box_y: np.ndarray = None
-    box_z: np.ndarray = None
-    
-    # Active Box Basis Subsets (Changing every step)
-    Bx_fine: np.ndarray = None 
-    By_fine: np.ndarray = None
-    Bz_fine: np.ndarray = None
-    
-    # Precomputed Full Fine Bases (Static, but needed for slicing)
-    Bx_fine_full: np.ndarray = None
-    By_fine_full: np.ndarray = None
-    Bz_fine_full: np.ndarray = None
-    
-    # Box State Descriptors
-    ix_laser_box: int = 0
-    nx_box: int = 0
-    ny_box: int = 0
-    nz_box: int = 0
-    
-    fine_mesh_initialized: bool = False
-
-    # Grid coordinates
+class SpectralGrid:
+    """Immutable grid definitions and reconstruction bases."""
+    # Global coordinates (Cell-Centered)
     x: np.ndarray = None
     y: np.ndarray = None
     z: np.ndarray = None
-    X: np.ndarray = None
-    Y: np.ndarray = None
-    # Node-centered reconstruction coords and full-domain bases (lazy)
-    x_rec: np.ndarray = None
-    y_rec: np.ndarray = None
-    z_rec: np.ndarray = None
+    
+    # Derived 2D grids (X, Y are redundant but kept if heavily used, though we should prefer 1D)
+    # Removing X, Y as per plan to reduce memory if they are just meshgrids of x, y
+
+    # Reconstruction constants
+    recon_scale: float = 0.0
+    Cp32_broadcast: np.ndarray = None
+    dct_scale: float = 0.0
+    
+    # Normalization coefficients
+    Cm: np.ndarray = None
+    Cn: np.ndarray = None
+    Cp: np.ndarray = None
+
+    # Precomputed cosine bases for reconstruction
+    cos_mx: np.ndarray = None
+    cos_ny: np.ndarray = None
+    cos_pz: np.ndarray = None
+
+    # Lazy-loaded full reconstruction bases
     Bx_recon: np.ndarray = None
     By_recon: np.ndarray = None
     Bz_recon: np.ndarray = None
-    full_recon_initialized: bool = False
+    # Node-centered coords for reconstruction
+    x_rec: np.ndarray = None
+    y_rec: np.ndarray = None
+    z_rec: np.ndarray = None
     
-    # Helper coefficients
-    Cp32_broadcast: np.ndarray = None
-    recon_scale: float = 0.0
-
-    # Fine grid coords
-    x_fine: np.ndarray = None
-    y_fine: np.ndarray = None
-    z_fine: np.ndarray = None
-    dx_fine: float = 0.0
-    dy_fine: float = 0.0
-    dz_fine: float = 0.0
-    nx_fine_total: int = 0
-    ny_fine_total: int = 0
-    nz_fine_total: int = 0
-
-    # Additional history for Latent Heat
-    T_prev: np.ndarray = None
-    Q_prev: np.ndarray = None
-    laser_x_prev: float = None
-    laser_y_prev: float = None
-    dV_fine: float = 0.0
-
-    def prepare_reconstruction_basis(self, geom):
-        # Global mesh coordinates (Cell-Centered to match the definition of DCT-II)
+    def __init__(self, geom):
+        # Global mesh coordinates (Cell-Centered)
         dx, dy, dz = geom.dx, geom.dy, geom.dz
         nx, ny, nz = geom.nx, geom.ny, geom.nz
         Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
+        
         self.x = ((np.arange(nx) + 0.5) * dx).astype(np.float32)
         self.y = ((np.arange(ny) + 0.5) * dy).astype(np.float32)
         self.z = ((np.arange(nz) + 0.5) * dz).astype(np.float32)
         
-        self.X, self.Y = np.meshgrid(self.x, self.y, indexing='xy')
-        self.X, self.Y = self.X.astype(np.float32), self.Y.astype(np.float32)
-        """Precompute reconstruction bases and normalization coefficients."""
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info("Precomputing reconstruction bases...")
         # Normalization coefficients
         self.Cm = spec_hp.C_coef(nx, Lx)
         self.Cn = spec_hp.C_coef(ny, Ly)
         self.Cp = spec_hp.C_coef(nz, Lz)
         
-        # Scaling factors for DCT/IDCT
+        # Scaling factors
         self.dct_scale = np.float32((dx * dy) * np.sqrt((nx * ny) / (Lx * Ly)))
         self.recon_scale = np.float32(np.sqrt(nx * ny) / np.sqrt(Lx * Ly))
-
-        # Precomputed cosine bases for reconstruction (cell-centered points)
+        
+        # Precomputed cosine bases
         x_np, y_np, z_np = self.x, self.y, self.z
         self.cos_mx = np.cos(np.pi * np.arange(nx)[:, None] * x_np[None, :] / Lx).astype(np.float32)
         self.cos_ny = np.cos(np.pi * np.arange(ny)[:, None] * y_np[None, :] / Ly).astype(np.float32)
         self.cos_pz = np.cos(np.pi * np.arange(nz)[:, None] * z_np[None, :] / Lz).astype(np.float32)
-
-        # Full-domain (node-centered) reconstruction bases are expensive and
-        # are allocated lazily via `prepare_full_reconstruction()` when needed
-        self.full_recon_initialized = False
-
-        # Fine mesh setup for latent heat correction
-        self.refinement = 4                                                   # Refinement factor for fine mesh
-        self.Lx_box, self.Ly_box, self.Lz_box = 0.9e-3, 0.2e-3, 0.04e-3         # Physical dimensions of fine mesh box
-        self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
         
-        self.nx_fine_total = int(np.ceil(Lx / self.dx_fine))
-        self.ny_fine_total = int(np.ceil(Ly / self.dy_fine))
-        self.nz_fine_total = int(np.ceil(self.Lz_box / self.dz_fine))
-        
-        x_fine = ((np.arange(self.nx_fine_total) + 0.5) * self.dx_fine).astype(np.float32)
-        y_fine = ((np.arange(self.ny_fine_total) + 0.5) * self.dy_fine).astype(np.float32)
-        z_fine = ((np.arange(self.nz_fine_total) + 0.5) * self.dz_fine).astype(np.float32)
-        self.x_fine = x_fine
-        self.y_fine = y_fine
-        self.z_fine = z_fine
-        
-        # Shift z_fine to top of the domain for basis evaluation (fine mesh is at the top)
-        z_fine_global = (Lz - self.Lz_box) + z_fine
-
-        logger.info("Precomputing fine cosine bases...")
-        m, n, p = np.arange(nx), np.arange(ny), np.arange(nz)
-        self.Bx_fine_full = (self.Cm[:, None] * np.cos(np.pi * m[:, None] * x_fine[None, :] / Lx)).astype(np.float32)
-        self.By_fine_full = (self.Cn[:, None] * np.cos(np.pi * n[:, None] * y_fine[None, :] / Ly)).astype(np.float32)
-        self.Bz_fine_full = (self.Cp[:, None] * np.cos(np.pi * p[:, None] * z_fine_global[None, :] / Lz)).astype(np.float32)
-        
-        # Box dimensions in fine grid points
-        self.nx_box = int(np.ceil(self.Lx_box / self.dx_fine))
-        self.ny_box = int(np.ceil(self.Ly_box / self.dy_fine))
-        self.nz_box = self.nz_fine_total
-        
-        # Preallocated arrays for fine mesh box
-        self.Bx_fine = np.zeros((nx, self.nx_box), dtype=np.float32)
-        self.By_fine = np.zeros((ny, self.ny_box), dtype=np.float32)
-        self.Bz_fine = self.Bz_fine_full[:, :self.nz_box]
-        self.box_x = np.zeros(self.nx_box, dtype=np.float32)
-        self.box_y = np.zeros(self.ny_box, dtype=np.float32)
-        # box_z assumes top surface fixed at Lz
-        self.box_z = z_fine_global # Use actual cell centers
-        self.fine_mesh_initialized = False
-        self.ix_laser_box = max(0, min(self.nx_box - 1, int(round(0.5 * (self.nx_box - 1)))))
-        
-        self.dV_fine = self.dx_fine * self.dy_fine * self.dz_fine
-
-    def prepare_K_buffers(self, phys, geom, num):
-        """Precompute spectral propagators and allocate buffers.
-        """
-
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info("Precomputing K, KK... ")
-        # [FIX] Use spec_hp.precompute_K_KK
-        self.K, self.KK = precompute_K_KK(phys, num, geom)
-        logger.info("Preparing projection on top surface..., assumed fixed at z=Lz ")
-        # Compute top-surface weighting: cos(p*pi) = (-1)^p so that modes are evaluated at z=Lz
-        sign = np.power(-1.0, np.arange(num.nz, dtype=np.float32)).astype(np.float32)
+        # Compute top-surface weighting for projection
+        sign = np.power(-1.0, np.arange(nz, dtype=np.float32)).astype(np.float32)
         Cp_top = (self.Cp.astype(np.float32) * sign)
-        # Broadcasted coefficient array for fast contraction with modal arrays (shape: (nz,1,1))
         self.Cp32_broadcast = Cp_top[:, None, None]
-        # Allocate working arrays
-        nx , ny, nz = num.nx, num.ny, num.nz
-        self.q_diff = np.empty((ny, nx), dtype=np.float32)
-        self.B_buffer = np.empty((ny, nx), dtype=np.float32)
-        self.a_temp = np.empty((nz, ny, nx), dtype=np.float32)
-        self.q_evap_old = np.zeros((ny, nx), dtype=np.float32)
-        self.q_evap_buffer = np.zeros((ny, nx), dtype=np.float32)
-        # ZYX layout for contiguous X-scanning
-        self.Q_latent_buffer = np.zeros((self.nz_box, self.ny_box, self.nx_box), dtype=np.float32)
 
     def prepare_full_reconstruction(self, geom):
-        """Compute node-centered grids and full-domain reconstruction bases on demand.
-
-        This is intentionally separated from the lightweight `prepare_reconstruction_basis`
-        to avoid allocating large arrays unless the user requests full-volume output.
-        """
-        if getattr(self, 'full_recon_initialized', False):
+        """Compute node-centered grids and full-domain reconstruction bases on demand."""
+        if self.Bx_recon is not None:
             return
 
         dx, dy, dz = geom.dx, geom.dy, geom.dz
         nx, ny, nz = geom.nx, geom.ny, geom.nz
         Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
 
-        dx_rec = dx
-        dy_rec = dy
-        dz_rec = dz
-        x_rec = ((np.arange(nx+1)) * dx_rec).astype(np.float32)
-        y_rec = ((np.arange(ny+1)) * dy_rec).astype(np.float32)
-        z_rec = ((np.arange(nz+1)) * dz_rec).astype(np.float32)
-        self.x_rec = x_rec
-        self.y_rec = y_rec
-        self.z_rec = z_rec
+        self.x_rec = ((np.arange(nx+1)) * dx).astype(np.float32)
+        self.y_rec = ((np.arange(ny+1)) * dy).astype(np.float32)
+        self.z_rec = ((np.arange(nz+1)) * dz).astype(np.float32)
 
-        # Precompute full-domain basis matrices including normalization coefficients
-        m = np.arange(nx)
-        n = np.arange(ny)
-        p = np.arange(nz)
-        self.Bx_recon = (self.Cm[:, None] * np.cos(np.pi * m[:, None] * x_rec[None, :] / Lx)).astype(np.float32)
-        self.By_recon = (self.Cn[:, None] * np.cos(np.pi * n[:, None] * y_rec[None, :] / Ly)).astype(np.float32)
-        self.Bz_recon = (self.Cp[:, None] * np.cos(np.pi * p[:, None] * z_rec[None, :] / Lz)).astype(np.float32)
+        m, n, p = np.arange(nx), np.arange(ny), np.arange(nz)
+        self.Bx_recon = (self.Cm[:, None] * np.cos(np.pi * m[:, None] * self.x_rec[None, :] / Lx)).astype(np.float32)
+        self.By_recon = (self.Cn[:, None] * np.cos(np.pi * n[:, None] * self.y_rec[None, :] / Ly)).astype(np.float32)
+        self.Bz_recon = (self.Cp[:, None] * np.cos(np.pi * p[:, None] * self.z_rec[None, :] / Lz)).astype(np.float32)
 
-        self.full_recon_initialized = True
+@dataclass
+class FineMeshState:
+    """Handles the moving fine mesh for latent heat/nonlinearities."""
+    # Logic configuration
+    refinement: int = 4
+    nx_box: int = 0
+    ny_box: int = 0
+    nz_box: int = 0
+    nx_fine_total: int = 0
+    ny_fine_total: int = 0
+    nz_fine_total: int = 0
+    
+    # Grid coordinates (Static full fine grid)
+    x_fine: np.ndarray = None
+    y_fine: np.ndarray = None
+    z_fine: np.ndarray = None
+    
+    # Box Coordinate Arrays (Active Window)
+    box_x: np.ndarray = None
+    box_y: np.ndarray = None
+    box_z: np.ndarray = None
+    
+    dx_fine: float = 0.0
+    dy_fine: float = 0.0
+    dz_fine: float = 0.0
+    dV_fine: float = 0.0
+
+    # Precomputed Full Fine Bases
+    Bx_fine_full: np.ndarray = None
+    By_fine_full: np.ndarray = None
+    Bz_fine_full: np.ndarray = None
+    
+    # Active Box Basis Subsets (Changing every step)
+    Bx_fine: np.ndarray = None 
+    By_fine: np.ndarray = None
+    Bz_fine: np.ndarray = None
+    
+    # History
+    T_prev: np.ndarray = None 
+    Q_prev: np.ndarray = None
+    
+    def __init__(self, geom, grid: SpectralGrid):
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        dx, dy, dz = geom.dx, geom.dy, geom.dz
+        Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
+        
+        self.refinement = 4
+        Lx_box, Ly_box, Lz_box = 0.9e-3, 0.2e-3, 0.04e-3
+        
+        self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
+        
+        self.nx_fine_total = int(np.ceil(Lx / self.dx_fine))
+        self.ny_fine_total = int(np.ceil(Ly / self.dy_fine))
+        self.nz_fine_total = int(np.ceil(Lz_box / self.dz_fine))
+        
+        self.x_fine = ((np.arange(self.nx_fine_total) + 0.5) * self.dx_fine).astype(np.float32)
+        self.y_fine = ((np.arange(self.ny_fine_total) + 0.5) * self.dy_fine).astype(np.float32)
+        self.z_fine = ((np.arange(self.nz_fine_total) + 0.5) * self.dz_fine).astype(np.float32)
+        
+        # Shift z_fine to top of the domain
+        z_fine_global = (Lz - Lz_box) + self.z_fine
+
+        logger.info("Precomputing fine cosine bases...")
+        m, n, p = np.arange(geom.nx), np.arange(geom.ny), np.arange(geom.nz)
+        self.Bx_fine_full = (grid.Cm[:, None] * np.cos(np.pi * m[:, None] * self.x_fine[None, :] / Lx)).astype(np.float32)
+        self.By_fine_full = (grid.Cn[:, None] * np.cos(np.pi * n[:, None] * self.y_fine[None, :] / Ly)).astype(np.float32)
+        self.Bz_fine_full = (grid.Cp[:, None] * np.cos(np.pi * p[:, None] * z_fine_global[None, :] / Lz)).astype(np.float32)
+        
+        # Box dimensions
+        self.nx_box = int(np.ceil(Lx_box / self.dx_fine))
+        self.ny_box = int(np.ceil(Ly_box / self.dy_fine))
+        self.nz_box = self.nz_fine_total
+        
+        # Allocation for active window
+        self.Bx_fine = np.zeros((geom.nx, self.nx_box), dtype=np.float32)
+        self.By_fine = np.zeros((geom.ny, self.ny_box), dtype=np.float32)
+        self.Bz_fine = self.Bz_fine_full[:, :self.nz_box]
+        
+        self.box_x = np.zeros(self.nx_box, dtype=np.float32)
+        self.box_y = np.zeros(self.ny_box, dtype=np.float32)
+        self.box_z = z_fine_global
+        
+        self.dV_fine = self.dx_fine * self.dy_fine * self.dz_fine
+
+    def update(self, laser_state):
+        """Update fine mesh box coordinates and basis subsets."""
+        # Update X-Axis
+        ix_start, ix_end, _ = calculate_subgrid_indices(
+            laser_state.x, self.dx_fine, self.nx_fine_total, self.nx_box
+        )
+        self.box_x[:] = self.x_fine[ix_start:ix_end]
+        self.Bx_fine[:, :] = self.Bx_fine_full[:, ix_start:ix_end]
+        
+        # Update Y-Axis
+        iy_start, iy_end, _ = calculate_subgrid_indices(
+            laser_state.y, self.dy_fine, self.ny_fine_total, self.ny_box
+        )
+        self.box_y[:] = self.y_fine[iy_start:iy_end]
+        self.By_fine[:, :] = self.By_fine_full[:, iy_start:iy_end]
+
+
+@dataclass
+class SolverBuffers:
+    """Reusable working arrays."""
+    a_temp: np.ndarray = None      # (nz, ny, nx)
+    q_evap_old: np.ndarray = None  # (ny, nx)
+    q_evap_buffer: np.ndarray = None
+    q_diff: np.ndarray = None
+    B_buffer: np.ndarray = None
+    Q_latent_buffer: np.ndarray = None
+
+    def __init__(self, num, fine_mesh: FineMeshState):
+        nx , ny, nz = num.nx, num.ny, num.nz
+        self.q_diff = np.empty((ny, nx), dtype=np.float32)
+        self.B_buffer = np.empty((ny, nx), dtype=np.float32)
+        self.a_temp = np.empty((nz, ny, nx), dtype=np.float32)
+        self.q_evap_old = np.zeros((ny, nx), dtype=np.float32)
+        self.q_evap_buffer = np.zeros((ny, nx), dtype=np.float32)
+        if fine_mesh:
+             self.Q_latent_buffer = np.zeros((fine_mesh.nz_box, fine_mesh.ny_box, fine_mesh.nx_box), dtype=np.float32)
+
+
+@dataclass
+class SpectralSolverState:
+    """
+    Coordinator class for the spectral method state.
+    """
+    # 1. Components
+    grid: SpectralGrid = None
+    buffers: SolverBuffers = None
+    fine_mesh: FineMeshState = None
+    
+    # 2. Primary State
+    a: np.ndarray = None       # Current temperature modes (nz, ny, nx)
+    
+    # 3. Spectral Propagators
+    K: np.ndarray = None
+    KK: np.ndarray = None
+
+    def __init__(self, phys, geom, num):
+        # Initialize sub-components
+        self.grid = SpectralGrid(geom)
+        self.fine_mesh = FineMeshState(geom, self.grid)
+        self.buffers = SolverBuffers(num, self.fine_mesh)
+        
+        # Precompute propagators
+        self.K, self.KK = precompute_K_KK(phys, num, geom)
+
 
 
 def precompute_K_KK(phys, num, geom):
@@ -345,25 +357,30 @@ def compute_evaporation_flux(T_surface, q_out, P0, R, T_boil, DeltaH_LV, R_v, T_
                 q_out[j, i] = factor1 * term
 
 
-def compute_gaussian_laser_flux(X, Y, laser_x, laser_y, laser_r, laser_coef):
-    """Compute Gaussian flux on grid X,Y."""
-    r_sq = (X - laser_x) ** 2 + (Y - laser_y) ** 2
+def compute_gaussian_laser_flux(x, y, laser_x, laser_y, laser_r, laser_coef):
+    """Compute Gaussian flux on grid defined by 1D arrays x, y."""
+    # (nx,) -> (1, nx)
+    dx = x[None, :] - laser_x
+    # (ny,) -> (ny, 1)
+    dy = y[:, None] - laser_y
+    r_sq = dx**2 + dy**2
     return (laser_coef * np.exp(-2.0 * r_sq / laser_r ** 2))
 
 
 def project_box_to_modes(field_box, SsState):
     """Project fine box field to global spectral modes."""
-    if not SsState.fine_mesh_initialized:
+    if SsState.fine_mesh is None:
         raise RuntimeError("Fine mesh not initialized.")
     
+    fm = SsState.fine_mesh
     # 1. Contract Z_box: (nz_box, ny_box, nx_box) . (nz, nz_box) -> (ny_box, nx_box, nz)
-    temp1 = np.tensordot(field_box, SsState.Bz_fine, axes=(0, 1))
+    temp1 = np.tensordot(field_box, fm.Bz_fine, axes=(0, 1))
     # 2. Contract Y_box: (ny_box, nx_box, nz) . (ny, ny_box) -> (nx_box, nz, ny)
-    temp2 = np.tensordot(temp1, SsState.By_fine, axes=(0, 1))
+    temp2 = np.tensordot(temp1, fm.By_fine, axes=(0, 1))
     # 3. Contract X_box: (nx_box, nz, ny) . (nx, nx_box) -> (nz, ny, nx)
-    modes = np.tensordot(temp2, SsState.Bx_fine, axes=(0, 1))
+    modes = np.tensordot(temp2, fm.Bx_fine, axes=(0, 1))
     
-    modes *= SsState.dV_fine
+    modes *= fm.dV_fine
     return modes
 
 
@@ -372,45 +389,49 @@ def reconstruct_temperature_box(a, SsState):
     Reconstructs temperature in a small ROI around the laser.
     Pure Python function using tensordot (optimized in numpy).
     """
-    if not SsState.fine_mesh_initialized:
+    if SsState.fine_mesh is None:
         raise RuntimeError("Fine mesh not initialized.")
     
+    fm = SsState.fine_mesh
     # Tensor Contraction: Modes -> Physical Space
     # T(x,y,z) = sum_p sum_n sum_m  a[p,n,m] * Bz[p,z] * By[n,y] * Bx[m,x]
     
-    T_step1 = np.tensordot(a, SsState.Bz_fine, axes=(0, 0)) # Contraction over Z
-    T_step2 = np.tensordot(T_step1, SsState.By_fine, axes=(0, 0)) # Contraction over Y
-    T_box = np.tensordot(T_step2, SsState.Bx_fine, axes=(0, 0)) # Contraction over X
+    T_step1 = np.tensordot(a, fm.Bz_fine, axes=(0, 0)) # Contraction over Z
+    T_step2 = np.tensordot(T_step1, fm.By_fine, axes=(0, 0)) # Contraction over Y
+    T_box = np.tensordot(T_step2, fm.Bx_fine, axes=(0, 0)) # Contraction over X
     
-    return T_box, (SsState.box_x, SsState.box_y, SsState.box_z)
+    return T_box, (fm.box_x, fm.box_y, fm.box_z)
 
-def compute_latent_heat_source(Q_buffer, phys, x_laser, y_laser, num, SsState, alpha=0.2):
+def compute_latent_heat_source(Q_buffer, phys, laser_state, num, SsState, alpha=0.2):
     """
     Compute volumetric latent heat source Q (W/m^3).
     HIGH-LEVEL ORCHESTRATOR (Runs in Python, calls Kernels).
     """
+    if SsState.fine_mesh is None:
+        return
+        
+    fm = SsState.fine_mesh
+
     # 1. Reconstruct Temperature on Fine Mesh
-    T_box, _ = reconstruct_temperature_box(SsState.a_temp, SsState)
+    T_box, _ = reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
     
     # 2. Initialize/Retrieve State buffers
-    if not hasattr(SsState, 'T_prev') or SsState.T_prev is None:
-        SsState.T_prev = np.zeros_like(T_box)
-        SsState.T_prev[:] = T_box[:] 
-        SsState.Q_prev = np.zeros_like(Q_buffer)
-        SsState.laser_x_prev = x_laser
-        SsState.laser_y_prev = y_laser
+    if fm.T_prev is None:
+        fm.T_prev = np.zeros_like(T_box)
+        fm.T_prev[:] = T_box[:] 
+        fm.Q_prev = np.zeros_like(Q_buffer)
         Q_buffer.fill(0.0)
         return
 
     # 3. Shift Previous Fields to Current Frame
-    shift_x = x_laser - SsState.laser_x_prev
-    shift_y = y_laser - SsState.laser_y_prev
+    shift_x = laser_state.v[0]*num.dt
+    shift_y = laser_state.v[1]*num.dt
     
-    shift_pixels = (0, -shift_y / SsState.dy_fine, -shift_x / SsState.dx_fine)
+    shift_pixels = (0, -shift_y / fm.dy_fine, -shift_x / fm.dx_fine)
     
     # Order=1 (Linear) usually sufficient for smooth fields like T
-    T_prev_aligned = scipy_shift(SsState.T_prev, shift_pixels, order=1, mode='nearest')
-    Q_prev_aligned = scipy_shift(SsState.Q_prev, shift_pixels, order=1, mode='constant', cval=0.0)
+    T_prev_aligned = scipy_shift(fm.T_prev, shift_pixels, order=1, mode='nearest')
+    Q_prev_aligned = scipy_shift(fm.Q_prev, shift_pixels, order=1, mode='constant', cval=0.0)
     
     # 4. Compute Source Term (Calls Numba Kernel)
     compute_source_term_from_temperature(T_box, T_prev_aligned, 
@@ -423,11 +444,8 @@ def compute_latent_heat_source(Q_buffer, phys, x_laser, y_laser, num, SsState, a
         Q_buffer[:] = alpha * Q_buffer + (1.0 - alpha) * Q_prev_aligned
     
     # 6. Update History
-    SsState.T_prev[:] = T_box[:]
-    SsState.Q_prev[:] = Q_buffer[:] 
-    SsState.laser_x_prev = x_laser
-    SsState.laser_y_prev = y_laser
-
+    fm.T_prev[:] = T_box[:]
+    fm.Q_prev[:] = Q_buffer[:] 
 
 def DCT_II(q):
     """Apply Discrete Cosine Transform Type II (Ortho)."""
@@ -447,10 +465,10 @@ def reconstruct_surface_temperature(a, SsState):
     # Use a preallocated 2D buffer when available to avoid allocating a full
     # temporary (nz, ny, nx) array. `np.einsum` with `out=` performs the
     # contraction
-    A = np.einsum('p,pij->ij', SsState.Cp32_broadcast[:, 0, 0], a, optimize=True)
+    A = np.einsum('p,pij->ij', SsState.grid.Cp32_broadcast[:, 0, 0], a, optimize=True)
     # Use DCT-II for surface temperature (mathematical definition)
     dct_result = IDCT_II(A)
-    return (SsState.recon_scale * dct_result)
+    return (SsState.grid.recon_scale * dct_result)
 
 def reconstruct_temperature_xz(a, num, geom, SsState, laser):
     """
@@ -461,7 +479,7 @@ def reconstruct_temperature_xz(a, num, geom, SsState, laser):
     y0 = laser.y0
     nx, ny, nz = num.nx, num.ny, num.nz
     # Evaluate cosine basis at specific y0 (ny,)
-    cos_y = SsState.Cn * np.cos(np.pi * np.arange(ny) * y0 / geom.Ly)
+    cos_y = SsState.grid.Cn * np.cos(np.pi * np.arange(ny) * y0 / geom.Ly)
     # Contract Y axis: (nz, ny, nx) dot (ny,)
     A_xz = np.tensordot(a, cos_y, axes=(1, 0)) 
     # Reconstruct X-Z field using 2D IDCT (Type 3)
@@ -503,36 +521,15 @@ def calculate_subgrid_indices(pos, dx, n_total_fine, n_box):
     return idx_start, idx_end, idx_relative
 
 # goes to spectral_helpers.py
-def update_fine_mesh(SsState, x_laser, y_laser):
+def update_fine_mesh(SsState, laser_state):
     """
     Update fine mesh box coordinates and basis subsets so the laser remains centered.
     Only x and y are updated since z is static (considering flat top).
 
     """
-    # 1. Update X-Axis (Scanning Direction)
-    ix_start, ix_end, ix_laser_rel = calculate_subgrid_indices(
-        x_laser, SsState.dx_fine, SsState.nx_fine_total, SsState.nx_box
-    )
-    
-    SsState.box_x[:] = SsState.x_fine[ix_start:ix_end]
-    SsState.ix_laser_box = ix_laser_rel
+    if SsState.fine_mesh:
+        SsState.fine_mesh.update(laser_state)
 
-    # Helper to slice and copy bases safely (handles non-contiguous memory)
-    # Bx_fine shape: (nx_global, nx_box)
-    SsState.Bx_fine[:, :] = SsState.Bx_fine_full[:, ix_start:ix_end]
-    
-    # 2. Update Y-Axis (Transverse Direction)
-    iy_start, iy_end, _ = calculate_subgrid_indices(
-        y_laser, SsState.dy_fine, SsState.ny_fine_total, SsState.ny_box
-    )
-    
-    SsState.box_y[:] = SsState.y_fine[iy_start:iy_end]
-    # By_fine shape: (ny_global, ny_box)
-    SsState.By_fine[:, :] = SsState.By_fine_full[:, iy_start:iy_end]
-
-    # 3. Update Volume Metric & Status
-    SsState.dV_fine = SsState.dx_fine * SsState.dy_fine * SsState.dz_fine
-    SsState.fine_mesh_initialized = True
 
 
 # keep in helpers
