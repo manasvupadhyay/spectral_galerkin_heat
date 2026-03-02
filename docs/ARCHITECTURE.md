@@ -71,7 +71,6 @@ flowchart TD
             style InterfaceLayer fill:#404040,stroke:#777,color:#fff
             ISimFactory["<< Interface >>\nSimulationFactory"]:::interface
             IHeat["<< Interface >>\nHeatSolver"]:::interface
-            IMicro["<< Interface >>\nMicrostructureSolver"]:::interface
         end
 
         %% Implementation Layer
@@ -85,13 +84,11 @@ flowchart TD
             %% Products
             CPUSolv[SpectralCPUSolver]:::product
             GPUSolv[SpectralGPUSolver]:::product
-            TreeSolv[TreeMicroSolver]:::product
         end
 
         %% Relationships
         Workflow -->|Uses| ISimFactory
         Workflow -->|Calls| IHeat
-        Workflow -->|Calls| IMicro
 
         %% Factory Implementations
         CPUFact -.->|Implements| ISimFactory
@@ -99,12 +96,10 @@ flowchart TD
 
         %% Factory Creation Links
         CPUFact -->|Creates| CPUSolv
-        CPUFact -->|Creates| TreeSolv
         GPUFact -->|Creates| GPUSolv
 
         %% Product Implementations
         CPUSolv -.->|Implements| IHeat
         GPUSolv -.->|Implements| IHeat
-        TreeSolv -.->|Implements| IMicro
     end
 ```
