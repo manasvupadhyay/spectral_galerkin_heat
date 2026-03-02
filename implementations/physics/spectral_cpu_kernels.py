@@ -256,14 +256,10 @@ def precompute_K_KK(phys, num, geom):
     ky = (np.pi * xp.arange(num.ny) / geom.Ly)
     kz = (np.pi * xp.arange(num.nz) / geom.Lz)
 
-    KX, KY, KZ = xp.meshgrid(kx, ky, kz, indexing='ij')
-    k2 = (kx[None, None, :]**2 + ky[None, :, None]**2 + kz[:, None, None]**2)
-
-    alpha = phys.k / (phys.rho * phys.Cp)
-    K = xp.exp(-alpha * k2 * num.dt).astype(np.float32)
-
-    denom = alpha * k2
+    denom = phys.k / (phys.rho * phys.Cp) *(kx[None, None, :]**2 + ky[None, :, None]**2 + kz[:, None, None]**2)
+    K = np.exp(-denom * num.dt).astype(np.float32)
     mask_zero = (denom == 0)
+
     denom[mask_zero] = 1.0
 
     phi_1 = (K - 1.0) / (-denom)
@@ -409,43 +405,44 @@ def compute_latent_heat_source(Q_buffer, phys, laser_state, num, SsState, alpha=
     """
     if SsState.fine_mesh is None:
         return
-        
+
     fm = SsState.fine_mesh
 
     # 1. Reconstruct Temperature on Fine Mesh
     T_box, _ = reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
-    
+
     # 2. Initialize/Retrieve State buffers
     if fm.T_prev is None:
         fm.T_prev = np.zeros_like(T_box)
-        fm.T_prev[:] = T_box[:] 
+        fm.T_prev[:] = T_box[:]
         fm.Q_prev = np.zeros_like(Q_buffer)
         Q_buffer.fill(0.0)
         return
 
     # 3. Shift Previous Fields to Current Frame
-    shift_x = laser_state.v[0]*num.dt
-    shift_y = laser_state.v[1]*num.dt
-    
+    shift_x = laser_state.v[0] * num.dt
+    shift_y = laser_state.v[1] * num.dt
+
     shift_pixels = (0, -shift_y / fm.dy_fine, -shift_x / fm.dx_fine)
-    
+ 
     # Order=1 (Linear) usually sufficient for smooth fields like T
     T_prev_aligned = scipy_shift(fm.T_prev, shift_pixels, order=1, mode='nearest')
     Q_prev_aligned = scipy_shift(fm.Q_prev, shift_pixels, order=1, mode='constant', cval=0.0)
     
     # 4. Compute Source Term (Calls Numba Kernel)
-    compute_source_term_from_temperature(T_box, T_prev_aligned, 
-                                          phys.T_solidus, phys.T_liquidus, 
-                                          phys.rho, phys.L_f, num.dt, 
-                                          Q_buffer)
-    
+    compute_source_term_from_temperature(T_box, T_prev_aligned,
+        phys.T_solidus, phys.T_liquidus,
+        phys.rho, phys.L_f, num.dt,
+        Q_buffer
+    )
+
     # 5. Apply Relaxation
     if alpha < 1.0:
         Q_buffer[:] = alpha * Q_buffer + (1.0 - alpha) * Q_prev_aligned
-    
+
     # 6. Update History
     fm.T_prev[:] = T_box[:]
-    fm.Q_prev[:] = Q_buffer[:] 
+    fm.Q_prev[:] = Q_buffer[:]
 
 def DCT_II(q):
     """Apply Discrete Cosine Transform Type II (Ortho)."""
@@ -535,8 +532,6 @@ def update_fine_mesh(SsState, laser_state):
 # keep in helpers
 def shift_flux(field: np.ndarray, shift: tuple, geom) -> np.ndarray:
     """Translate a surface flux field by ``shift=(dx, dy)`` meters."""
-    if field is None or field.size == 0:
-        return np.zeros((geom.ny, geom.nx), dtype=np.float32)
     dx, dy = shift
     shift_pixels = (dy / geom.dy, dx / geom.dx)
     

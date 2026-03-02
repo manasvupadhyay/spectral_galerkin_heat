@@ -69,8 +69,8 @@ flowchart TD
         %% Interface Layer
         subgraph InterfaceLayer [Abstract Interfaces]
             style InterfaceLayer fill:#404040,stroke:#777,color:#fff
-            ISimFactory["<< Interface >>\nSimulationFactory"]:::interface
-            IHeat["<< Interface >>\nHeatSolver"]:::interface
+            ISimFactory["<< Interface >><br>SimulationFactory"]:::interface
+            IHeat["<< Interface >><br>HeatSolver"]:::interface
         end
 
         %% Implementation Layer

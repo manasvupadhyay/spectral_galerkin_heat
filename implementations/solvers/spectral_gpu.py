@@ -90,43 +90,15 @@ class SpectralSolverGPU:
         kernels.update_modes_etd1(SsState.a, SsState.KK, SsState.Cp32_broadcast, SsState.B_buffer, SsState.a_temp)
         S_current = S_n.copy()
 
-        # 3. Latent Heat Correction (Iterative)
+        # 3. Latent Heat Correction
         kernels.update_fine_mesh(SsState, laser_state.x, laser_state.y)
-        kernels.prepare_latent_history(SsState)
-        
-        # Initial Guess: Use previous Q aligned
-        cp.copyto(SsState.Q_latent_buffer, SsState.Q_prev_aligned)
-    
-        # Allocation for new Q estimate
-        Q_new = cp.empty_like(SsState.Q_latent_buffer)
-        
-        alpha_lat = 0.4
-        for _ in range(8):
-            # 1. Project current Q guess to modes
-            Q_modes = kernels.project_box_to_modes(SsState.Q_latent_buffer, SsState)
-            
-            # 2. Construct temporary state `a_temp`
-            # Start with (Decayed 'a' + Surface Sources)
-            kernels.update_modes_etd1(SsState.a, SsState.KK, SsState.Cp32_broadcast, SsState.B_buffer, SsState.a_temp)
-            # Add Volumetric Source (current Latent Heat guess)
-            kernels.add_source_term_modes(SsState.a_temp, SsState.KK, Q_modes)
-            
-            # 3. Reconstruct Temperature T(Q)
-            T_box, _ = kernels.reconstruct_temperature_box(SsState.a_temp, SsState)
-            
-            # 4. Compute new Q(T)
-            kernels.compute_latent_source_only(Q_new, T_box, SsState, mat, num.dt)
-            
-            # 5. Relaxation: Q_buffer = alpha * Q_new + (1 - alpha) * Q_buffer
-            cp.multiply(SsState.Q_latent_buffer, (1.0 - alpha_lat), out=SsState.Q_latent_buffer)
-            cp.add(SsState.Q_latent_buffer, alpha_lat * Q_new, out=SsState.Q_latent_buffer)
+        kernels.compute_latent_heat_source(
+            SsState.Q_latent_buffer, mat, laser_state, num, SsState, alpha=0.4
+        )
 
         # Finalize: Add converged latent heat source to base state `a` so Evaporation loop sees it
         Q_modes_final = kernels.project_box_to_modes(SsState.Q_latent_buffer, SsState)
-        kernels.add_source_term_modes(SsState.a, SsState.KK, Q_modes_final)
-        
-        # Commit history
-        kernels.update_latent_history(SsState, T_box, SsState.Q_latent_buffer)
+        kernels.add_source_term_modes(SsState.a_temp, SsState.KK, Q_modes_final)
         
         # 4. Nonlinear iteration for evaporation
         T_temp = kernels.reconstruct_surface_temperature(SsState.a_temp, SsState)
