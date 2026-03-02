@@ -11,7 +11,7 @@ domain:
   mesh: [1800,256,1000]      # [nx, ny, nz] (dimensionless)
 
 material:
-  name: "GenericSteel"
+  name: "316L"
   rho: 7850.0                 # kg/m^3
   k: 15.0                     # W/(m·K)
   Cp: 500.0                   # J/(kg·K)

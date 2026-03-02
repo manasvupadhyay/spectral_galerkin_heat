@@ -276,6 +276,21 @@ def get_slice(data, normal, center, width, height, reverse_axes=(), resolution=4
 
 def plot_meltpool(U, V, T_grid, xlabel, ylabel, liquidus, solidus, title, output_file):
     
+    # --- 1. CONFIGURATION FOR ACADEMIC STYLE ---
+    # This sets the font to look like LaTeX (Serif/Times)
+    plt.rcParams.update({
+        "font.family": "serif",
+        "font.serif": ["Times New Roman", "DejaVu Serif"],
+        "font.size": 12,
+        "axes.titlesize": 14,
+        "axes.labelsize": 11,
+        "legend.fontsize": 12,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
+        "lines.linewidth": 1.5,
+        "lines.markersize": 7
+    })
+
     # Convert to micrometers
     U = U * 1e6
     V = V * 1e6
@@ -338,28 +353,31 @@ def plot_meltpool(U, V, T_grid, xlabel, ylabel, liquidus, solidus, title, output
         
         # Calculate magnitude for arrow scaling and normalization
         mag = np.sqrt(dT_dU**2 + dT_dV**2)
-        max_mag = np.max(mag) if np.max(mag) > 0 else 1.0
+        avg_mag = 1.0 #np.mean(mag) if np.mean(mag) > 0 else 1.0
+        print(f"Average gradient magnitude: {avg_mag:.2f} K/µm")
         
-        # Normalize vectors against the global maximum gradient magnitude
+        # Normalize vectors against the average gradient magnitude
         # We plot negative gradient (heat flow direction)
-        dU_norm = dT_dU / (max_mag *500)
-        dV_norm = dT_dV / (max_mag *500)
+        dU_norm = dT_dU / (avg_mag *500)
+        dV_norm = dT_dV / (avg_mag *500)
         
         ax.quiver(U[skip], V[skip], dU_norm[skip], dV_norm[skip], 
                   color='black', alpha=0.5, scale=20, width=0.002)
     except Exception as e:
         logger.warning("Could not plot gradients: %s", e)
+        print("Warning: Gradient plotting failed, skipping this step.")
 
     # 4. Styling
     ax.set_aspect('equal')
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
-    ax.set_title(title)
+    # ax.set_title(title)
     
     plt.tight_layout()
     
     if output_file:
-        plt.savefig(output_file, dpi=300)
+        # The crucial part is bbox_inches='tight' and pad_inches=0
+        plt.savefig(output_file, dpi=300, bbox_inches="tight", pad_inches=0.02)
         logger.info(f"Plot saved to {output_file}")
     else:
         plt.show() # Blocking show if no output file
@@ -393,9 +411,6 @@ def generate_plots(xdmf_path, output_dir=None, show_ui=True, save_images=False,
 
     # 2. Interpolate Slice
     try:
-        # data['T'] might be on device if using cupy in other parts, but here we likely loaded from disk as numpy
-        # If helpers or other modules monkey-patched things, we should ensure we work with numpy for matplotlib
-        
         U, V, T_grid, xlabel, ylabel = get_slice(data, normal, center, width, height, reverse_axes=reverse, method=interp)
     except Exception as e:
         logger.exception("Error extracting slice: %s", e)
@@ -446,7 +461,8 @@ if __name__ == "__main__":
 
     # If args.out is provided, it is a specific filename. 
     # We pass it as specific_output_filename to generate_plots.
-    
+    # Typical call :python utils/cut_views.py out/0_perfect_sim/fields/field_step002000.xmf --center 0.0095 0.0025 0.002475 --width 0.00035 --height 0.00005 --liquidus 1820 --out cut_spectral.pdf
+
     generate_plots(
         xdmf_path=args.xdmf_file,
         output_dir=None, # Not used if specific_output_filename is set or save_images is False (mostly)
