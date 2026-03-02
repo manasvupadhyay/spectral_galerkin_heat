@@ -295,11 +295,6 @@ This enables efficient disk usage and post-processing tailored to your needs.
 
 ## Development Roadmap
 
-- [ ] **Refactor `comparison.py`**: Use the new loader to access data cleanly
-    - Update to use helper functions instead of manual filename iteration
-    - Allow passing a specific `run_id` for comparison
-- [ ] **Melt-Pool extraction**: An efficient routine to extract meltpool 
-    - Shape and metrcis from temperature fields
 - [ ] **Update Logic**: Enable the solver to load a previous known temperature field
 - [ ] **Adding Material**: Change the domain definition on the fly to
     - Account for an added layer of material

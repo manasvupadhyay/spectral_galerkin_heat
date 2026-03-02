@@ -34,15 +34,32 @@ class LocalFSIOManager(IOManager):
     def initialize(self, context: Any) -> None:
         """
         Setup directory structure: root/run_id/{subdirs}
+        Also parses IO scheduling config (interval, outputs, at_end, etc.).
         """
         self.context = context  # Store context for later use
         # 1. Extract config
-        # Assuming context has an 'io' attribute or we fall back to defaults
-        # We handle context dynamically since types might vary
         io_config = getattr(context, 'io', None)
         self.output_root = getattr(io_config, 'output_root', 'out')
         run_tag = getattr(io_config, 'run_tag', 'sim')
         self.save_full_fields = getattr(io_config, 'save_full_fields', False)
+
+        # --- IO scheduling state ----
+        io_cfg = context.io if hasattr(context, 'io') else {}
+        self._interval = io_cfg.get('interval')
+        self._outputs = io_cfg.get('outputs', [])
+        self._at_end = io_cfg.get('at_end', [])
+        self._profiles_locations = io_cfg.get('profiles_locations', [])
+        self._cut_views_planes = io_cfg.get('cut_views_planes', [])
+
+        if self._interval is None:
+            logger.info("io.interval is None: periodic outputs disabled; only 'at_end' outputs will be saved.")
+            self._next_output_step: float = float('inf')
+        else:
+            try:
+                self._next_output_step = int(self._interval)
+            except Exception:
+                logger.warning(f"Invalid io.interval '{self._interval}' - disabling periodic outputs.")
+                self._next_output_step = float('inf')
         
         # 2. Generate Run ID
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -273,6 +290,48 @@ class LocalFSIOManager(IOManager):
         except Exception as e:
             logger.error(f"Failed to load step {step}: {e}")
             return None
+
+    # ------------------------------------------------------------------
+    #  Step-level & end-of-simulation IO orchestration
+    # ------------------------------------------------------------------
+    def process_step(self, t: float, step: int, state: Any, laser_path: Any) -> None:
+        """
+        Called every time step.  Internally checks whether it is time to
+        write periodic outputs based on the configured interval.
+        """
+        if step < self._next_output_step:
+            return
+
+        for output_type in self._outputs:
+            self.save_step(
+                t, step, state, laser_path,
+                output_type=output_type,
+                profiles_locations=self._profiles_locations,
+                cut_views_planes=self._cut_views_planes,
+            )
+        logger.info(f"Step {step} | t={t:.6e}s | Output(s) saved: {self._outputs}")
+
+        if self._interval is not None:
+            try:
+                self._next_output_step += int(self._interval)
+            except Exception:
+                self._next_output_step = float('inf')
+        else:
+            self._next_output_step = float('inf')
+
+    def process_end(self, t: float, step: int, state: Any, laser_path: Any) -> None:
+        """
+        Called once after the time-loop finishes to save 'at_end' outputs.
+        """
+        for output_type in self._at_end:
+            self.save_step(
+                t, step, state, laser_path,
+                output_type=output_type,
+                profiles_locations=self._profiles_locations,
+                cut_views_planes=self._cut_views_planes,
+            )
+        if self._at_end:
+            logger.info(f"Final output(s) saved at end: {self._at_end}")
 
     def finalize(self) -> None:
         """

@@ -16,6 +16,16 @@ class IOManager(ABC):
         pass
 
     @abstractmethod
+    def process_step(self, t: float, step: int, state, laser_path):
+        """Called every time step. Internally decides whether to write to disk."""
+        pass
+
+    @abstractmethod
+    def process_end(self, t: float, step: int, state, laser_path):
+        """Called at end of simulation to save 'at_end' outputs."""
+        pass
+
+    @abstractmethod
     def finalize(self):
         """Close files and clean up resources."""
         pass

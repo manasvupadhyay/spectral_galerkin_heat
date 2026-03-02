@@ -1,6 +1,6 @@
 import time
 import logging
-import sys
+import os
 import platform
 from typing import Optional, Dict, Any
 from interfaces.factory import SimulationFactory
@@ -39,8 +39,70 @@ class SimulationWorkflow:
         # Create IO Manager
         self.io_manager: IOManager = self.factory.create_io_manager()
 
+    # ------------------------------------------------------------------
+    #  Telemetry helpers
+    # ------------------------------------------------------------------
+    def _init_telemetry(self) -> None:
+        """Initialise wall-clock tracking and optional memory probe."""
+        self._start_wall_time = time.time()
+        self._last_eta_log_time = self._start_wall_time
+        self._eta_log_interval = self.context.num.update_interval
+        self._total_step_time = 0.0
+        self._n_steps_timed = 0
+        try:
+            import psutil
+            self._psutil_proc = psutil.Process()
+        except Exception:
+            self._psutil_proc = None
 
+    def _log_progress(self, t: float, step: int, step_elapsed: float,
+                      metrics: Optional[Dict[str, Any]]) -> None:
+        """Log ETA, memory usage and solver metrics at the configured interval."""
+        self._total_step_time += step_elapsed
+        self._n_steps_timed += 1
 
+        t_end = self.context.num.t_end
+        now = time.time()
+        if (now - self._last_eta_log_time < self._eta_log_interval) and (t < t_end):
+            return  # not yet time to log
+
+        elapsed = now - self._start_wall_time
+        frac_done = min(t / t_end, 1.0) if t_end > 0 else 0.0
+
+        if frac_done > 0:
+            est_remaining = (elapsed / frac_done) - elapsed
+            eta_str = time.strftime('%H:%M:%S', time.gmtime(est_remaining))
+            mem_mb = None
+            if self._psutil_proc is not None:
+                try:
+                    mem_mb = self._psutil_proc.memory_info().rss / (1024.0 ** 2)
+                except Exception:
+                    pass
+            avg_step = self._total_step_time / self._n_steps_timed
+            logger.info(
+                f"[ETA] Step {step} | t={t:.6e}s | Elapsed: {elapsed:.1f}s | "
+                f"Remaining: {eta_str} | step_time={step_elapsed:.3f}s | "
+                f"avg_step={avg_step:.3f}s | mem_mb={mem_mb if mem_mb is not None else 'NA'}"
+            )
+        else:
+            logger.info(f"[ETA] Step {step} | t={t:.6e}s | Elapsed: {elapsed:.1f}s | Remaining: unknown")
+
+        # Format metrics
+        parts = []
+        for k, v in (metrics or {}).items():
+            try:
+                if isinstance(v, int):
+                    parts.append(f"{k}={v}")
+                else:
+                    parts.append(f"{k}={float(v):.3f}")
+            except Exception:
+                parts.append(f"{k}={v}")
+        logger.info(f"[METRICS] {', '.join(parts)}")
+        self._last_eta_log_time = now
+
+    # ------------------------------------------------------------------
+    #  Main entry point
+    # ------------------------------------------------------------------
     def run(self):
         """
         Execute the main simulation loop.
@@ -100,141 +162,36 @@ class SimulationWorkflow:
         step = 0
         dt = self.context.num.dt
         t_end = self.context.num.t_end
-
-        # IO Timers
-        io_cfg = self.context.io if hasattr(self.context, 'io') else {}
-        interval = io_cfg.get('interval')
-        outputs = io_cfg.get('outputs', [])
-        at_end = io_cfg.get('at_end', [])
-        profiles_locations = io_cfg.get('profiles_locations', [])
-        cut_views_planes = io_cfg.get('cut_views_planes', [])
-
-        # Defensive handling: if interval is None (YAML null) we disable periodic outputs.
-        if interval is None:
-            logger.info("io.interval is None: periodic outputs disabled; only 'at_end' outputs will be saved.")
-            next_output_step = float('inf')
-        else:
-            # Ensure integral number of steps
-            try:
-                next_output_step = int(interval)
-            except Exception:
-                logger.warning(f"Invalid io.interval '{interval}' - disabling periodic outputs.")
-                next_output_step = float('inf')
-        logger.info(f"Starting time loop: 0 -> {t_end:.4e} s (dt={dt:.2e})")
-
-        # Check for dynamic laser_path in context
         laser_path = getattr(self.context, 'laser_path')
-        
-        # ETA logging & telemetry setup
-        start_wall_time = time.time()
-        last_eta_log_time = start_wall_time
-        eta_log_interval = self.context.num.update_interval
-        # telemetry counters
-        total_step_time = 0.0
-        n_steps_timed = 0
 
-        # optional memory measurement
-        try:
-            import psutil
-            _psutil_proc = psutil.Process()
-        except Exception:
-            _psutil_proc = None
+        logger.info(f"Starting time loop: 0 -> {t_end:.4e} s (dt={dt:.2e})")
+        self._init_telemetry()
 
         while t < t_end:
-            # A. Output Check (step-based)
-            if step >= next_output_step:
-                for output_type in outputs:
-                    self.io_manager.save_step(
-                        t, step, state, laser_path,
-                        output_type=output_type,
-                        profiles_locations=profiles_locations,
-                        cut_views_planes=cut_views_planes
-                    )
-                logger.info(f"Step {step} | t={t:.6e}s | Output(s) saved: {outputs}")
-                if interval is not None:
-                    try:
-                        next_output_step += int(interval)
-                    except Exception:
-                        next_output_step = float('inf')
-                else:
-                    next_output_step = float('inf')
-            # B. Evolve State with Heat Solver (timed)
+            # A. Periodic output (IOManager decides internally)
+            self.io_manager.process_step(t, step, state, laser_path)
+
+            # B. Evolve State with Heat Solver
             step_start = time.time()
             state, metrics = self.heat_solver.step(t, dt)
-            
+
             # C. Microstructure Update
             if self.context.micro.enabled:
-                # We pass the current temperature field to the microstructure
-                # It will update its internal state
                 micro_stats = self.micro_solver.update(t, dt, state.T)
                 if metrics and micro_stats:
                     metrics.update(micro_stats)
-            
+
             step_elapsed = time.time() - step_start
-            total_step_time += step_elapsed
-            n_steps_timed += 1
 
             # D. Advance Time
             t += dt
             step += 1
 
-            # ETA logging (every eta_log_interval seconds or at end)
-            now = time.time()
-            if (now - last_eta_log_time >= eta_log_interval) or (t >= t_end):
-                elapsed = now - start_wall_time
-                frac_done = min(t / t_end, 1.0) if t_end > 0 else 0.0
-                if frac_done > 0:
-                    est_total = elapsed / frac_done
-                    est_remaining = est_total - elapsed
-                    eta_str = time.strftime('%H:%M:%S', time.gmtime(est_remaining))
-                    # Memory usage (RSS in MB) if available
-                    if _psutil_proc is not None:
-                        try:
-                            mem_mb = _psutil_proc.memory_info().rss / (1024.0 ** 2)
-                        except Exception:
-                            mem_mb = None
-                    else:
-                        mem_mb = None
+            # E. Telemetry (internally rate-limited)
+            self._log_progress(t, step, step_elapsed, metrics)
 
-                    logger.info(f"[ETA] Step {step} | t={t:.6e}s | Elapsed: {elapsed:.1f}s | Remaining: {eta_str} | "
-                                f"step_time={step_elapsed:.3f}s | avg_step={ (total_step_time / n_steps_timed):.3f}s | mem_mb={mem_mb if mem_mb is not None else 'NA'}")
-
-                    # Format metrics into plain Python scalars and controlled precision
-                    metrics_items = []
-                    for k, v in (metrics or {}).items():
-                        try:
-                            if isinstance(v, (int,)):
-                                metrics_items.append(f"{k}={int(v)}")
-                            else:
-                                metrics_items.append(f"{k}={float(v):.3f}")
-                        except Exception:
-                            metrics_items.append(f"{k}={v}")
-                    metrics_str = ", ".join(metrics_items)
-                    logger.info(f"[METRICS] {metrics_str}")
-                else:
-                    logger.info(f"[ETA] Step {step} | t={t:.6e}s | Elapsed: {elapsed:.1f}s | Remaining: unknown")
-                    metrics_items = []
-                    for k, v in (metrics or {}).items():
-                        try:
-                            if isinstance(v, (int,)):
-                                metrics_items.append(f"{k}={int(v)}")
-                            else:
-                                metrics_items.append(f"{k}={float(v):.3f}")
-                        except Exception:
-                            metrics_items.append(f"{k}={v}")
-                    metrics_str = ", ".join(metrics_items)
-                    logger.info(f"[METRICS] {metrics_str}")
-                last_eta_log_time = now
-
-        # At end: save all requested outputs
-        for output_type in at_end:
-            self.io_manager.save_step(
-                t, step, state, laser_path,
-                output_type=output_type,
-                profiles_locations=profiles_locations,
-                cut_views_planes=cut_views_planes
-            )
-        logger.info(f"Final output(s) saved at end: {at_end}")
+        # End-of-simulation outputs
+        self.io_manager.process_end(t, step, state, laser_path)
 
         # 4. Finalize
         self.heat_solver.finalize() # TODO - we should have a finalize method on the HeatSolver

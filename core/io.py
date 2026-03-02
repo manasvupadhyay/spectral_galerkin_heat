@@ -67,6 +67,33 @@ class IOManager(ABC):
         pass
 
     @abstractmethod
+    def process_step(self, t: float, step: int, state: Any, laser_path: Any) -> None:
+        """
+        Called every time step. Internally decides whether to write to disk
+        based on the configured interval and output types.
+
+        Args:
+            t: Current simulation time (s).
+            step: Current time step index.
+            state: The simulation state object.
+            laser_path: The laser path object (or None).
+        """
+        pass
+
+    @abstractmethod
+    def process_end(self, t: float, step: int, state: Any, laser_path: Any) -> None:
+        """
+        Called once at the end of the simulation to save 'at_end' outputs.
+
+        Args:
+            t: Final simulation time (s).
+            step: Final time step index.
+            state: The simulation state object.
+            laser_path: The laser path object (or None).
+        """
+        pass
+
+    @abstractmethod
     def finalize(self) -> None:
         """
         Clean up resources, close open file handles, flush buffers, and write final logs.
