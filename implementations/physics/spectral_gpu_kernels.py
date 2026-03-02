@@ -116,13 +116,13 @@ class SpectralGrid:
         self.z = ((cp.arange(nz) + 0.5) * dz).astype(cp.float32)
         
         # Normalization coefficients
-        self.Cm = spec_hp.C_coef(nx, Lx)
-        self.Cn = spec_hp.C_coef(ny, Ly)
-        self.Cp = spec_hp.C_coef(nz, Lz)
-        
+        self.Cm = cp.asarray(spec_hp.C_coef(nx, Lx), dtype=cp.float32)
+        self.Cn = cp.asarray(spec_hp.C_coef(ny, Ly), dtype=cp.float32)
+        self.Cp = cp.asarray(spec_hp.C_coef(nz, Lz), dtype=cp.float32)
+       
         # Scaling factors
-        self.dct_scale = cp.float32((dx * dy) * cp.sqrt((nx * ny) / (Lx * Ly)))
-        self.recon_scale = cp.float32(cp.sqrt(nx * ny) / cp.sqrt(Lx * Ly))
+        self.dct_scale = cp.float32((dx * dy) * np.sqrt((nx * ny) / (Lx * Ly)))
+        self.recon_scale = cp.float32(np.sqrt(nx * ny) / np.sqrt(Lx * Ly))
         
         # Precomputed cosine bases
         x_np, y_np, z_np = self.x, self.y, self.z
@@ -145,9 +145,10 @@ class SpectralGrid:
         nx, ny, nz = geom.nx, geom.ny, geom.nz
         Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
 
-        self.x_rec = ((np.arange(nx+1)) * dx).astype(cp.float32)
-        self.y_rec = ((np.arange(ny+1)) * dy).astype(cp.float32)
-        self.z_rec = ((np.arange(nz+1)) * dz).astype(cp.float32)
+        # These are CPU-side numpy arrays; use numpy dtypes
+        self.x_rec = ((np.arange(nx+1)) * dx).astype(np.float32)
+        self.y_rec = ((np.arange(ny+1)) * dy).astype(np.float32)
+        self.z_rec = ((np.arange(nz+1)) * dz).astype(np.float32)
 
         m, n, p = np.arange(nx), np.arange(ny), np.arange(nz)
         self.Bx_recon = (self.Cm[:, None] * np.cos(np.pi * m[:, None] * self.x_rec[None, :] / Lx)).astype(cp.float32)
@@ -397,10 +398,17 @@ def compute_evaporation_flux(T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liq
 
 
 def compute_gaussian_laser_flux(X, Y, laser_x, laser_y, laser_r, laser_coef):
-    """Compute Gaussian flux on GPU grid X,Y."""
-    # CuPy handles element-wise operations automatically
-    r_sq = (X - laser_x) ** 2 + (Y - laser_y) ** 2
-    return (laser_coef * cp.exp(-2.0 * r_sq / laser_r ** 2)).astype(cp.float32)
+    """Compute Gaussian flux on grid defined by 1D CuPy arrays X, Y.
+
+    Mirrors the CPU implementation: form 2D mesh via broadcasting to avoid
+    shape-broadcast errors when X and Y are 1D arrays of different lengths.
+    """
+    # Ensure X, Y are 1D arrays (cell-centered coordinates)
+    # dx: shape (1, nx), dy: shape (ny, 1)
+    dx = X[None, :] - laser_x
+    dy = Y[:, None] - laser_y
+    r_sq = dx ** 2 + dy ** 2
+    return (laser_coef * cp.exp(-2.0 * r_sq / (laser_r ** 2))).astype(cp.float32)
 
 
 
@@ -423,19 +431,23 @@ def project_box_to_modes(field_box, SsState):
 
 def reconstruct_temperature_box(a, SsState):
     """
-    Reconstructs temperature in a small ROI around the laser (GPU).
+    Reconstructs temperature in a small ROI around the laser.
+    Pure Python function using tensordot (optimized in numpy).
     """
     if SsState.fine_mesh is None:
         raise RuntimeError("Fine mesh not initialized.")
     
+    fm = SsState.fine_mesh
     # Tensor Contraction: Modes -> Physical Space
     # T(x,y,z) = sum_p sum_n sum_m  a[p,n,m] * Bz[p,z] * By[n,y] * Bx[m,x]
     
-    T_step1 = cp.tensordot(a, SsState.Bz_fine, axes=(0, 0)) # Contraction over Z
-    T_step2 = cp.tensordot(T_step1, SsState.By_fine, axes=(0, 0)) # Contraction over Y
-    T_box = cp.tensordot(T_step2, SsState.Bx_fine, axes=(0, 0)) # Contraction over X
+    T_step1 = cp.tensordot(a, fm.Bz_fine, axes=(0, 0)) # Contraction over Z
+    T_step2 = cp.tensordot(T_step1, fm.By_fine, axes=(0, 0)) # Contraction over Y
+    T_box = cp.tensordot(T_step2, fm.Bx_fine, axes=(0, 0)) # Contraction over X
     
-    return T_box.astype(cp.float32), (SsState.box_x, SsState.box_y, SsState.box_z)
+    return T_box, (fm.box_x, fm.box_y, fm.box_z)
+
+
 
 def compute_latent_heat_source(Q_buffer, phys, laser_state, num, SsState, alpha=0.2):
     """
@@ -506,7 +518,6 @@ def IDCT_II(a):
     """Apply Discrete Cosine Transform Type III (Inverse Ortho) on GPU."""
     return cupy_fft.dctn(a, type=3, norm='ortho', axes=None).astype(cp.float32)
 
-
 def reconstruct_surface_temperature(a, SsState):
     """Reconstruct 2D temperature field at z=0 (GPU)."""
    # Sum over Z modes (weighted by Cp coefficients at z=0, which is just Cp/sqrt(1/L)?? No)
@@ -514,11 +525,12 @@ def reconstruct_surface_temperature(a, SsState):
     # This assumes cos(p*pi*z/Lz) at z=0 is 1.0. 
     # The reconstruction formula is T = sum(a * Bx * By * Bz).
     # Bz[p] at z=0 is Cp[p] * cos(p*pi*z/Lz) -> z top surface
-    A = (SsState.Cp32_broadcast * a).sum(axis=0)
+    A = ( SsState.grid.Cp32_broadcast * a).sum(axis=0)
     
     # Use DCT-III (IDCT) for surface temperature
     dct_result = IDCT_II(A)
-    return (SsState.recon_scale * dct_result).astype(cp.float32)
+    return (SsState.grid.recon_scale * dct_result).astype(cp.float32)
+
 
 
 def reconstruct_temperature_xz(a, num, geom, SsState, laser, y0=None):
