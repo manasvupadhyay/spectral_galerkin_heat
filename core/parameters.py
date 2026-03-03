@@ -90,25 +90,6 @@ class IOParams:
             output_interval=float(cfg.get('output_interval'))
         )
 
-@dataclass(frozen=True)
-class MicrostructureParams:
-    """
-    Parameter block for configuring Microstructure evolution.
-    """
-    enabled: bool = False
-    
-    # Initialization Method: 'synthetic', 'from_file', etc.
-    initial_type: str = 'synthetic'
-
-    # If 'from_file', path to the seeds file or cache
-    input_file: Optional[str] = None
-    
-    # If 'synthetic' (MicroStructPy generation parameters)
-    # We store them as a dictionary because MicroStructPy has diverse options
-    generation_params: Dict[str, Any] = field(default_factory=dict)
-    
-    # Additional microstructure parameters (kept generic in generation_params)
-
 @dataclass
 class SimulationContext:
     """
@@ -125,7 +106,6 @@ class SimulationContext:
     geom: 'GeomParams'
     laser: 'LaserParams'
     laser_path: 'LaserPath' # Use forward reference
-    micro: MicrostructureParams
     
     # Existing fields
     io: Dict[str, Any]  # Flat dict with new keys

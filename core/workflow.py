@@ -6,7 +6,6 @@ from typing import Optional, Dict, Any
 from interfaces.factory import SimulationFactory
 from interfaces.solver import HeatSolver
 from interfaces.io import IOManager
-from interfaces.microstructure import MicrostructureSolver
 from core.parameters import SimulationContext
 
 logger = logging.getLogger(__name__)
@@ -33,8 +32,6 @@ class SimulationWorkflow:
         # The factory decides WHICH implementation (CPU vs GPU, Spectral vs FEM) is used.
         self.heat_solver: HeatSolver = self.factory.create_heat_solver()
         
-        # Instantiate Microstructure Solver
-        self.micro_solver: MicrostructureSolver = self.factory.create_microstructure_solver()
         
         # Create IO Manager
         self.io_manager: IOManager = self.factory.create_io_manager()
@@ -129,10 +126,6 @@ class SimulationWorkflow:
 
         # 2. Initialize Solver State
         state = self.heat_solver.initialize()
-        
-        # 3. Initialize Microstructure Solver
-        # Pass the output directory (if available) to the microstructure solver
-        self.micro_solver.initialize(output_dir=run_dir)
 
         # --- Startup context & environment summary (useful for reproducibility) ---
         try:
@@ -175,12 +168,6 @@ class SimulationWorkflow:
             step_start = time.time()
             state, metrics = self.heat_solver.step(t, dt)
 
-            # C. Microstructure Update
-            if self.context.micro.enabled:
-                micro_stats = self.micro_solver.update(t, dt, state.T)
-                if metrics and micro_stats:
-                    metrics.update(micro_stats)
-
             step_elapsed = time.time() - step_start
 
             # D. Advance Time
@@ -195,7 +182,6 @@ class SimulationWorkflow:
 
         # 4. Finalize
         self.heat_solver.finalize() # TODO - we should have a finalize method on the HeatSolver
-        self.micro_solver.finalize()
         self.io_manager.finalize()
         # Optionally log profiler diagnostics path if present
         try:

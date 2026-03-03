@@ -12,7 +12,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.workflow import SimulationWorkflow
 from core.parameters import (
-    SimulationContext, NumParams, MaterialParams, GeomParams, LaserParams, MicrostructureParams
+    SimulationContext, NumParams, MaterialParams, GeomParams, LaserParams
 )
 from utils.cut_views import generate_plots
 
@@ -108,30 +108,12 @@ def build_context(cfg: Dict[str, Any]) -> SimulationContext:
     io_cfg = cfg.get('io', {})
     # Optionally validate/normalize io_cfg here
 
-    # 6. Microstructure Configuration
-    micro_cfg = cfg.get('microstructure', {})
-    if micro_cfg.get('enabled', False):
-        micro_params = MicrostructureParams(
-            enabled=True,
-            initial_type=micro_cfg.get('initial_state', {}).get('type', 'synthetic'),
-            input_file=micro_cfg.get('initial_state', {}).get('file', None),
-            
-            # Pack 'synthetic' params into a dictionary
-            generation_params=micro_cfg.get('initial_state', {}),
-            
-            # Any additional microstructure parameters live in generation_params
-        )
-    else:
-        # Defaults
-        micro_params = MicrostructureParams()
-
     ctx = SimulationContext(
         num=num_params,
         mat=mat_params,
         geom=geom_params,
         laser=laser_params,
         laser_path=laser_path,
-        micro=micro_params,  # New Field
         io=io_cfg,
         method=sim_method,
         backend=sim_backend

@@ -45,35 +45,21 @@ flowchart TD
         style MainLoop fill:#333333,stroke:#666,color:#fff
 
         Start((Start)):::terminator
-        Init[1. Initialize System<br/>Load Neper/MicrostructPy]:::process
-        
+        Init[1. Initialize System]:::process
+
         %% Time Loop Check
         LoopCondition{t < t_end?}:::decision
-        
+
         %% --- Inner Loop Container ---
         subgraph TimeStep [Time Step Execution]
-            style TimeStep fill:#404040,stroke:#777,color:#fff
-            
-            %% Heat Solver Step
-            HeatSolver[3a. Heat Solver Step<br/>Compute Temperature Field]:::heat
-            
-            %% Microstructure Logic
-            subgraph MicroLogic [3b. Microstructure Update]
-                style MicroLogic fill:#505050,stroke:#888,color:#fff
-                
-                GetIso[i. Get Isotherm T_melt]:::micro
-                QueryTree[ii. Query AABB Tree]:::micro
-                Melt[iii. Remove Melted Seeds]:::micro
-                Project[iv. Project Seeds to Front]:::micro
-                Grow[v. Evolve & Write New Seeds]:::micro
-                
-                GetIso --> QueryTree
-                QueryTree --> Melt
-                Melt --> Project
-                Project --> Grow
-            end
+          style TimeStep fill:#404040,stroke:#777,color:#fff
 
-            HeatSolver --> MicroLogic
+          %% Heat Solver Step
+          HeatSolver[3a. Heat Solver Step<br/>Compute Temperature Field]:::heat
+
+          %% (Microstructure disabled) Heat solver now proceeds to IO
+
+          HeatSolver --> IOCheck
         end
 
         IOCheck[4. IO Check<br/>Write Data if Needed]:::process
@@ -84,7 +70,6 @@ flowchart TD
         Start --> Init
         Init --> LoopCondition
         LoopCondition -- Yes --> HeatSolver
-        Grow --> IOCheck
         IOCheck --> Logging
         Logging --> LoopCondition
         LoopCondition -- No --> End
@@ -95,9 +80,6 @@ flowchart TD
 ### Prerequisites
 - Python 3.9+
 - [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (optional, for GPU support)
-- Neper
-- povray
-
 ### Setup
 1. Clone the repository:
    ```bash

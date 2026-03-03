@@ -55,9 +55,6 @@
         <mxCell id="gpu_solver" parent="group_factory" style="html=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;" value="SpectralGPUSolver" vertex="1">
           <mxGeometry height="40" width="120" x="430" y="300" as="geometry" />
         </mxCell>
-        <mxCell id="conc_micro" parent="group_factory" style="html=1;whiteSpace=wrap;fillColor=#ffe6cc;strokeColor=#d79b00;" value="TreeMicroSolver" vertex="1">
-          <mxGeometry height="40" width="140" x="20" y="300" as="geometry" />
-        </mxCell>
         <mxCell id="edge_create_cpu_solv" edge="1" parent="group_factory" source="cpu_factory" style="edgeStyle=orthogonalEdgeStyle;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=1;endArrow=open;" target="cpu_solver">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
@@ -69,23 +66,11 @@
         <mxCell id="edge_create_gpu_solv" edge="1" parent="group_factory" source="gpu_factory" style="edgeStyle=orthogonalEdgeStyle;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=1;endArrow=open;" target="gpu_solver">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="edge_create_micro" edge="1" parent="group_factory" source="cpu_factory" style="edgeStyle=orthogonalEdgeStyle;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=1;endArrow=open;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="conc_micro">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="250" y="240" />
-              <mxPoint x="190" y="240" />
-              <mxPoint x="190" y="280" />
-              <mxPoint x="90" y="280" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="abs_micro" parent="group_factory" style="html=1;whiteSpace=wrap;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=2" value="&lt;&lt;Interface&gt;&gt;&#xa;MicrostructureSolver" vertex="1">
-          <mxGeometry height="50" width="140" x="20" y="215" as="geometry" />
-        </mxCell>
+
         <mxCell id="group_scheme" parent="1" style="swimlane;whiteSpace=wrap;html=1;startSize=23;" value="Solving Scheme Details" vertex="1">
           <mxGeometry height="260" width="960" x="80" y="540" as="geometry" />
         </mxCell>
-        <mxCell id="init_step" parent="group_scheme" style="rounded=1;whiteSpace=wrap;html=1;" value="1. Initialize&#xa;(Load Neper/MicrostructPy)" vertex="1">
+        <mxCell id="init_step" parent="group_scheme" style="rounded=1;whiteSpace=wrap;html=1;" value="1. Initialize" vertex="1">
           <mxGeometry height="40" width="140" x="10" y="40" as="geometry" />
         </mxCell>
         <mxCell id="time_loop" parent="group_scheme" style="rhombus;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="2. Time Loop&#xa;(while t &lt; t_end)" vertex="1">
@@ -94,9 +79,7 @@
         <mxCell id="solver_step" parent="group_scheme" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" value="3a. Heat Solver&#xa;(Compute T Field)" vertex="1">
           <mxGeometry height="50" width="120" x="330" y="35" as="geometry" />
         </mxCell>
-        <mxCell id="micro_step" parent="group_scheme" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1" value="3b. Microstructure&#xa;Update" vertex="1">
-          <mxGeometry height="50" width="140" x="480" y="35" as="geometry" />
-        </mxCell>
+        <!-- Microstructure step removed (disabled) -->
         <mxCell id="io_check" parent="group_scheme" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="4. IO Check" vertex="1">
           <mxGeometry height="50" width="100" x="650" y="35" as="geometry" />
         </mxCell>
@@ -109,12 +92,10 @@
         <mxCell id="edge_scheme_2" edge="1" parent="group_scheme" source="time_loop" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="solver_step">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="edge_scheme_3" edge="1" parent="group_scheme" source="solver_step" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="micro_step">
+        <mxCell id="edge_scheme_3" edge="1" parent="group_scheme" source="solver_step" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="io_check">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="edge_scheme_micro_io" edge="1" parent="group_scheme" source="micro_step" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="io_check">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
+        <!-- Micro->IO edge removed (micro disabled) -->
         <mxCell id="edge_scheme_4" edge="1" parent="group_scheme" source="io_check" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="logging">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
@@ -126,12 +107,8 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="micro_logic" parent="group_scheme" style="shape=process;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=10;" value="&lt;b&gt;Microstructure Logic:&lt;/b&gt;&#xa;1. Get Isotherm (T_melt)&#xa;2. Query AABB Tree (Melt Zone)&#xa;3. Remove melted seeds&#xa;4. Project seeds to front&#xa;5. Evolve &amp; Write new seeds" vertex="1">
-          <mxGeometry height="110" width="220" x="440" y="140" as="geometry" />
-        </mxCell>
-        <mxCell id="edge_micro_detail" edge="1" parent="group_scheme" source="micro_step" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="micro_logic">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
+        <!-- Detailed microstructure logic removed -->
+        <!-- Micro detail edge removed -->
         <mxCell id="edge_main_factory" edge="1" parent="1" source="main" style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="abs_factory">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
@@ -151,14 +128,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="edge_wkf_micro" edge="1" parent="1" source="workflow_run" style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="abs_micro">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="360" y="370" />
-              <mxPoint x="360" y="280" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
+        <!-- Workflow->micro edge removed (micro disabled) -->
       </root>
     </mxGraphModel>
   </diagram>
