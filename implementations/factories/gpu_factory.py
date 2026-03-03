@@ -19,7 +19,7 @@ class GPUSimulationFactory(SimulationFactory):
         """
         Create the GPU spectral solver instance using the standard Numba/NumPy backend.
         """
-        return SpectralSolverGPU(self.context)
+        return SpectralSolverGPU()
 
     def create_io_manager(self) -> IOManager:
         """

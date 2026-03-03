@@ -1,8 +1,17 @@
+"""
+StandaloneHeatRunner – self-contained simulation runner.
+
+This class extracts the time-stepping loop, I/O management, and telemetry
+from ``SimulationWorkflow``. It is the recommended entry-point for running
+fastHeatSolv in **standalone** mode (i.e. driven by a YAML config file).
+"""
+
 import time
 import logging
 import os
 import platform
 from typing import Optional, Dict, Any
+
 from interfaces.factory import SimulationFactory
 from interfaces.solver import HeatSolver
 from interfaces.io import IOManager
@@ -10,30 +19,32 @@ from core.parameters import SimulationContext
 
 logger = logging.getLogger(__name__)
 
-class SimulationWorkflow:
-    """
-    Orchestrates the entire simulation lifecycle.
 
-    This class implements the Strategy pattern by delegating specific tasks
-    (solving, I/O) to components created by the SimulationFactory. It manages
-    the time-stepping loop, logging, and coordinating outputs.
-
-    Attributes:
-        context (SimulationContext): Global configuration and state parameters.
-        factory (SimulationFactory): Factory for creating backend-specific components.
-        heat_solver (HeatSolver): The numerical solver instance.
-        io_manager (IOManager): The input/output manager instance.
+class StandaloneHeatRunner:
     """
+    Orchestrates the full simulation lifecycle in standalone mode.
+
+    Responsibilities
+    ----------------
+    * Creates solver and I/O manager via the supplied factory.
+    * Runs the time-stepping loop (``while t < t_end``).
+    * Delegates periodic / end-of-run output to the ``IOManager``.
+    * Prints ETA / telemetry to the logger.
+
+    Parameters
+    ----------
+    context : SimulationContext
+        Fully populated simulation parameters.
+    factory : SimulationFactory
+        Abstract factory that produces backend-specific components.
+    """
+
     def __init__(self, context: SimulationContext, factory: SimulationFactory):
         self.context = context
         self.factory = factory
-        
-        # Instantiate core components via Factory
-        # The factory decides WHICH implementation (CPU vs GPU, Spectral vs FEM) is used.
+
+        # Create components via factory
         self.heat_solver: HeatSolver = self.factory.create_heat_solver()
-        
-        
-        # Create IO Manager
         self.io_manager: IOManager = self.factory.create_io_manager()
 
     # ------------------------------------------------------------------
@@ -52,8 +63,13 @@ class SimulationWorkflow:
         except Exception:
             self._psutil_proc = None
 
-    def _log_progress(self, t: float, step: int, step_elapsed: float,
-                      metrics: Optional[Dict[str, Any]]) -> None:
+    def _log_progress(
+        self,
+        t: float,
+        step: int,
+        step_elapsed: float,
+        metrics: Optional[Dict[str, Any]],
+    ) -> None:
         """Log ETA, memory usage and solver metrics at the configured interval."""
         self._total_step_time += step_elapsed
         self._n_steps_timed += 1
@@ -68,7 +84,7 @@ class SimulationWorkflow:
 
         if frac_done > 0:
             est_remaining = (elapsed / frac_done) - elapsed
-            eta_str = time.strftime('%H:%M:%S', time.gmtime(est_remaining))
+            eta_str = time.strftime("%H:%M:%S", time.gmtime(est_remaining))
             mem_mb = None
             if self._psutil_proc is not None:
                 try:
@@ -82,7 +98,9 @@ class SimulationWorkflow:
                 f"avg_step={avg_step:.3f}s | mem_mb={mem_mb if mem_mb is not None else 'NA'}"
             )
         else:
-            logger.info(f"[ETA] Step {step} | t={t:.6e}s | Elapsed: {elapsed:.1f}s | Remaining: unknown")
+            logger.info(
+                f"[ETA] Step {step} | t={t:.6e}s | Elapsed: {elapsed:.1f}s | Remaining: unknown"
+            )
 
         # Format metrics
         parts = []
@@ -100,11 +118,9 @@ class SimulationWorkflow:
     # ------------------------------------------------------------------
     #  Main entry point
     # ------------------------------------------------------------------
-    def run(self):
-        """
-        Execute the main simulation loop.
-        """
-        logger.info("Initializing simulation workflow...")
+    def run(self) -> None:
+        """Execute the main simulation loop (I/O + physics + telemetry)."""
+        logger.info("Initializing standalone simulation runner...")
 
         # 1. Initialize IO System
         self.io_manager.initialize(self.context)
@@ -112,50 +128,55 @@ class SimulationWorkflow:
         # --- LOG FILE SETUP ---
         run_dir = self.io_manager.base_dir
         if run_dir is not None:
-            import os
             log_file_path = os.path.join(run_dir, "logs", "simulation.log")
-            # Remove previous file handlers if any (avoid duplicate logs)
+            # Remove previous file handlers to avoid duplicates
             for h in logger.handlers[:]:
                 if isinstance(h, logging.FileHandler):
                     logger.removeHandler(h)
             file_handler = logging.FileHandler(log_file_path, mode="a")
             file_handler.setLevel(logging.INFO)
-            file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+            file_handler.setFormatter(
+                logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+            )
             logger.addHandler(file_handler)
             logger.info(f"File logging enabled: {log_file_path}")
 
-        # 2. Initialize Solver State
+        # 2. Initialize Solver (pass context for dependency injection)
         state = self.heat_solver.initialize(self.context)
 
-        # --- Startup context & environment summary (useful for reproducibility) ---
+        # --- Startup context & environment summary ---
         try:
             import numpy as _np
             try:
                 import cupy as _cp
-                cupy_ver = getattr(_cp, '__version__', 'unknown')
+                cupy_ver = getattr(_cp, "__version__", "unknown")
             except Exception:
-                _cp = None
                 cupy_ver = None
         except Exception:
             _np = None
             cupy_ver = None
 
-        geom = getattr(self.context, 'geom', None)
-        mat = getattr(self.context, 'mat', None)
-        num = getattr(self.context, 'num', None)
+        geom = getattr(self.context, "geom", None)
+        mat = getattr(self.context, "mat", None)
+        num = getattr(self.context, "num", None)
 
-        logger.info(f"Config Summary: method={self.context.method}, backend={self.context.backend}, "
-                    f"mesh={(getattr(geom,'nx',None))}x{getattr(geom,'ny',None)}x{getattr(geom,'nz',None)}, "
-                    f"dt={getattr(num,'dt',None):.3e}, t_end={getattr(num,'t_end',None):.3e}, "
-                    f"material={getattr(mat,'name', None)}")
-        logger.info(f"Environment: python={platform.python_version()}, numpy={getattr(_np,'__version__',None)}, cupy={cupy_ver}")
+        logger.info(
+            f"Config Summary: method={self.context.method}, backend={self.context.backend}, "
+            f"mesh={getattr(geom, 'nx', None)}x{getattr(geom, 'ny', None)}x{getattr(geom, 'nz', None)}, "
+            f"dt={getattr(num, 'dt', None):.3e}, t_end={getattr(num, 't_end', None):.3e}, "
+            f"material={getattr(mat, 'name', None)}"
+        )
+        logger.info(
+            f"Environment: python={platform.python_version()}, "
+            f"numpy={getattr(_np, '__version__', None)}, cupy={cupy_ver}"
+        )
 
         # 3. Time Loop
         t = 0.0
         step = 0
         dt = self.context.num.dt
         t_end = self.context.num.t_end
-        laser_path = getattr(self.context, 'laser_path')
+        laser_path = getattr(self.context, "laser_path")
 
         logger.info(f"Starting time loop: 0 -> {t_end:.4e} s (dt={dt:.2e})")
         self._init_telemetry()
@@ -164,31 +185,30 @@ class SimulationWorkflow:
             # A. Periodic output (IOManager decides internally)
             self.io_manager.process_step(t, step, state, laser_path)
 
-            # B. Evolve State with Heat Solver
+            # B. Evolve state (pure physics – no I/O inside step)
             step_start = time.time()
             state, metrics = self.heat_solver.step(t, dt)
-
             step_elapsed = time.time() - step_start
 
-            # D. Advance Time
+            # C. Advance time
             t += dt
             step += 1
 
-            # E. Telemetry (internally rate-limited)
+            # D. Telemetry (internally rate-limited)
             self._log_progress(t, step, step_elapsed, metrics)
 
         # End-of-simulation outputs
         self.io_manager.process_end(t, step, state, laser_path)
 
         # 4. Finalize
-        self.heat_solver.finalize() # TODO - we should have a finalize method on the HeatSolver
+        self.heat_solver.finalize()
         self.io_manager.finalize()
+
         # Optionally log profiler diagnostics path if present
         try:
-            run_dir = getattr(self.io_manager, 'base_dir', None)
+            run_dir = getattr(self.io_manager, "base_dir", None)
             if run_dir:
-                prof_path = os.path.join(run_dir, 'diagnostics', 'profiler.txt')
-                import os
+                prof_path = os.path.join(run_dir, "diagnostics", "profiler.txt")
                 if os.path.exists(prof_path):
                     logger.info(f"Profiler output written to: {prof_path}")
         except Exception:

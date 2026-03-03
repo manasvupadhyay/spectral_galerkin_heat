@@ -10,7 +10,7 @@ from dataclasses import asdict
 # Ensure we can import from local modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from core.workflow import SimulationWorkflow
+from core.standalone_runner import StandaloneHeatRunner
 from core.parameters import (
     SimulationContext, NumParams, MaterialParams, GeomParams, LaserParams
 )
@@ -26,99 +26,6 @@ def load_config(path: str) -> Dict[str, Any]:
         raise FileNotFoundError(f"Config file not found: {path}")
     with open(path, "r") as f:
         return yaml.safe_load(f)
-
-def build_context(cfg: Dict[str, Any]) -> SimulationContext:
-    """Construct the SimulationContext object from dictionary configuration."""
-    
-    # Define standard floating point precision for the simulation.
-    # np.float32 is compatible with both CPU (NumPy) and GPU (CuPy) backends 
-    # for scalar parameter passing.
-    real_t = np.float32
-
-    # 1. Numerical & Simulation Meta-Parameters
-    sim_cfg = cfg.get('simulation', {})
-    domain_cfg = cfg.get('domain', {})
-    
-    # Capture Method and Backend from config
-    sim_method = sim_cfg.get('method', 'spectral').lower()
-    sim_backend = sim_cfg.get('backend', 'cpu').lower()
-    
-    # Calculate mesh geometry
-    Lx, Ly, Lz = domain_cfg['size']
-    nx, ny, nz = domain_cfg['mesh']
-    
-    # Calculate Time Steps
-    t_end = sim_cfg.get('duration', 0.01) # Default 10ms
-    dt = real_t(sim_cfg['dt'])
-    
-    num_params = NumParams(
-        dt=float(dt), # NumParams types helper
-        nx=int(nx),
-        ny=int(ny),
-        nz=int(nz),
-        t_end=float(t_end),
-        update_interval=float(sim_cfg.get('update_interval'))
-    )
-
-    geom_params = GeomParams(
-        Lx=float(Lx), Ly=float(Ly), Lz=float(Lz),
-        nx=int(nx), ny=int(ny), nz=int(nz)
-    )
-
-    # 2. Material Parameters
-    mat_cfg = cfg.get('material', {})
-    # Load material properties as real_t (float32) to avoid upcasting
-    mat_params = MaterialParams(
-        name=mat_cfg.get('name', 'Material'),
-        rho=real_t(mat_cfg['rho']),
-        k=real_t(mat_cfg['k']),
-        Cp=real_t(mat_cfg['Cp']),
-        L_f=real_t(mat_cfg.get('L_f')),
-        T_solidus=real_t(mat_cfg.get('T_solidus')),
-        T_liquidus=real_t(mat_cfg.get('T_liquidus')),
-        Pa=real_t(mat_cfg.get('Pa')),
-        R_v=real_t(mat_cfg.get('R_v')),
-        T_boil=real_t(mat_cfg.get('T_boil')),
-        DeltaH_LV=real_t(mat_cfg.get('DeltaH_LV')),
-        T0=real_t(mat_cfg.get('T0')) # Reference temperature
-    )
-
-    # 3. Laser Parameters
-    laser_cfg = cfg.get('laser', {})
-    laser_params = LaserParams(
-        radius=real_t(laser_cfg['radius']),
-        absorptivity=real_t(laser_cfg['absorptivity']),
-        power=real_t(laser_cfg.get('power_nominal'))
-    )
-
-    # 4. Laser Path Strategy
-    path_cfg = laser_cfg.get('path', {})
-    laser_path = None
-    if path_cfg.get('type', '').lower() == 'gcode':
-        from utils.gcode_path import GCodeLaserPath
-        gcode_file = path_cfg.get('file', None)
-        initial_position = tuple(path_cfg.get('initial_position', [0.0, 0.0]))
-        if gcode_file is not None:
-            # Assume relative to config/paths if not absolute
-            if not os.path.isabs(gcode_file):
-                gcode_file = os.path.join(os.path.dirname(__file__), 'config', 'paths', gcode_file)
-            laser_path = GCodeLaserPath(gcode_file, initial_position=initial_position)
-
-    # 5. IO Parameters (flat dict: interval, outputs, at_end, etc.)
-    io_cfg = cfg.get('io', {})
-    # Optionally validate/normalize io_cfg here
-
-    ctx = SimulationContext(
-        num=num_params,
-        mat=mat_params,
-        geom=geom_params,
-        laser=laser_params,
-        laser_path=laser_path,
-        io=io_cfg,
-        method=sim_method,
-        backend=sim_backend
-    )
-    return ctx
 
 def get_factory(context: SimulationContext):
     """
@@ -167,7 +74,7 @@ def main():
     # 1. Load Config & Context
     logger.info(f"Loading configuration from {args.config}")
     config = load_config(args.config)
-    context = build_context(config)
+    context = SimulationContext.from_dict(config)
 
     # 2. Determine Computing Backend
     # Priority: CLI Argument > Config File > Default (CPU)
@@ -184,7 +91,7 @@ def main():
     try:
         # get_factory only needs context
         factory = get_factory(context) 
-        workflow = SimulationWorkflow(context, factory)
+        workflow = StandaloneHeatRunner(context, factory)
 
         # 4. Run Simulation
         workflow.run()

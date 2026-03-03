@@ -19,7 +19,7 @@ class CPUSimulationFactory(SimulationFactory):
         """
         Create the CPU spectral solver instance using the standard Numba/NumPy backend.
         """
-        return SpectralSolverCPU(self.context)
+        return SpectralSolverCPU()
 
     def create_io_manager(self) -> IOManager:
         """

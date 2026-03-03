@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Any, Dict, TYPE_CHECKING
 import numpy as np
+import os
 
 if TYPE_CHECKING:
     from interfaces.laser import LaserPath
@@ -112,3 +113,69 @@ class SimulationContext:
     # Execution configuration
     method: str = "spectral"  # "spectral" or "fem"
     backend: str = "cpu"      # "cpu" or "gpu"
+
+    @classmethod
+    def from_dict(cls, cfg: Dict[str, Any]) -> 'SimulationContext':
+        real_t = np.float32
+        sim_cfg = cfg.get('simulation', {})
+        domain_cfg = cfg.get('domain', {})
+        sim_method = sim_cfg.get('method', 'spectral').lower()
+        sim_backend = sim_cfg.get('backend', 'cpu').lower()
+        Lx, Ly, Lz = domain_cfg['size']
+        nx, ny, nz = domain_cfg['mesh']
+        t_end = sim_cfg.get('duration', 0.01)
+        dt = real_t(sim_cfg['dt'])
+        
+        num_params = NumParams(
+            dt=float(dt),
+            nx=int(nx),
+            ny=int(ny),
+            nz=int(nz),
+            t_end=float(t_end),
+            update_interval=float(sim_cfg.get('update_interval', 1e-3))
+        )
+
+        geom_params = GeomParams(
+            Lx=float(Lx), Ly=float(Ly), Lz=float(Lz),
+            nx=int(nx), ny=int(ny), nz=int(nz)
+        )
+
+        mat_cfg = cfg.get('material', {})
+        mat_params = MaterialParams(
+            name=mat_cfg.get('name', 'Material'),
+            rho=real_t(mat_cfg['rho']),
+            k=real_t(mat_cfg['k']),
+            Cp=real_t(mat_cfg['Cp']),
+            L_f=real_t(mat_cfg.get('L_f', 0.0)),
+            T_solidus=real_t(mat_cfg.get('T_solidus', 0.0)),
+            T_liquidus=real_t(mat_cfg.get('T_liquidus', 0.0)),
+            Pa=real_t(mat_cfg.get('Pa', 0.0)),
+            R_v=real_t(mat_cfg.get('R_v', 0.0)),
+            T_boil=real_t(mat_cfg.get('T_boil', 0.0)),
+            DeltaH_LV=real_t(mat_cfg.get('DeltaH_LV', 0.0)),
+            T0=real_t(mat_cfg.get('T0', 0.0))
+        )
+
+        laser_cfg = cfg.get('laser', {})
+        laser_params = LaserParams(
+            radius=real_t(laser_cfg['radius']),
+            absorptivity=real_t(laser_cfg['absorptivity']),
+            power=real_t(laser_cfg.get('power_nominal'))
+        )
+        
+        # Laser Path
+        path_cfg = laser_cfg.get('path', {})
+        laser_path = None
+        if path_cfg.get('type', '').lower() == 'gcode':
+            from utils.gcode_path import GCodeLaserPath
+            gcode_file = path_cfg.get('file', None)
+            initial_position = tuple(path_cfg.get('initial_position', [0.0, 0.0]))
+            if gcode_file is not None:
+                if not os.path.isabs(gcode_file):
+                     # parameters.py is in core/, so we need dirname(dirname(__file__)) to reach root
+                     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                     gcode_file = os.path.join(base_dir, 'config', 'paths', gcode_file)
+                laser_path = GCodeLaserPath(gcode_file, initial_position=initial_position)
+                
+        io_cfg = cfg.get('io', {})
+        return cls(num=num_params, mat=mat_params, geom=geom_params, laser=laser_params, laser_path=laser_path, io=io_cfg, method=sim_method, backend=sim_backend)

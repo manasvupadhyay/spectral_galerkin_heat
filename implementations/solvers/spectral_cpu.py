@@ -3,6 +3,7 @@ import implementations.physics.spectral_cpu_kernels as kernels
 from core.parameters import SimulationContext
 from interfaces.solver import HeatSolver
 from interfaces.laser import LaserState, LaserPath
+from typing import Optional
 
 class SpectralSolverCPU(HeatSolver):
     """
@@ -10,21 +11,30 @@ class SpectralSolverCPU(HeatSolver):
     It manages the solver state, initialization, and time-stepping logic, including laser source,
     latent heat, and evaporation effects. The solver is designed for modularity and performance.
     """
-    def __init__(self, context: SimulationContext):
+    def __init__(self, context: Optional[SimulationContext] = None):
         """
-        Initialize the SpectralSolverCPU with the simulation context.
-        Args:
-            context: SimulationContext containing geometry, material, laser, and numerical parameters.
+        Optionally attach a SimulationContext at construction time.
+        The context can also be provided (or overridden) later via
+        ``initialize(context)``.
         """
-        self.context = context
-        self.state: kernels.SpectralSolverState = None
+        self.context: Optional[SimulationContext] = context
+        self.state: Optional[kernels.SpectralSolverState] = None
         
-    def initialize(self):
+    def initialize(self, context: Optional[SimulationContext] = None):
         """
         Set up the spectral solver state, allocate buffers, and set the initial condition.
+
+        Args:
+            context: If provided, replaces the stored SimulationContext.
+
         Returns:
             SpectralSolverState: The initialized solver state object.
         """
+        if context is not None:
+            self.context = context
+        if self.context is None:
+            raise RuntimeError("SimulationContext must be provided either at construction or in initialize().")
+
         geom = self.context.geom
         num = self.context.num
         mat = self.context.mat  
@@ -135,6 +145,26 @@ class SpectralSolverCPU(HeatSolver):
         # Update state for next step
         SsState.a = buffers.a_temp.copy()
         return SsState, metrics
+
+    def set_state(self, temperature_field: np.ndarray) -> None:
+        """
+        Overwrite the internal spectral coefficients from a spatial temperature field.
+
+        Converts the cell-centred temperature array into spectral (DCT) modes
+        so that the solver can continue stepping from the injected state.
+
+        Args:
+            temperature_field: 3-D NumPy array of shape ``(nz, ny, nx)``.
+        """
+        if self.state is None or self.context is None:
+            raise RuntimeError("Solver must be initialized before calling set_state().")
+        geom = self.context.geom
+        T = np.asarray(temperature_field, dtype=np.float32)
+        # Forward DCT-II (ortho) converts spatial field to ortho-normalised coefficients.
+        # The solver's internal modes use a scaling of sqrt(dx*dy*dz) relative to the
+        # standard ortho DCT coefficients.
+        scale = np.sqrt(np.float32(geom.dx * geom.dy * geom.dz))
+        self.state.a = kernels.DCT_II(T) * scale
 
     def finalize(self) -> None:
         """
