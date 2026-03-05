@@ -1,5 +1,6 @@
 import numpy as np
 import os 
+from pyfftw.interfaces.scipy_fft import dctn
 
 try:
     import cupy as cp
@@ -10,13 +11,13 @@ except ImportError:
 import implementations.physics.spectral_cpu_kernels as kernels
 
 
-def get_array_module(arr):
+def _get_array_module(arr):
     if cp is not None and hasattr(arr, 'device'): # Check if it's a cupy array
         return cp
     return np
 
 def _get_kernels(arr):
-    xp = get_array_module(arr)
+    xp = _get_array_module(arr)
     if xp == cp:
          import implementations.physics.spectral_gpu_kernels as gpu_kernels
          return gpu_kernels
@@ -35,12 +36,16 @@ def _cosine_basis_along_axis(n_modes, length, coords):
     return np.cos(np.pi * indices[:, None] * coords[None, :] / length)
 
 def reconstruct_temperature_volume(a, SsState):
-    """Reconstruct the temperature field on the full simulation grid."""
+    """Reconstruct the temperature field on the full simulation grid.
+    
+    note : the reconstruction bases (Bx, By, Bz) must be precomputed before, 
+    The reconstruction grid is node centered in x, y, z
+    """
+
     if hasattr(a, 'get'):
         a = a.get()  # Move to CPU if it's a CuPy array
     
-    # Support both old monolithic state and new decoupled state
-    grid = SsState.grid if hasattr(SsState, 'grid') else SsState
+    grid = SsState.grid
 
     Bx = grid.Bx_recon  # (modes_x, nx_points)
     By = grid.By_recon  # (modes_y, ny_points)
@@ -56,8 +61,82 @@ def reconstruct_temperature_volume(a, SsState):
 
     return T_full.astype(np.float32)
 
-def reconstruct_temperature_DCT(a, num, geom, SsState):
-    return 
+def reconstruct_temperature_DCT(a, SsState):
+    """Reconstruct node-centered temperature field using DCT type I.
+
+    The modal expansion is::
+
+        T(x,y,z) = sum_{m,n,p} a[p,n,m] * Cm*cos(m*pi*x/Lx)
+                                          * Cn*cos(n*pi*y/Ly)
+                                          * Cp*cos(p*pi*z/Lz)
+
+    evaluated on the **node-centered** grid  x_j = j*dx  (j = 0..nx),
+    and likewise for y and z.  Output shape is **(nx+1, ny+1, nz+1)**,
+    identical to :func:`reconstruct_temperature_volume`.
+
+    **Why DCT-I?**
+    DCT type 3 (``IDCT_II``) evaluates at half-integer (cell-centred)
+    nodes.  The reconstruction grid is integer-spaced (node-centred),
+    which maps to the DCT type I kernel::
+
+        DCT-I of length M (unnorm):
+        y[k] = x[0] + (-1)^k x[M-1] + 2 * sum_{n=1}^{M-2} x[n] cos(pi*n*k/(M-1))
+
+    By padding N modes to length N+1 and halving interior modes, the
+    DCT-I output equals the desired cosine series at node points.
+    Complexity is O(N^3 log N) vs O(N^4) for explicit tensor products.
+
+    Parameters
+    ----------
+    a : ndarray, shape (nz, ny, nx)
+        Spectral coefficients (CuPy arrays are moved to CPU automatically).
+    SsState : SpectralSolverState
+        Must have ``grid.Cm``, ``grid.Cn``, ``grid.Cp`` normalization vectors.
+
+    Returns
+    -------
+    T : ndarray, shape (nx+1, ny+1, nz+1), dtype float32
+        Node-centred temperature field.
+    """
+    import pyfftw
+    pyfftw.interfaces.cache.enable()
+
+    if hasattr(a, 'get'):
+        a = a.get()
+
+    a = np.asarray(a, dtype=np.float32)
+    grid = SsState.grid
+    nz, ny, nx = a.shape
+
+    # Normalization coefficients  Cm[0]=sqrt(1/L), Cm[m>=1]=sqrt(2/L)
+    Cm = np.asarray(grid.Cm, dtype=np.float32)  # (nx,)
+    Cn = np.asarray(grid.Cn, dtype=np.float32)  # (ny,)
+    Cp = np.asarray(grid.Cp, dtype=np.float32)  # (nz,)
+
+    # Step 1: weight by normalization
+    # b[p,n,m] = a[p,n,m] * Cp[p] * Cn[n] * Cm[m]
+    b = a * (Cp[:, None, None] * Cn[None, :, None] * Cm[None, None, :])
+
+    # Step 2: per-axis halving for DCT-I input
+    # w[0]=1, w[1:]=0.5  — factors multiply across axes
+    wx = np.ones(nx, dtype=np.float32); wx[1:] = 0.5
+    wy = np.ones(ny, dtype=np.float32); wy[1:] = 0.5
+    wz = np.ones(nz, dtype=np.float32); wz[1:] = 0.5
+    b *= wz[:, None, None] * wy[None, :, None] * wx[None, None, :]
+
+    # Step 3: pad to (nz+1, ny+1, nx+1) with zeros
+    padded = np.zeros((nz + 1, ny + 1, nx + 1), dtype=np.float32)
+    padded[:nz, :ny, :nx] = b
+
+    # Step 4: 3-D DCT-I (type 1, unnorm) → node-centred values
+    T = pyfftw.interfaces.scipy_fft.dctn(
+        padded, type=1, norm=None, axes=(0, 1, 2), workers=-1
+    )
+
+    # Step 5: transpose (nz+1, ny+1, nx+1) → (nx+1, ny+1, nz+1)
+    T = T.transpose(2, 1, 0)
+
+    return T.astype(np.float32)
 
 def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
     """Evaluate the temperature field at arbitrary points using modal expansion."""
@@ -92,8 +171,6 @@ def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
 
     return temps.astype(np.float32)
 
-
-OUT_DIR = "out"
 
 def save_temp_profiles(
     a,

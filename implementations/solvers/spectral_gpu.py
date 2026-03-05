@@ -4,7 +4,7 @@ import implementations.physics.spectral_gpu_kernels as kernels
 from core.parameters import SimulationContext
 from interfaces.solver import HeatSolver
 from interfaces.laser import LaserState, LaserPath
-from typing import Optional
+from typing import Optional, Any, Tuple, Dict
 
 class SpectralSolverGPU(HeatSolver):
     """
@@ -21,7 +21,7 @@ class SpectralSolverGPU(HeatSolver):
         self.context: Optional[SimulationContext] = context
         self.state: Optional[kernels.SpectralSolverState] = None
 
-    def initialize(self, context: Optional[SimulationContext] = None):
+    def initialize(self, context: SimulationContext) -> Any:
         """
         Set up the spectral solver state, allocate buffers, and set the initial condition.
 
@@ -31,10 +31,7 @@ class SpectralSolverGPU(HeatSolver):
         Returns:
             SpectralSolverState: The initialized solver state object.
         """
-        if context is not None:
-            self.context = context
-        if self.context is None:
-            raise RuntimeError("SimulationContext must be provided either at construction or in initialize().")
+        self.context = context
 
         geom = self.context.geom
         num = self.context.num
@@ -51,7 +48,7 @@ class SpectralSolverGPU(HeatSolver):
 
         return self.state
 
-    def step(self, t, dt):
+    def step(self, t: float, dt: float) -> Tuple[Any, Dict[str, float]]:
         """
         Advance the spectral solution by one time step using ETD1 and nonlinear evaporation correction.
         Handles laser source, latent heat, and evaporation effects.

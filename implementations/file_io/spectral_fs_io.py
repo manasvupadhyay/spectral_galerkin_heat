@@ -116,7 +116,7 @@ class LocalFSIOManager(IOManager):
                 filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
                 if hasattr(field, "get"):
                     field = field.get()
-                save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
+                _save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
                 logger.info(f"Saved field for step {step} to {filename_base}.h5/.xmf")
 
             elif output_type == 'modes':
@@ -217,7 +217,7 @@ class LocalFSIOManager(IOManager):
                     
                     if hasattr(field, "get"):
                         field = field.get()
-                    save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
+                    _save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
                     logger.info(f"Generated XDMF for cut views at {xdmf_path}")
 
                 # 2. Generate cut views for each plane
@@ -340,7 +340,7 @@ class LocalFSIOManager(IOManager):
         logger.info(f"Simulation run {self.run_id} finalized. Data in {self.base_dir}")
 
 
-def save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", verbose=False, t=None, step=None):
+def _save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", verbose=False, t=None, step=None):
     """Serialize a 3D scalar field, on a uniform domain, to HDF5 with an accompanying XDMF wrapper. Adds time and step to XMF metadata and filenames."""
     h5_name = f"{filename_base}.h5"
     xmf_name = f"{filename_base}.xmf"

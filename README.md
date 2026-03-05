@@ -280,5 +280,7 @@ This enables efficient disk usage and post-processing tailored to your needs.
 - [ ] **Update Logic**: Enable the solver to load a previous known temperature field
 - [ ] **Adding Material**: Change the domain definition on the fly to
     - Account for an added layer of material
+- [ ] **API Design**: Enable calls from an external Orchestrator / Adapter
+- [ ] ****
 ---
 

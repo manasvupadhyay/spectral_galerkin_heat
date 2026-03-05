@@ -12,7 +12,7 @@ import utils.spectral_helpers as spec_hp  # Assuming this contains only scalar l
 # ======================================
 
 @cuda.jit
-def update_modes_etd1_kernel(aK, KK, Cp_broadcast, B_scaled, a_temp_out):
+def _update_modes_etd1_kernel(aK, KK, Cp_broadcast, B_scaled, a_temp_out):
     """
     Update spectral coefficients for ETD1 scheme.
     Grid: 3D (nz, ny, nx)
@@ -26,7 +26,7 @@ def update_modes_etd1_kernel(aK, KK, Cp_broadcast, B_scaled, a_temp_out):
         a_temp_out[z, y, x] = aK[z, y, x] + factor * B_scaled[y, x]
 
 @cuda.jit
-def add_source_term_modes_kernel(a_temp, KK, Q_modes):
+def _add_source_term_modes_kernel(a_temp, KK, Q_modes):
     """
     Accumulate volumetric source term into temperature modes.
     Grid: 3D (nz, ny, nx)
@@ -40,7 +40,7 @@ def add_source_term_modes_kernel(a_temp, KK, Q_modes):
 
 
 @cuda.jit
-def compute_evaporation_flux_kernel(T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liquidus):
+def _compute_evaporation_flux_kernel(T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liquidus):
     """
     Compute evaporative heat flux (Arrhenius law).
     Grid: 2D (ny, nx)
@@ -244,14 +244,14 @@ class FineMeshState:
     def update(self, laser_state):
         """Update fine mesh box coordinates and basis subsets."""
         # Update X-Axis
-        ix_start, ix_end, _ = calculate_subgrid_indices(
+        ix_start, ix_end, _ = _calculate_subgrid_indices(
             laser_state.x, self.dx_fine, self.nx_fine_total, self.nx_box
         )
         self.box_x[:] = self.x_fine[ix_start:ix_end]
         self.Bx_fine[:, :] = self.Bx_fine_full[:, ix_start:ix_end]
         
         # Update Y-Axis
-        iy_start, iy_end, _ = calculate_subgrid_indices(
+        iy_start, iy_end, _ = _calculate_subgrid_indices(
             laser_state.y, self.dy_fine, self.ny_fine_total, self.ny_box
         )
         self.box_y[:] = self.y_fine[iy_start:iy_end]
@@ -302,10 +302,10 @@ class SpectralSolverState:
         self.buffers = SolverBuffers(num, self.fine_mesh)
         
         # Precompute propagators
-        self.K, self.KK = precompute_K_KK(phys, num, geom)
+        self.K, self.KK = _precompute_K_KK(phys, num, geom)
 
 
-def precompute_K_KK(phys, num, geom):
+def _precompute_K_KK(phys, num, geom):
     """
     Compute spectral Propagators (K, KK) based on grid and time step.
     K = exp(-alpha * k^2 * dt) for ETD1 (Exact integration of linear part)
@@ -343,7 +343,7 @@ def update_modes_etd1(aK, KK, Cp_broadcast, B_scaled, a_temp_out):
         (ny + threadsperblock[1] - 1) // threadsperblock[1],
         (nx + threadsperblock[2] - 1) // threadsperblock[2]
     )
-    update_modes_etd1_kernel[blockspergrid, threadsperblock](aK, KK, Cp_broadcast, B_scaled, a_temp_out)
+    _update_modes_etd1_kernel[blockspergrid, threadsperblock](aK, KK, Cp_broadcast, B_scaled, a_temp_out)
 
 
 
@@ -356,7 +356,7 @@ def add_source_term_modes(a_temp, KK, Q_modes):
         (ny + threadsperblock[1] - 1) // threadsperblock[1],
         (nx + threadsperblock[2] - 1) // threadsperblock[2]
     )
-    add_source_term_modes_kernel[blockspergrid, threadsperblock](a_temp, KK, Q_modes)
+    _add_source_term_modes_kernel[blockspergrid, threadsperblock](a_temp, KK, Q_modes)
 
 
 @cuda.jit
@@ -392,7 +392,7 @@ def compute_evaporation_flux(T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liq
         (ny + threadsperblock[0] - 1) // threadsperblock[0],
         (nx + threadsperblock[1] - 1) // threadsperblock[1]
     )
-    compute_evaporation_flux_kernel[blockspergrid, threadsperblock](
+    _compute_evaporation_flux_kernel[blockspergrid, threadsperblock](
         T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liquidus
     )
 
@@ -429,7 +429,7 @@ def project_box_to_modes(field_box, SsState):
     return modes
 
 
-def reconstruct_temperature_box(a, SsState):
+def _reconstruct_temperature_box(a, SsState):
     """
     Reconstructs temperature in a small ROI around the laser.
     Pure Python function using tensordot (optimized in numpy).
@@ -460,7 +460,7 @@ def compute_latent_heat_source(Q_buffer, phys, laser_state, num, SsState, alpha=
     fm = SsState.fine_mesh
 
     # 1. Reconstruct Temperature on Fine Mesh
-    T_box, _ = reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
+    T_box, _ = _reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
 
     # 2. Initialize/Retrieve State buffers
     if fm.T_prev is None:
@@ -533,32 +533,7 @@ def reconstruct_surface_temperature(a, SsState):
 
 
 
-def reconstruct_temperature_xz(a, num, geom, SsState, laser, y0=None):
-    """
-    Optimized reconstruction of X-Z temperature slice using CuPy.
-    """
-    if y0 is None:
-        y0 = laser.y0
-        
-    nx, ny, nz = num.nx, num.ny, num.nz
-    
-    # Evaluate cosine basis at specific y0 (ny,)
-    # Warning: cp.arange returns array, ensure types match
-    y_indices = cp.arange(ny, dtype=cp.float32)
-    cos_y = SsState.Cn * cp.cos(np.pi * y_indices * y0 / geom.Ly)
-    
-    # Contract Y axis: (nz, ny, nx) dot (ny,) -> (nz, nx)
-    A_xz = cp.tensordot(a, cos_y, axes=(1, 0)) 
-    
-    # Reconstruct X-Z field using 2D IDCT (Type 3) on axes (0, 1) corresponding to (nz, nx)
-    # Note: dctn axes refer to the dimensions of A_xz
-    scale_xz = cp.sqrt(nx * nz / (geom.Lx * geom.Lz))
-    T_xz = scale_xz * cupy_fft.dctn(A_xz, type=3, norm='ortho', axes=(0, 1))
-    
-    return SsState.x, SsState.z, T_xz.astype(cp.float32)
-
-
-def calculate_subgrid_indices(pos, dx, n_total_fine, n_box):
+def _calculate_subgrid_indices(pos, dx, n_total_fine, n_box):
     """
     Calculate start/end indices to center a box of size n_box around a physical position.
     
@@ -585,17 +560,6 @@ def calculate_subgrid_indices(pos, dx, n_total_fine, n_box):
     idx_relative = max(0, min(idx_relative, n_box - 1))
     
     return idx_start, idx_end, idx_relative
-
-# goes to spectral_helpers.py
-def update_fine_mesh(SsState, laser_state):
-    """
-    Update fine mesh box coordinates and basis subsets so the laser remains centered.
-    Only x and y are updated since z is static (considering flat top).
-
-    """
-    if SsState.fine_mesh:
-        SsState.fine_mesh.update(laser_state)
-
 
 
 # keep in helpers

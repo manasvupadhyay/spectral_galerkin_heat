@@ -181,14 +181,14 @@ class FineMeshState:
     def update(self, laser_state):
         """Update fine mesh box coordinates and basis subsets."""
         # Update X-Axis
-        ix_start, ix_end, _ = calculate_subgrid_indices(
+        ix_start, ix_end, _ = _calculate_subgrid_indices(
             laser_state.x, self.dx_fine, self.nx_fine_total, self.nx_box
         )
         self.box_x[:] = self.x_fine[ix_start:ix_end]
         self.Bx_fine[:, :] = self.Bx_fine_full[:, ix_start:ix_end]
         
         # Update Y-Axis
-        iy_start, iy_end, _ = calculate_subgrid_indices(
+        iy_start, iy_end, _ = _calculate_subgrid_indices(
             laser_state.y, self.dy_fine, self.ny_fine_total, self.ny_box
         )
         self.box_y[:] = self.y_fine[iy_start:iy_end]
@@ -240,11 +240,11 @@ class SpectralSolverState:
         self.buffers = SolverBuffers(num, self.fine_mesh)
         
         # Precompute propagators
-        self.K, self.KK = precompute_K_KK(phys, num, geom)
+        self.K, self.KK = _precompute_K_KK(phys, num, geom)
 
 
 
-def precompute_K_KK(phys, num, geom):
+def _precompute_K_KK(phys, num, geom):
     """
     Compute spectral Propagators (K, KK) based on grid and time step.
     K = exp(-alpha * k^2 * dt) for ETD1 (Exact integration of linear part)
@@ -380,7 +380,7 @@ def project_box_to_modes(field_box, SsState):
     return modes
 
 
-def reconstruct_temperature_box(a, SsState):
+def _reconstruct_temperature_box(a, SsState):
     """
     Reconstructs temperature in a small ROI around the laser.
     Pure Python function using tensordot (optimized in numpy).
@@ -409,7 +409,7 @@ def compute_latent_heat_source(Q_buffer, phys, laser_state, num, SsState, alpha=
     fm = SsState.fine_mesh
 
     # 1. Reconstruct Temperature on Fine Mesh
-    T_box, _ = reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
+    T_box, _ = _reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
 
     # 2. Initialize/Retrieve State buffers
     if fm.T_prev is None:
@@ -467,26 +467,7 @@ def reconstruct_surface_temperature(a, SsState):
     dct_result = IDCT_II(A)
     return (SsState.grid.recon_scale * dct_result)
 
-def reconstruct_temperature_xz(a, num, geom, SsState, laser):
-    """
-    Optimized reconstruction of X-Z temperature slice using FFTW/DCT.
-    Returns (x_vals, z_vals, T_xz).
-    Unused
-    """
-    y0 = laser.y0
-    nx, ny, nz = num.nx, num.ny, num.nz
-    # Evaluate cosine basis at specific y0 (ny,)
-    cos_y = SsState.grid.Cn * np.cos(np.pi * np.arange(ny) * y0 / geom.Ly)
-    # Contract Y axis: (nz, ny, nx) dot (ny,)
-    A_xz = np.tensordot(a, cos_y, axes=(1, 0)) 
-    # Reconstruct X-Z field using 2D IDCT (Type 3)
-    scale_xz = np.sqrt(nx * nz / (geom.Lx * geom.Lz))
-    T_xz = scale_xz * pyfftw.interfaces.scipy_fft.dctn(A_xz, type=3, norm='ortho', axes=(0, 1))
-    
-    return geom.x, geom.z, T_xz
-
-
-def calculate_subgrid_indices(pos, dx, n_total_fine, n_box):
+def _calculate_subgrid_indices(pos, dx, n_total_fine, n_box):
     """
     Calculate start/end indices to center a box of size n_box around a physical position.
     
@@ -516,17 +497,6 @@ def calculate_subgrid_indices(pos, dx, n_total_fine, n_box):
     idx_relative = max(0, min(idx_relative, n_box - 1))
     
     return idx_start, idx_end, idx_relative
-
-# goes to spectral_helpers.py
-def update_fine_mesh(SsState, laser_state):
-    """
-    Update fine mesh box coordinates and basis subsets so the laser remains centered.
-    Only x and y are updated since z is static (considering flat top).
-
-    """
-    if SsState.fine_mesh:
-        SsState.fine_mesh.update(laser_state)
-
 
 
 # keep in helpers

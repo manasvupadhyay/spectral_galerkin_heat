@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # 1. PARSING & DATA LOADING
 # ==========================================
 
-def parse_xdmf_path(xdmf_path, relative_path_string):
+def _parse_xdmf_path(xdmf_path, relative_path_string):
     """
     Resolves the h5 file path relative to the xdmf location.
     Expected string format in XDMF: "filename.h5:/dataset/path"
@@ -25,7 +25,7 @@ def parse_xdmf_path(xdmf_path, relative_path_string):
     full_h5_path = os.path.join(base_dir, h5_file)
     return full_h5_path, h5_path
 
-def load_data(xdmf_path):
+def _load_data(xdmf_path):
     """
     Parses XDMF to determine grid type (Structured vs Unstructured)
     and loads the corresponding Temperature and Geometry data.
@@ -93,7 +93,7 @@ def load_data(xdmf_path):
         # Load X, Y, Z axes
         axes = []
         for item in geo_items:
-            h5_file, h5_path = parse_xdmf_path(xdmf_path, item.text.strip())
+            h5_file, h5_path = _parse_xdmf_path(xdmf_path, item.text.strip())
             with h5py.File(h5_file, 'r') as f:
                 axes.append(f[h5_path][:])
         
@@ -108,7 +108,7 @@ def load_data(xdmf_path):
         # Load Temperature
         # Dimensions in XDMF are often Z Y X, we might need to transpose
         attr_item = attribute.find("DataItem")
-        h5_file, h5_path = parse_xdmf_path(xdmf_path, attr_item.text.strip())
+        h5_file, h5_path = _parse_xdmf_path(xdmf_path, attr_item.text.strip())
         with h5py.File(h5_file, 'r') as f:
             T = f[h5_path][:]
             # If shape matches (z, y, x), we are good. If (x,y,z), we leave it.
@@ -121,7 +121,7 @@ def load_data(xdmf_path):
         
         # Load XYZ Geometry (N x 3)
         geo_item = geometry.find("DataItem")
-        h5_file, h5_path = parse_xdmf_path(xdmf_path, geo_item.text.strip())
+        h5_file, h5_path = _parse_xdmf_path(xdmf_path, geo_item.text.strip())
         with h5py.File(h5_file, 'r') as f:
             xyz = f[h5_path][:]
         
@@ -130,7 +130,7 @@ def load_data(xdmf_path):
         
         # Load Temperature
         attr_item = attribute.find("DataItem")
-        h5_file, h5_path = parse_xdmf_path(xdmf_path, attr_item.text.strip())
+        h5_file, h5_path = _parse_xdmf_path(xdmf_path, attr_item.text.strip())
         with h5py.File(h5_file, 'r') as f:
             data['T'] = f[h5_path][:].flatten() # Ensure 1D array
 
@@ -140,7 +140,7 @@ def load_data(xdmf_path):
 # 2. INTERPOLATION ENGINE
 # ==========================================
 
-def get_slice(data, normal, center, width, height, reverse_axes=(), resolution=400, method='linear'):
+def _get_slice(data, normal, center, width, height, reverse_axes=(), resolution=400, method='linear'):
     """
     Interpolates 3D data onto a 2D plane defined by a center point and dimensions.
     normal: 'x', 'y', or 'z' axis normal to the plane
@@ -274,7 +274,7 @@ def get_slice(data, normal, center, width, height, reverse_axes=(), resolution=4
 # 3. PLOTTING
 # ==========================================
 
-def plot_meltpool(U, V, T_grid, xlabel, ylabel, liquidus, solidus, title, output_file):
+def _plot_meltpool(U, V, T_grid, xlabel, ylabel, liquidus, solidus, title, output_file):
     
     # --- 1. CONFIGURATION FOR ACADEMIC STYLE ---
     # This sets the font to look like LaTeX (Serif/Times)
@@ -404,14 +404,14 @@ def generate_plots(xdmf_path, output_dir=None, show_ui=True, save_images=False,
 
     # 1. Load Data
     try:
-        data = load_data(xdmf_path)
+        data = _load_data(xdmf_path)
     except Exception as e:
         logger.exception("Error loading XDMF: %s", e)
         return
 
     # 2. Interpolate Slice
     try:
-        U, V, T_grid, xlabel, ylabel = get_slice(data, normal, center, width, height, reverse_axes=reverse, method=interp)
+        U, V, T_grid, xlabel, ylabel = _get_slice(data, normal, center, width, height, reverse_axes=reverse, method=interp)
     except Exception as e:
         logger.exception("Error extracting slice: %s", e)
         return
@@ -435,7 +435,7 @@ def generate_plots(xdmf_path, output_dir=None, show_ui=True, save_images=False,
             base_name = os.path.splitext(os.path.basename(xdmf_path))[0]
             output_file = os.path.join(output_dir, f"{base_name}_cut_{normal}.png")
 
-    plot_meltpool(U, V, T_grid, xlabel, ylabel, liquidus, solidus, 
+    _plot_meltpool(U, V, T_grid, xlabel, ylabel, liquidus, solidus, 
                   f"Section Normal-{normal.upper()} @ {center}", output_file)
 
 if __name__ == "__main__":

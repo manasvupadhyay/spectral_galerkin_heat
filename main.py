@@ -37,17 +37,7 @@ def get_factory(context: SimulationContext):
     
     logger.info(f"Factory Selector: Method='{method}', Backend='{backend}'")
 
-    if method == "fem":
-        # Provided here the framework for FEM factory selection
-        # It is not implemented in this codebase. 
-        try:
-            from implementations.factories.fem_factory import FEMSimulationFactory
-            return FEMSimulationFactory(context)
-        except ImportError as e:
-            logger.error(f"Failed to import FEM factory: {e}")
-            raise
-
-    elif method == "spectral":
+    if method == "spectral":
         if backend == "gpu":
             try:
                 from implementations.factories.gpu_factory import GPUSimulationFactory
@@ -56,9 +46,20 @@ def get_factory(context: SimulationContext):
                 logger.error(f"Failed to import GPU factory (check cupy installation): {e}")
                 raise
         else:
-            # Default to CPU Spectral
+            # Default to CPU if GPU not specified or fails
             from implementations.factories.cpu_factory import CPUSimulationFactory
             return CPUSimulationFactory(context)
+    
+    elif method == "fem":
+        # Provided here the framework for FEM factory selection
+        # It is not implemented in this codebase. 
+        # Just an example of how to extend the factory selection logic for future implementations.
+        try:
+            from implementations.factories.fem_factory import FEMSimulationFactory
+            return FEMSimulationFactory(context)
+        except ImportError as e:
+            logger.error(f"Failed to import FEM factory: {e}")
+            raise
             
     else:
         raise ValueError(f"Unknown simulation method: {method}")
@@ -104,7 +105,7 @@ def main():
     viz_cfg = config.get('post_processing', {})
     
     
-    # Determine if we should visualize TO DO : The function save_step already exports profiles and cut view, this is redundant (in workflow)
+    # Determine if we should visualize TODO : The function save_step already exports profiles and cut view, this is redundant (in workflow)
     should_visualize = viz_cfg.get('auto_visualize', False)
     if args.viz: should_visualize = True
     if args.no_viz: should_visualize = False

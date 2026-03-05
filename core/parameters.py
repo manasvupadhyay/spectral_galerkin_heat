@@ -75,23 +75,6 @@ class LaserParams:
     power: float = 0.0 # Base power if constant, or max power
 
 @dataclass
-class IOParams:
-    """Configuration for Input/Output operations."""
-    output_root: str = "out"
-    run_tag: str = "simulation"
-    save_full_fields: bool = False
-    output_interval: float = 1e-4  # Time between output saves (s)
-
-    @classmethod
-    def from_dict(cls, cfg: Dict[str, Any]) -> 'IOParams':
-        return cls(
-            output_root=cfg.get('output_root', 'out'),
-            run_tag=cfg.get('run_tag', 'simulation'),
-            save_full_fields=cfg.get('save_full_fields', False),
-            output_interval=float(cfg.get('output_interval'))
-        )
-
-@dataclass
 class SimulationContext:
     """
     Aggregate context holding all simulation parameters.
