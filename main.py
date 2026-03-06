@@ -45,10 +45,13 @@ def get_factory(context: SimulationContext):
             except ImportError as e:
                 logger.error(f"Failed to import GPU factory (check cupy installation): {e}")
                 raise
-        else:
+        if backend == "cpu":
             # Default to CPU if GPU not specified or fails
             from implementations.factories.cpu_factory import CPUSimulationFactory
             return CPUSimulationFactory(context)
+        if backend == "cpu_linear":
+            from implementations.factories.cpu_linear_factory import CPULinearSimulationFactory
+            return CPULinearSimulationFactory(context)
     
     elif method == "fem":
         # Provided here the framework for FEM factory selection
@@ -67,7 +70,7 @@ def get_factory(context: SimulationContext):
 def main():
     parser = argparse.ArgumentParser(description="FastHeatSolv: Spectral Heat Equation Solver")
     parser.add_argument("config",default='config/standard_test.yaml', help="Path to YAML configuration file")
-    parser.add_argument("--backend", default=None, choices=["cpu", "gpu"], help="Override backend (cpu/gpu)")
+    parser.add_argument("--backend", default=None, choices=["cpu", "gpu", "cpu_linear"], help="Override backend (cpu/gpu/cpu_linear)")
     parser.add_argument("--viz", action="store_true", help="Force visualization after simulation")
     parser.add_argument("--no-viz", action="store_true", help="Disable automatic visualization")
     args = parser.parse_args()
@@ -82,6 +85,9 @@ def main():
     backend = args.backend
     if not backend:
         backend = config.get('simulation', {}).get('backend', 'cpu')
+    
+    # Actually set the context backend!
+    context.backend = backend
     
     logger.info(f"Using Backend: {backend.upper()}")
     

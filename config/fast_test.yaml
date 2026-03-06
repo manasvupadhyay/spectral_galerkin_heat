@@ -1,7 +1,7 @@
 simulation:
   name: "spectral_test_run"
   method: "spectral"          # Options: "spectral", "fem"
-  backend: "cpu"              # Options: "cpu" (standard), "gpu" (if supported)
+  backend: "cpu_linear"              # Options: "cpu" (standard), "gpu" (if supported)
   duration: 0.0005            # s
   dt: 5.0e-6                  # s
   update_interval: 20         # ETA update every 20 steps (approx)

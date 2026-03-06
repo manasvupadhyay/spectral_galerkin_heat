@@ -281,6 +281,55 @@ This enables efficient disk usage and post-processing tailored to your needs.
 - [ ] **Adding Material**: Change the domain definition on the fly to
     - Account for an added layer of material
 - [ ] **API Design**: Enable calls from an external Orchestrator / Adapter
-- [ ] ****
+- [ ] **CFL and discretisation**: Add physics based warning (CFL, number of modes, discretization)
+- [ ] **Custom flux**: Enable user to write custom boundary flux (less hardcoded)
+- [ ] **Boundary Condition Modularity**: Enable user to choose BCs freely (less hardcoded)
+
 ---
+
+Proposition 1 for Modular Boundary Conditions : (easy)
+User writes boundary condition in the yaml choosing among a set of predefined BoundaryFlux class
+
+
+```yaml
+boundaries:
+  top:
+    - type: RadiationBoundary
+      emissivity: 0.8
+      T_inf: 293.0
+    - type: custom_user_module.MyLaserPulseFlux # Example Python code hook
+  bottom:
+    - type: ConvectionBoundary
+      h: 15.0
+      T_inf: 293.0
+```
+
+Proposition 2 for Modular Boundary Condition : (harder)
+User writes his main depending on needs, a parser can read the expressions. Then injected in the solver. 
+
+```python
+def main():
+    config = load_config(args.config)
+    context = SimulationContext.from_dict(config)
+    factory = get_factory(context)
+    runner = StandaloneHeatRunner(context, factory)
+
+    # --- User defined formula parser ---
+    x, y, t, T = sp.symbols('x y t T')
+    
+    # Example : Radiation boundary (Stefan-Boltzmann)
+    # sigma = 5.67e-8, epsilon = 0.8, T_inf = 293
+    # flux = -0.8 * 5.67e-8 * (T**4 - 293.0**4)
+    
+    # Example : Custom moving heat source
+    flux_expr = 1e6 * sp.exp(-((x - 0.005)**2 + (y - 0.005)**2) / 0.0001) * sp.sin(2 * sp.pi * t * 100)**2 
+    
+    # Compile (see if needed)
+    fast_flux_func = sp.lambdify((x, y, t, T), flux_expr, modules=['numexpr', 'numpy'])
+    
+    # Inject into solver
+    runner.solver.set_top_flux(fast_flux_func)
+    # Provide also .set_bottom_flux ...
+    # -----------------------------------
+```
 
