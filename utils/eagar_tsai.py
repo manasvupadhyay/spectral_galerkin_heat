@@ -8,8 +8,11 @@ HDF5 / XDMF (ParaView-compatible).
 
 Equation (laser frame, ξ = x - x_laser):
 
-    T(ξ,y,z,t) - T₀ = AP / [ρCp √(πα)] ∫₀ᵗ  1 / [√τ (4ατ + r_b²)]
-        × exp[ -(ξ+vτ)²+y²) / (4ατ+r_b²)  -  z²/(4ατ) ] dτ
+    T(ξ,y,z,t) - T₀ = AP / [π ρCp √(πα)] ∫₀ᵗ  1 / [√τ (4ατ + σ²)]
+        × exp[ -(ξ+vτ)²+y²) / (4ατ+σ²)  -  z²/(4ατ) ] dτ
+
+with σ² = r_b² / 2  (r_b is the 1/e² beam radius used by the solver;
+                      σ is the 1/e radius that appears in the convolution)
 
 Uses exponentially-spaced (geometric) quadrature points so that the
 dense sampling concentrates near τ→0 where the 1/√τ singularity lives.
@@ -40,21 +43,20 @@ T0    = 293.0         # K  (ambient / initial)
 alpha = k / (rho * Cp)  # thermal diffusivity  [m²/s]
 
 # -- Domain --
-Lx, Ly, Lz = 0.01, 0.005, 0.0025          # [m]
-nx, ny, nz  = 512,  256,   1024            # mesh points
+Lx, Ly, Lz = 0.005, 0.0025, 0.00125          # [m]
+nx, ny, nz  = 512,  256,   50            # mesh points
 
 # -- Laser --
 A   = 0.30              # absorptivity
 P   = 200.0             # W
 r_b = 60.0e-6           # beam radius  [m]
-
 # -- Velocity  (G-code: F48000 mm/min = 800 mm/s = 0.8 m/s) --
 v_mag = 0.8             # m/s
 
 # -- Trajectory --
 # Laser goes from x_start to x_end = middle of the domain.
 # y stays at domain centre.
-x_start = 0.006e-3                     # [m]  starting X position
+x_start = 0.0                    # [m]  starting X position
 x_end   = Lx / 2                       # [m]  = 0.005  (domain centre)
 y_laser = Ly / 2                       # [m]  = 0.0025
 
@@ -65,7 +67,7 @@ t_total = abs(x_end - x_start) / v_mag # integration upper bound  [s]
 # ────────────────────────────────────────────────────────────────────────────
 #  Quadrature  (exponentially-spaced τ)
 # ────────────────────────────────────────────────────────────────────────────
-N_TAU   = 200
+N_TAU   = 400 
 TAU_MIN = 1e-10           # avoid 1/√τ singularity at τ=0
 tau_pts = np.geomspace(TAU_MIN, t_total, N_TAU)
 dtau    = np.diff(tau_pts)  # interval widths  (N_TAU - 1)
@@ -84,9 +86,22 @@ eta   = y - y_laser         # (ny+1,)  η = y_lab − y_laser
 depth = Lz - z              # (nz+1,)  surface = 0, bottom = Lz
 
 # ────────────────────────────────────────────────────────────────────────────
-#  Pre-factor   C = AP / [ρ Cp √(π α)]
+#  Beam convention
 # ────────────────────────────────────────────────────────────────────────────
-C = A * P / (rho * Cp * np.sqrt(np.pi * alpha))
+# The solver (and YAML config) defines r_b as the 1/e² beam radius:
+#   I(r) = (2AP)/(π r_b²) exp(−2r²/r_b²)
+#
+# The Eagar-Tsai convolution uses the 1/e radius σ = r_b/√2, giving
+#   σ² = r_b² / 2   →  denominator  4ατ + σ²
+sigma_sq = r_b**2 / 2.0
+
+# ────────────────────────────────────────────────────────────────────────────
+#  Pre-factor   C = AP / [π ρ Cp √(π α)]
+# ────────────────────────────────────────────────────────────────────────────
+# Derived from convolving the Gaussian source with the semi-infinite
+# Green's function (factor 2 from image source) and integrating over
+# the surface x',y'  →  yields  1/(π^{3/2} √α)  =  1/(π √(πα))
+C = A * P / (np.pi * rho * Cp * np.sqrt(np.pi * alpha))
 
 # ────────────────────────────────────────────────────────────────────────────
 #  Numerical integration  (midpoint rule on geometric grid)
@@ -109,7 +124,7 @@ for i in range(N_TAU - 1):
     tau = 0.5 * (tau_pts[i] + tau_pts[i + 1])   # midpoint of interval
     w   = dtau[i]                                 # interval width
 
-    denom_xy = 4.0 * alpha * tau + r_b * r_b     # 4ατ + r_b²
+    denom_xy = 4.0 * alpha * tau + sigma_sq       # 4ατ + σ²
     denom_z  = 4.0 * alpha * tau                  # 4ατ   (for z-decay)
 
     # Scalar part of integrand  (× dτ already folded in)
