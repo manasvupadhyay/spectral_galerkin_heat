@@ -8,9 +8,9 @@ from core.parameters import SimulationContext
 
 # ---------- tiny config --------------------------------------------------
 config = {
-    "simulation": {"method": "spectral", "backend": "cpu",
+    "simulation": {"method": "spectral", "backend": "cpu_linear",
                    "duration": 6e-6, "dt": 6e-6, "update_interval": 1},
-    "domain": {"size": [0.01, 0.005, 0.0025], "mesh": [64, 32, 16]},
+    "domain": {"size": [0.005, 0.0025, 0.00125], "mesh": [512, 256, 1024]},
     "material": {"name": "316L", "rho": 7850.0, "k": 15.0, "Cp": 500.0,
                  "L_f": 267700.0, "T_solidus": 1700.0, "T_liquidus": 1800.0,
                  "T0": 293.0, "DeltaH_LV": 7.41e6, "R_v": 150.774,
@@ -27,7 +27,7 @@ solver = SpectralSolverCPU()
 state = solver.initialize(ctx)
 
 # Run a few steps to get non-trivial coefficients
-for i in range(5):
+for i in range(10):
     state, _ = solver.step(i * ctx.num.dt, ctx.num.dt)
 
 a = state.a.copy()

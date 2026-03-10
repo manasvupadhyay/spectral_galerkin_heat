@@ -85,6 +85,10 @@ xi    = x - x_end          # (nx+1,)  ξ = x_lab − x_laser
 eta   = y - y_laser         # (ny+1,)  η = y_lab − y_laser
 depth = Lz - z              # (nz+1,)  surface = 0, bottom = Lz
 
+# Method-of-images: η offsets for reflections across y = 0 and y = Ly
+eta_img_y0  = eta + 2 * y_laser           # reflected η for y = 0 plane
+eta_img_yLy = eta - 2 * (Ly - y_laser)    # reflected η for y = Ly plane
+
 # ────────────────────────────────────────────────────────────────────────────
 #  Beam convention
 # ────────────────────────────────────────────────────────────────────────────
@@ -106,10 +110,12 @@ C = A * P / (np.pi * rho * Cp * np.sqrt(np.pi * alpha))
 # ────────────────────────────────────────────────────────────────────────────
 #  Numerical integration  (midpoint rule on geometric grid)
 # ────────────────────────────────────────────────────────────────────────────
-T_field = np.zeros((nz+1, ny+1, nx+1), dtype=np.float64)
-buf     = np.empty_like(T_field)
+T_field  = np.zeros((nz+1, ny+1, nx+1), dtype=np.float64)
+T_images = np.zeros_like(T_field)   # accumulates image-source contributions
+buf      = np.empty_like(T_field)
+buf_img  = np.empty_like(T_field)
 
-print("Eagar–Tsai analytical solution")
+print("Eagar–Tsai analytical solution (with method of images)")
 print(f"  Domain  : {Lx*1e3:.1f} × {Ly*1e3:.1f} × {Lz*1e3:.1f} mm")
 print(f"  Mesh    : {nx} × {ny} × {nz}  ({nx*ny*nz/1e6:.1f} M pts)")
 print(f"  alpha   : {alpha:.4e} m²/s")
@@ -144,19 +150,38 @@ for i in range(N_TAU - 1):
     buf *= scalar
     T_field += buf
 
+    # --- Method of images (3 image sources for finite-domain correction) ---
+    # Image 1: reflection across x = 0  (velocity −v)
+    xi_img_x0 = xi + 2 * x_end - v * tau
+    exp_x_img = np.exp(-xi_img_x0 * xi_img_x0 / denom_xy)
+    f_xy_img  = exp_y[:, None] * exp_x_img[None, :]
+
+    # Image 2: reflection across y = 0
+    exp_y_img_y0 = np.exp(-eta_img_y0 * eta_img_y0 / denom_xy)
+    f_xy_img += exp_y_img_y0[:, None] * exp_x[None, :]
+
+    # Image 3: reflection across y = Ly  (= 2.5 mm)
+    exp_y_img_yLy = np.exp(-eta_img_yLy * eta_img_yLy / denom_xy)
+    f_xy_img += exp_y_img_yLy[:, None] * exp_x[None, :]
+
+    np.multiply(exp_z[:, None, None], f_xy_img[None, :, :], out=buf_img)
+    buf_img *= scalar
+    T_images += buf_img
+
     # Progress
     if (i + 1) % 500 == 0 or i == 0:
         elapsed = wall_clock.perf_counter() - t0_wall
         print(f"  step {i+1:>5d}/{N_TAU-1}  "
               f"τ={tau:.3e} s  elapsed={elapsed:.1f} s")
 
-# Apply global pre-factor and add ambient temperature
-T_field *= C
-T_field += T0
+# ── Build both uncorrected and corrected fields ──
+T_uncorrected = T_field * C + T0             # pure Eagar-Tsai (semi-infinite)
+T_corrected   = (T_field + T_images) * C + T0  # with method-of-images correction
 
 elapsed = wall_clock.perf_counter() - t0_wall
 print(f"\nDone in {elapsed:.1f} s")
-print(f"  T_max = {T_field.max():.1f} K   T_min = {T_field.min():.1f} K")
+print(f"  Uncorrected : T_max = {T_uncorrected.max():.1f} K   T_min = {T_uncorrected.min():.1f} K")
+print(f"  Corrected   : T_max = {T_corrected.max():.1f} K   T_min = {T_corrected.min():.1f} K")
 
 # ────────────────────────────────────────────────────────────────────────────
 #  Save HDF5 + XDMF
@@ -165,44 +190,46 @@ out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        '..', 'validation_results')
 os.makedirs(out_dir, exist_ok=True)
 
-base     = os.path.join(out_dir, 'eagar_tsai')
-h5_path  = base + '.h5'
-xmf_path = base + '.xmf'
-h5_ref   = os.path.basename(h5_path)
 
-# ── HDF5 ──
-T32 = T_field.astype(np.float32)
-with h5py.File(h5_path, 'w') as f:
-    f.create_dataset('X', data=x.astype(np.float32))
-    f.create_dataset('Y', data=y.astype(np.float32))
-    f.create_dataset('Z', data=z.astype(np.float32))
-    ds = f.create_dataset('temperature', data=T32)
-    ds.attrs['time']    = t_total
-    ds.attrs['v']       = v
-    ds.attrs['x_laser'] = x_end
-    ds.attrs['y_laser'] = y_laser
+def _save_field(T_data, basename):
+    """Write one temperature field to HDF5 + XDMF."""
+    nz1, ny1, nx1 = T_data.shape
+    base     = os.path.join(out_dir, basename)
+    h5_path  = base + '.h5'
+    xmf_path = base + '.xmf'
+    h5_ref   = os.path.basename(h5_path)
 
-# ── XDMF ──
-xmf = f"""\
+    T32 = T_data.astype(np.float32)
+    with h5py.File(h5_path, 'w') as f:
+        f.create_dataset('X', data=x.astype(np.float32))
+        f.create_dataset('Y', data=y.astype(np.float32))
+        f.create_dataset('Z', data=z.astype(np.float32))
+        ds = f.create_dataset('temperature', data=T32)
+        ds.attrs['time']    = t_total
+        ds.attrs['v']       = v
+        ds.attrs['x_laser'] = x_end
+        ds.attrs['y_laser'] = y_laser
+
+    xmf = f"""\
 <?xml version="1.0" ?>
 <!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>
 <Xdmf Version="2.0">
  <Domain>
    <Grid Name="EagarTsai" GridType="Uniform" Time="{t_total}">
-     <Topology TopologyType="3DRectMesh" Dimensions="{nz+1} {ny+1} {nx+1}"/>
+     <Topology TopologyType="3DRectMesh" Dimensions="{nz1} {ny1} {nx1}"/>
      <Geometry GeometryType="VXVYVZ">
-       <DataItem Dimensions="{nx+1}" NumberType="Float" Precision="4" Format="HDF">
+       <DataItem Dimensions="{nx1}" NumberType="Float" Precision="4" Format="HDF">
           {h5_ref}:/X
        </DataItem>
-       <DataItem Dimensions="{ny+1}" NumberType="Float" Precision="4" Format="HDF">
+       <DataItem Dimensions="{ny1}" NumberType="Float" Precision="4" Format="HDF">
           {h5_ref}:/Y
        </DataItem>
-       <DataItem Dimensions="{nz+1}" NumberType="Float" Precision="4" Format="HDF">
+       <DataItem Dimensions="{nz1}" NumberType="Float" Precision="4" Format="HDF">
           {h5_ref}:/Z
        </DataItem>
      </Geometry>
      <Attribute Name="temperature" AttributeType="Scalar" Center="Node">
-       <DataItem Dimensions="{nz+1} {ny+1} {nx+1}" NumberType="Float" Precision="4" Format="HDF">
+       <DataItem Dimensions="{nz1} {ny1} {nx1}" NumberType="Float" Precision="4" Format="HDF">
           {h5_ref}:/temperature
        </DataItem>
      </Attribute>
@@ -210,8 +237,15 @@ xmf = f"""\
  </Domain>
 </Xdmf>
 """
-with open(xmf_path, 'w') as f:
-    f.write(xmf)
+    with open(xmf_path, 'w') as f:
+        f.write(xmf)
 
-print(f"\nSaved:  {h5_path}")
-print(f"Saved:  {xmf_path}")
+    print(f"Saved:  {h5_path}")
+    print(f"Saved:  {xmf_path}")
+
+
+# ── Save uncorrected (pure Eagar-Tsai, semi-infinite) ──
+_save_field(T_uncorrected, 'eagar_tsai')
+
+# ── Save corrected (method of images for finite domain) ──
+_save_field(T_corrected, 'eagar_tsai_corrected')

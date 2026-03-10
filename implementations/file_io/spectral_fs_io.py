@@ -103,14 +103,14 @@ class LocalFSIOManager(IOManager):
 
         try:
             # Helper for reconstruction (lazy loaded)
-            from utils.spectral_helpers import reconstruct_temperature_volume
+            from utils.spectral_helpers import reconstruct_temperature_DCT
 
             if output_type == 'full_volume':
                 # Use grid from state (refactoring support)
                 grid = state.grid if hasattr(state, 'grid') else state
                 
                 grid.prepare_full_reconstruction(self.context.geom)
-                field = reconstruct_temperature_volume(state.a, state).transpose(2,1,0)  # Ensure (z,y,x) ordering
+                field = reconstruct_temperature_DCT(state.a, state).transpose(2,1,0)  # Ensure (z,y,x) ordering
                 grid_coords = (getattr(grid, 'x_rec', None), getattr(grid, 'y_rec', None), getattr(grid, 'z_rec', None))
                 
                 filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
@@ -212,7 +212,7 @@ class LocalFSIOManager(IOManager):
                 # Check if file exists; if not, we must reconstruct and save it
                 if not os.path.exists(xdmf_path):
                     state.prepare_full_reconstruction(self.context.geom)
-                    field = reconstruct_temperature_volume(state.a, state).transpose(2,1,0)
+                    field = reconstruct_temperature_DCT(state.a, state).transpose(2,1,0)
                     grid_coords = (getattr(state, 'x_rec', None), getattr(state, 'y_rec', None), getattr(state, 'z_rec', None))
                     
                     if hasattr(field, "get"):

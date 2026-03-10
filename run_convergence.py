@@ -13,6 +13,36 @@ import yaml
 sys.path.append(os.path.join(os.path.dirname(__file__), 'validation_results'))
 from validation_results.compute_L2_error import compare
 
+import math
+
+
+def log_spaced_ints(start, end, num):
+    """Return a list of `num` log-spaced integers from start to end (inclusive).
+
+    Ensures strictly increasing values and forces first==start, last==end.
+    """
+    if start <= 0 or end <= 0:
+        raise ValueError("start and end must be positive for log spacing")
+    if num < 2:
+        return [int(round(start))]
+
+    ratio = (end / start) ** (1.0 / (num - 1))
+    vals = [start * (ratio ** i) for i in range(num)]
+    ints = [int(round(v)) for v in vals]
+    # enforce strictly increasing sequence
+    out = []
+    for v in ints:
+        if not out:
+            out.append(max(1, v))
+        else:
+            if v > out[-1]:
+                out.append(v)
+            else:
+                out.append(out[-1] + 1)
+    out[0] = int(round(start))
+    out[-1] = int(round(end))
+    return out
+
 def get_latest_dir(base_dir="out"):
     """Finds the most recently created directory in the `out` folder."""
     if not os.path.exists(base_dir):
@@ -59,7 +89,7 @@ def run_simulation_and_get_error(param_name, param_val, nx, ny, nz, template_yam
     print(f"  -> Found target field: {latest_xmf}")
     
     # 6. Compute L2 Error against eagar_tsai.xmf
-    eagar_tsai_path = "validation_results/eagar_tsai.xmf"
+    eagar_tsai_path = "validation_results/eagar_tsai_corrected.xmf"
     if not os.path.exists(eagar_tsai_path):
         raise FileNotFoundError(f"Reference file {eagar_tsai_path} not found. Please generate it first.")
         
@@ -94,13 +124,18 @@ def main():
     csv_file_path = "convergence_results.csv"
     
     # Base configuration
-    base_nx, base_ny, base_nz = 512, 256, 1024
+    base_nx, base_ny, base_nz = 800, 300, 1800 # Starting mesh size 
     
     # User-requested ranges
-    # Note: Feel free to adjust these arrays based on the granularity you want.
-    nx_range = [10, 32, 64, 128, 256, 384, 512, 700, 850, 1000]
-    ny_range = [10, 32, 64, 128, 192, 256, 384, 512]
-    nz_range = [10, 64, 128, 256, 512, 768, 1024, 1500, 2000]
+    # Generate 10 log-spaced integer mesh sizes (inclusive endpoints)
+    nx_range = log_spaced_ints(10, 512, 10)
+    ny_range = log_spaced_ints(10, 256, 10)
+    nz_range = log_spaced_ints(10, 1500, 10)
+    
+    print("Starting convergence tests with the following mesh sizes:")
+    print(f"  nx: {nx_range}")
+    print(f"  ny: {ny_range}")
+    print(f"  nz: {nz_range}")
     
     # Write header
     with open(csv_file_path, "w", newline="") as csvfile:

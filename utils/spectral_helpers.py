@@ -1,6 +1,6 @@
 import numpy as np
-import os 
-from pyfftw.interfaces.scipy_fft import dctn
+import os
+import scipy.fft
 
 try:
     import cupy as cp
@@ -40,6 +40,9 @@ def reconstruct_temperature_volume(a, SsState):
     
     note : the reconstruction bases (Bx, By, Bz) must be precomputed before, 
     The reconstruction grid is node centered in x, y, z
+    
+    This function is now legacy, can be still used for exact reconstruction 
+    but DCT version is faster. (DCT can be tested against this for correctness)
     """
 
     if hasattr(a, 'get'):
@@ -74,16 +77,9 @@ def reconstruct_temperature_DCT(a, SsState):
     and likewise for y and z.  Output shape is **(nx+1, ny+1, nz+1)**,
     identical to :func:`reconstruct_temperature_volume`.
 
-    **Why DCT-I?**
-    DCT type 3 (``IDCT_II``) evaluates at half-integer (cell-centred)
-    nodes.  The reconstruction grid is integer-spaced (node-centred),
-    which maps to the DCT type I kernel::
-
-        DCT-I of length M (unnorm):
-        y[k] = x[0] + (-1)^k x[M-1] + 2 * sum_{n=1}^{M-2} x[n] cos(pi*n*k/(M-1))
-
-    By padding N modes to length N+1 and halving interior modes, the
-    DCT-I output equals the desired cosine series at node points.
+    The reconstruction grid is integer-spaced (node-centred), which maps
+    to DCT type I.  By padding N modes to length N+1 and halving interior
+    modes, the DCT-I output equals the desired cosine series at node points.
     Complexity is O(N^3 log N) vs O(N^4) for explicit tensor products.
 
     Parameters
@@ -98,45 +94,40 @@ def reconstruct_temperature_DCT(a, SsState):
     T : ndarray, shape (nx+1, ny+1, nz+1), dtype float32
         Node-centred temperature field.
     """
-    import pyfftw
-    pyfftw.interfaces.cache.enable()
-
     if hasattr(a, 'get'):
         a = a.get()
 
-    a = np.asarray(a, dtype=np.float32)
     grid = SsState.grid
     nz, ny, nx = a.shape
 
-    # Normalization coefficients  Cm[0]=sqrt(1/L), Cm[m>=1]=sqrt(2/L)
-    Cm = np.asarray(grid.Cm, dtype=np.float32)  # (nx,)
-    Cn = np.asarray(grid.Cn, dtype=np.float32)  # (ny,)
-    Cp = np.asarray(grid.Cp, dtype=np.float32)  # (nz,)
+    # ── Fused 1-D weight vectors: normalization × DCT-I halving ──────
+    # Combined weight[i] = C[i] * (0.5 if i>0 else 1.0)
+    # Precomputed as 1-D float32 vectors (6 elements total).
+    wx = np.array(grid.Cm, dtype=np.float32); wx[1:] *= 0.5
+    wy = np.array(grid.Cn, dtype=np.float32); wy[1:] *= 0.5
+    wz = np.array(grid.Cp, dtype=np.float32); wz[1:] *= 0.5
 
-    # Step 1: weight by normalization
-    # b[p,n,m] = a[p,n,m] * Cp[p] * Cn[n] * Cm[m]
-    b = a * (Cp[:, None, None] * Cn[None, :, None] * Cm[None, None, :])
+    # ── Scale on contiguous memory, then copy once into padded ───────
+    # Working on a contiguous copy of `a` is faster than writing
+    # through the non-contiguous slice padded[:nz,:ny,:nx].
+    b = a.copy()                         # contiguous (nz,ny,nx)
+    b *= wz[:, None, None]
+    b *= wy[None, :, None]
+    b *= wx[None, None, :]
 
-    # Step 2: per-axis halving for DCT-I input
-    # w[0]=1, w[1:]=0.5  — factors multiply across axes
-    wx = np.ones(nx, dtype=np.float32); wx[1:] = 0.5
-    wy = np.ones(ny, dtype=np.float32); wy[1:] = 0.5
-    wz = np.ones(nz, dtype=np.float32); wz[1:] = 0.5
-    b *= wz[:, None, None] * wy[None, :, None] * wx[None, None, :]
+    padded = np.empty((nz + 1, ny + 1, nx + 1), dtype=np.float32)
+    padded[:nz, :ny, :nx] = b            # single contiguous-to-strided copy
+    padded[nz, :, :] = 0.0               # zero the 3 padding planes
+    padded[:, ny, :] = 0.0
+    padded[:, :, nx] = 0.0
 
-    # Step 3: pad to (nz+1, ny+1, nx+1) with zeros
-    padded = np.zeros((nz + 1, ny + 1, nx + 1), dtype=np.float32)
-    padded[:nz, :ny, :nx] = b
+    # ── 3-D DCT-I (type 1, unnorm) → node-centred values ────────────
+    # scipy.fft.dctn (pocketfft) is ~4× faster than pyfftw for these sizes.
+    T = scipy.fft.dctn(padded, type=1, norm=None, axes=(0, 1, 2),
+                        overwrite_x=True, workers=-1)
 
-    # Step 4: 3-D DCT-I (type 1, unnorm) → node-centred values
-    T = pyfftw.interfaces.scipy_fft.dctn(
-        padded, type=1, norm=None, axes=(0, 1, 2), workers=-1
-    )
-
-    # Step 5: transpose (nz+1, ny+1, nx+1) → (nx+1, ny+1, nz+1)
-    T = T.transpose(2, 1, 0)
-
-    return T.astype(np.float32)
+    # ── Transpose (nz+1, ny+1, nx+1) → (nx+1, ny+1, nz+1) ─────────
+    return np.ascontiguousarray(T.transpose(2, 1, 0), dtype=np.float32)
 
 def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
     """Evaluate the temperature field at arbitrary points using modal expansion."""

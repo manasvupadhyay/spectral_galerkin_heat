@@ -284,6 +284,7 @@ This enables efficient disk usage and post-processing tailored to your needs.
 - [ ] **CFL and discretisation**: Add physics based warning (CFL, number of modes, discretization)
 - [ ] **Custom flux**: Enable user to write custom boundary flux (less hardcoded)
 - [ ] **Boundary Condition Modularity**: Enable user to choose BCs freely (less hardcoded)
+- [ ] **Unit Tests**: Write and use unit tests
 
 ---
 

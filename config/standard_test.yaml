@@ -8,13 +8,14 @@ simulation:
 
 domain:
   size: [0.005, 0.0025, 0.00125] # [Lx, Ly, Lz] in m
-  mesh: [512, 256, 1200]      # [nx, ny, nz] (dimensionless)
+  mesh: [512, 256, 1800]      # [nx, ny, nz] (dimensionless)
 
 material:
   name: "316L"
   rho: 7850.0                 # kg/m^3
   k: 15.0                     # W/(m·K)
   Cp: 500.0                   # J/(kg·K)
+  
   L_f: 267700.0               # J/kg (Latent heat of fusion)
   T_solidus: 1700.0           # K
   T_liquidus: 1800.0          # K
