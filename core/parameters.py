@@ -32,6 +32,7 @@ class MaterialParams:
     T_boil: float = 0
     DeltaH_LV: float = 0
     T0: float = 0 # Reference temperature
+    h_conv: float = 0.0  # Convective heat transfer coefficient (W/(m²·K))
     # Add more fields as needed from your YAML/config
 
     @property
@@ -136,7 +137,8 @@ class SimulationContext:
             R_v=real_t(mat_cfg.get('R_v', 0.0)),
             T_boil=real_t(mat_cfg.get('T_boil', 0.0)),
             DeltaH_LV=real_t(mat_cfg.get('DeltaH_LV', 0.0)),
-            T0=real_t(mat_cfg.get('T0', 0.0))
+            T0=real_t(mat_cfg.get('T0', 0.0)),
+            h_conv=real_t(mat_cfg.get('h_conv', 0.0))
         )
 
         laser_cfg = cfg.get('laser', {})

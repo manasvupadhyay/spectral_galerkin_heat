@@ -16,8 +16,8 @@ material:
   k: 15.0                     # W/(m·K)
   Cp: 500.0                   # J/(kg·K)
   L_f: 267700.0               # J/kg (Latent heat)
-  T_solidus: 1700.0           # K
-  T_liquidus: 1800.0          # K
+  T_solidus: 1658.0           # K
+  T_liquidus: 1723.0          # K
   T0: 293.0                   # K (Ambient temperature)
   
   # Evaporation parameters

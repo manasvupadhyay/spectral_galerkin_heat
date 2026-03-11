@@ -38,6 +38,20 @@ def _add_source_term_modes_kernel(a_temp, KK, Q_modes):
         a_temp[z, y, x] += KK[z, y, x] * Q_modes[z, y, x]
 
 
+@cuda.jit
+def _add_bottom_surface_source_kernel(a_temp, KK, Cp_broadcast_bottom, B_scaled):
+    """
+    Accumulate a surface source at z=0 into temperature modes.
+    a_temp[z,y,x] += KK[z,y,x] * Cp_bottom[z] * B_scaled[y,x]
+    Grid: 3D (nz, ny, nx)
+    """
+    z, y, x = cuda.grid(3)
+    nz, ny, nx = a_temp.shape
+
+    if z < nz and y < ny and x < nx:
+        a_temp[z, y, x] += KK[z, y, x] * Cp_broadcast_bottom[z, 0, 0] * B_scaled[y, x]
+
+
 
 @cuda.jit
 def _compute_evaporation_flux_kernel(T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liquidus):
@@ -134,6 +148,9 @@ class SpectralGrid:
         sign = cp.power(-1.0, cp.arange(nz, dtype=cp.float32)).astype(cp.float32)
         Cp_top = (self.Cp.astype(cp.float32) * sign)
         self.Cp32_broadcast = Cp_top[:, None, None]
+        
+        # Bottom-surface weighting: cos(p*pi*0/Lz) = 1, so no sign alternation
+        self.Cp32_broadcast_bottom = self.Cp.astype(cp.float32)[:, None, None]
 
     def prepare_full_reconstruction(self, geom):
         """Compute node-centered grids and full-domain reconstruction bases on demand.
@@ -359,6 +376,20 @@ def add_source_term_modes(a_temp, KK, Q_modes):
     _add_source_term_modes_kernel[blockspergrid, threadsperblock](a_temp, KK, Q_modes)
 
 
+def add_bottom_surface_source(a_temp, KK, Cp_broadcast_bottom, B_scaled):
+    """Wrapper for bottom surface source accumulation (GPU)."""
+    nz, ny, nx = a_temp.shape
+    threadsperblock = (8, 8, 8)
+    blockspergrid = (
+        (nz + threadsperblock[0] - 1) // threadsperblock[0],
+        (ny + threadsperblock[1] - 1) // threadsperblock[1],
+        (nx + threadsperblock[2] - 1) // threadsperblock[2]
+    )
+    _add_bottom_surface_source_kernel[blockspergrid, threadsperblock](
+        a_temp, KK, Cp_broadcast_bottom, B_scaled
+    )
+
+
 @cuda.jit
 def compute_source_term_from_temperature(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
     """
@@ -528,6 +559,15 @@ def reconstruct_surface_temperature(a, SsState):
     A = ( SsState.grid.Cp32_broadcast * a).sum(axis=0)
     
     # Use DCT-III (IDCT) for surface temperature
+    dct_result = IDCT_II(A)
+    return (SsState.grid.recon_scale * dct_result).astype(cp.float32)
+
+def reconstruct_bottom_temperature(a, SsState):
+    """Reconstruct 2D temperature field at z=0 (bottom surface, GPU).
+    
+    At z=0, cos(p*pi*0/Lz) = 1, so the weighting is just Cp (no sign alternation).
+    """
+    A = (SsState.grid.Cp32_broadcast_bottom * a).sum(axis=0)
     dct_result = IDCT_II(A)
     return (SsState.grid.recon_scale * dct_result).astype(cp.float32)
 

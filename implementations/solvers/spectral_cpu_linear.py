@@ -66,6 +66,7 @@ class SpectralSolverCPULinear(HeatSolver):
         # Unpack context attributes
         context = self.context
         geom = context.geom
+        mat = context.mat
         laser_params = context.laser
         laser_path: LaserPath = context.laser_path
         

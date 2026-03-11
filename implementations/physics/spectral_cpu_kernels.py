@@ -73,6 +73,9 @@ class SpectralGrid:
         sign = np.power(-1.0, np.arange(nz, dtype=np.float32)).astype(np.float32)
         Cp_top = (self.Cp.astype(np.float32) * sign)
         self.Cp32_broadcast = Cp_top[:, None, None]
+        
+        # Bottom-surface weighting: cos(p*pi*0/Lz) = 1, so no sign alternation
+        self.Cp32_broadcast_bottom = self.Cp.astype(np.float32)[:, None, None]
 
     def prepare_full_reconstruction(self, geom):
         """Compute node-centered grids and full-domain reconstruction bases on demand."""
@@ -298,6 +301,16 @@ def add_source_term_modes(a_temp, KK, Q_modes):
                 a_temp[p, i, j] += KK[p, i, j] * Q_modes[p, i, j]
 
 @njit(parallel=True, fastmath=True)
+def add_bottom_surface_source(a_temp, KK, Cp_broadcast_bottom, B_scaled):
+    """
+    Accumulate a surface source at z=0 into temperature modes.
+    a_temp[p,:,:] += KK[p,:,:] * Cp_bottom[p] * B_scaled[:,:]
+    """
+    nz = a_temp.shape[0]
+    for p in prange(nz):
+        a_temp[p, :, :] += KK[p, :, :] * Cp_broadcast_bottom[p, 0, 0] * B_scaled[:, :]
+
+@njit(parallel=True, fastmath=True)
 def compute_source_term_from_temperature(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
     """
     Compute Q = - rho * L * (1 / (TL - TS)) * (dT/dt) * Indicator(TS <= T <= TL)
@@ -464,6 +477,15 @@ def reconstruct_surface_temperature(a, SsState):
     # contraction
     A = np.einsum('p,pij->ij', SsState.grid.Cp32_broadcast[:, 0, 0], a, optimize=True)
     # Use DCT-II for surface temperature (mathematical definition)
+    dct_result = IDCT_II(A)
+    return (SsState.grid.recon_scale * dct_result)
+
+def reconstruct_bottom_temperature(a, SsState):
+    """Reconstruct 2D temperature field at z=0 (bottom surface).
+    
+    At z=0, cos(p*pi*0/Lz) = 1, so the weighting is just Cp (no sign alternation).
+    """
+    A = np.einsum('p,pij->ij', SsState.grid.Cp32_broadcast_bottom[:, 0, 0], a, optimize=True)
     dct_result = IDCT_II(A)
     return (SsState.grid.recon_scale * dct_result)
 

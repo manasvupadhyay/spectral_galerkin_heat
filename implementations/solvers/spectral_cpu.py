@@ -135,6 +135,20 @@ class SpectralSolverCPU(HeatSolver):
         buffers.q_evap_old[:] = buffers.q_evap_buffer
         P_laser = np.sum(q_las) * geom.dx * geom.dy
 
+        # 5. Bottom convective heat loss (one-shot, no iteration needed)
+        h_conv = getattr(mat, 'h_conv', 0.0)
+        if h_conv > 0:
+            T_bottom = kernels.reconstruct_bottom_temperature(buffers.a_temp, SsState)
+            T0 = np.float32(getattr(mat, 'T0', 293.0))
+            # Negative sign: convection removes heat from z=0 boundary
+            q_conv = np.float32(-h_conv) * (T_bottom - T0)
+            q_conv_dct = kernels.DCT_II(q_conv)
+            B_bottom = grid.dct_scale * q_conv_dct
+            kernels.add_bottom_surface_source(
+                buffers.a_temp, SsState.KK,
+                grid.Cp32_broadcast_bottom, B_bottom
+            )
+
         # Optionally, return metrics for logging/diagnostics
         metrics = {
             'T_surface_max': np.max(T_temp),

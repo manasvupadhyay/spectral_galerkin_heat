@@ -285,7 +285,7 @@ This enables efficient disk usage and post-processing tailored to your needs.
 - [ ] **Custom flux**: Enable user to write custom boundary flux (less hardcoded)
 - [ ] **Boundary Condition Modularity**: Enable user to choose BCs freely (less hardcoded)
 - [ ] **Unit Tests**: Write and use unit tests
-
+- [ ] **Remove CPU LINEAR**: It was for test purposes
 ---
 
 Proposition 1 for Modular Boundary Conditions : (easy)
