@@ -113,6 +113,12 @@ Install everything (GPU + Visualization + Dev tools):
 uv sync --all-extras
 ```
 
+If you prefer to install the package itself in editable mode you can use `pip` directly. 
+
+```bash
+python -m pip install -e .
+```
+
 ### Usage
 Run a simulation by pointing `main.py` to a configuration file. Because `uv` manages the environment, use `uv run` to execute scripts without needing to manually activate the virtual environment:
 

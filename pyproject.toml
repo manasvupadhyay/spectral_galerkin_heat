@@ -1,7 +1,7 @@
 [project]
 name = "fastheatsolv"
 version = "0.1.0"
-description = "Add your description here"
+description = "A fast solver for the heat equation using spectral methods and GPU acceleration."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -13,6 +13,10 @@ dependencies = [
     "scipy>=1.17.1",
 ]
 
+
+#Install with:
+#`pip install -e .[dev]`
+#`pip install -e .[docs]`
 [project.optional-dependencies]
 gpu = [
     "cupy-cuda12x>=14.0.1",
@@ -20,11 +24,38 @@ gpu = [
 viz = [
     "matplotlib>=3.10.8",
 ]
-
-[dependency-groups]
 dev = [
     "black>=26.3.1",
     "isort>=8.0.1",
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",
 ]
+
+
+#Required for `uv` install:
+#uv sync --group dev --group docs
+[dependency-groups]
+gpu = [
+    "cupy-cuda12x>=14.0.1",
+]
+viz = [
+    "matplotlib>=3.10.8",
+]
+dev = [
+    "black>=26.3.1",
+    "isort>=8.0.1",
+    "pre-commit>=4.5.1",
+    "pytest>=9.0.2",
+]
+
+
+#Path to the library source code
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+#Path to the tests folder
+testpaths = ["tests"]
+#Recommended for new projects: https://docs.pytest.org/en/stable/explanation/goodpractices.html
+addopts = ["--import-mode=importlib"]
+
