@@ -150,7 +150,7 @@ class SpectralGrid:
         self.Cp32_broadcast = Cp_top[:, None, None]
         
         # Bottom-surface weighting: cos(p*pi*0/Lz) = 1, so no sign alternation
-        self.Cp32_broadcast_bottom = self.Cp.astype(cp.float32)[:, None, None]
+        bottom = self.Cp.astype(cp.float32)[:, None, None]
 
     def prepare_full_reconstruction(self, geom):
         """Compute node-centered grids and full-domain reconstruction bases on demand.

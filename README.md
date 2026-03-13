@@ -77,33 +77,55 @@ flowchart TD
 ```
 ## Installation
 
+This project uses `uv` for fast, reliable dependency and virtual environment management.
+
 ### Prerequisites
+- Install `uv` (https://uv.io)
 - Python 3.9+
-- [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (optional, for GPU support)
+- CUDA Toolkit (Optional, for GPU backend)
+
 ### Setup
 1. Clone the repository:
-   ```bash
-   git clone https://github.com/TheoADX/fastHeatSolv.git
-   cd fastHeatSolv
-   ```
+```bash
+git clone https://github.com/TheoADX/fastHeatSolv.git
+cd fastHeatSolv
+```
 
-2. Create and activate a virtual environment (recommended):
-   ```bash
-   python -m venv venv
-   # Windows
-   .\venv\Scripts\activate
-   # Linux/Mac
-   source venv/bin/activate
-   ```
+2. Install dependencies and build the environment
 
-3. Install dependencies:
-   ```bash
-   # For CPU-only usage
-   pip install -r requirements.txt
-   
-   # For GPU usage, ensure you install the matching cupy version, e.g.:
-   # pip install cupy-cuda12x
-   ```
+By running the commands below, `uv` will automatically create a virtual environment (`.venv`) and install the exact dependencies needed. You can decide exactly what environment you want to build.
+
+Install CPU core only (Recommended for standard use):
+
+```bash
+uv sync
+```
+
+Install for GPU execution:
+
+```bash
+uv sync --extra gpu
+```
+
+Install everything (GPU + Visualization + Dev tools):
+
+```bash
+uv sync --all-extras
+```
+
+### Usage
+Run a simulation by pointing `main.py` to a configuration file. Because `uv` manages the environment, use `uv run` to execute scripts without needing to manually activate the virtual environment:
+
+```bash
+uv run python main.py config/fast_test.yaml
+```
+
+To enable GPU acceleration, ensure your config file (`config/*.yaml`) has:
+
+```yaml
+simulation:
+  backend: "gpu"
+```
 
 ## Usage
 
