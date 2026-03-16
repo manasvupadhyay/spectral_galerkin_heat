@@ -211,9 +211,9 @@ class LocalFSIOManager(IOManager):
                 
                 # Check if file exists; if not, we must reconstruct and save it
                 if not os.path.exists(xdmf_path):
-                    state.prepare_full_reconstruction(self.context.geom)
+                    state.grid.prepare_full_reconstruction(self.context.geom)
                     field = reconstruct_temperature_DCT(state.a, state).transpose(2,1,0)
-                    grid_coords = (getattr(state, 'x_rec', None), getattr(state, 'y_rec', None), getattr(state, 'z_rec', None))
+                    grid_coords = (getattr(state.grid, 'x_rec', None), getattr(state.grid, 'y_rec', None), getattr(state.grid, 'z_rec', None))
                     
                     if hasattr(field, "get"):
                         field = field.get()
@@ -221,7 +221,7 @@ class LocalFSIOManager(IOManager):
                     logger.info(f"Generated XDMF for cut views at {xdmf_path}")
 
                 # 2. Generate cut views for each plane
-                from research.cut_views import generate_plots
+                from fast_heat_solv.io_utils.cut_views import generate_plots
                 cut_views_dir = self.get_output_path('', subdir='cut_views')
                 for plane in cut_views_planes:
                     logger.warning("You may want to set parameters for center, width, height, etc.")

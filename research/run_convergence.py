@@ -11,7 +11,7 @@ import yaml
 
 # Add validation_results to sys.path to directly import the compare function (saves subprocessing overhead)
 sys.path.append(os.path.join(os.path.dirname(__file__), 'validation_results'))
-from validation_results.compute_L2_error import compare
+from tests.compute_L2_error import compare
 
 import math
 

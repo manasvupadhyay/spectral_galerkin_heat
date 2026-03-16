@@ -99,7 +99,7 @@ class SimulationContext:
     backend: str = "cpu"      # "cpu" or "gpu"
 
     @classmethod
-    def from_dict(cls, cfg: Dict[str, Any]) -> 'SimulationContext':
+    def from_dict(cls, cfg: Dict[str, Any], config_dir: Optional[str] = None) -> 'SimulationContext':
         real_t = np.float32
         sim_cfg = cfg.get('simulation', {})
         domain_cfg = cfg.get('domain', {})
@@ -157,9 +157,33 @@ class SimulationContext:
             initial_position = tuple(path_cfg.get('initial_position', [0.0, 0.0]))
             if gcode_file is not None:
                 if not os.path.isabs(gcode_file):
-                     # parameters.py is in core/, so we need dirname(dirname(__file__)) to reach root
-                     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                     gcode_file = os.path.join(base_dir, 'config', 'paths', gcode_file)
+                    if config_dir is not None:
+                        # Ensure config_dir is absolute
+                        abs_config_dir = os.path.abspath(config_dir)
+                        attempt1 = os.path.join(abs_config_dir, gcode_file)
+                        attempt2 = os.path.join(abs_config_dir, 'paths', gcode_file)
+                        if os.path.exists(attempt1):
+                            gcode_file = attempt1
+                        elif os.path.exists(attempt2):
+                            gcode_file = attempt2
+                        else:
+                            # fallback
+                            gcode_file = os.path.join(abs_config_dir, 'paths', gcode_file)
+                    else:
+                        cwd = os.getcwd()
+                        attempt1 = os.path.join(cwd, gcode_file)
+                        attempt2 = os.path.join(cwd, 'config', 'paths', gcode_file)
+                        attempt3 = os.path.join(cwd, 'simulations', 'config', 'paths', gcode_file)
+                        
+                        if os.path.exists(attempt1):
+                            gcode_file = attempt1
+                        elif os.path.exists(attempt2):
+                            gcode_file = attempt2
+                        elif os.path.exists(attempt3):
+                            gcode_file = attempt3
+                        else:
+                            # Final fallback assuming project root is one level above src
+                            gcode_file = os.path.join(cwd, 'simulations', 'config', 'paths', gcode_file)
                 laser_path = GCodeLaserPath(gcode_file, initial_position=initial_position)
                 
         io_cfg = cfg.get('io', {})

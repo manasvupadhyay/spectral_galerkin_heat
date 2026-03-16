@@ -14,7 +14,7 @@ from fast_heat_solv.solver_base import StandaloneHeatRunner
 from fast_heat_solv.core.parameters import (
     SimulationContext, NumParams, MaterialParams, GeomParams, LaserParams
 )
-from research.cut_views import generate_plots
+from fast_heat_solv.io_utils.cut_views import generate_plots
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -78,7 +78,8 @@ def main():
     # 1. Load Config & Context
     logger.info(f"Loading configuration from {args.config}")
     config = load_config(args.config)
-    context = SimulationContext.from_dict(config)
+    config_dir = os.path.dirname(os.path.abspath(args.config))
+    context = SimulationContext.from_dict(config, config_dir=config_dir)
 
     # 2. Determine Computing Backend
     # Priority: CLI Argument > Config File > Default (CPU)

@@ -19,7 +19,7 @@ import subprocess
 import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from validation_results.compute_L2_error import compare
+from tests.compute_L2_error import compare
 
 # ── Paths ──
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))

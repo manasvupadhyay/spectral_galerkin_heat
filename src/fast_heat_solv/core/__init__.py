@@ -7,7 +7,7 @@ from .parameters import (
     GeomParams,
     LaserParams,
 )
-from .standalone_runner import StandaloneHeatRunner
+
 
 __all__ = [
     "SimulationContext",
@@ -15,5 +15,5 @@ __all__ = [
     "MaterialParams",
     "GeomParams",
     "LaserParams",
-    "StandaloneHeatRunner",
+    
 ]

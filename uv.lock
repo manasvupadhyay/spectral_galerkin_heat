@@ -190,6 +190,12 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+dev = [
+    { name = "black" },
+    { name = "isort" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+]
 gpu = [
     { name = "cupy-cuda12x" },
 ]
@@ -204,19 +210,29 @@ dev = [
     { name = "pre-commit" },
     { name = "pytest" },
 ]
+gpu = [
+    { name = "cupy-cuda12x" },
+]
+viz = [
+    { name = "matplotlib" },
+]
 
 [package.metadata]
 requires-dist = [
+    { name = "black", marker = "extra == 'dev'", specifier = ">=26.3.1" },
     { name = "cupy-cuda12x", marker = "extra == 'gpu'", specifier = ">=14.0.1" },
     { name = "h5py", specifier = ">=3.16.0" },
+    { name = "isort", marker = "extra == 'dev'", specifier = ">=8.0.1" },
     { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.10.8" },
     { name = "numba", specifier = ">=0.64.0" },
     { name = "numpy", specifier = ">=2.4.3" },
+    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.5.1" },
     { name = "pyfftw", specifier = ">=0.15.1" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.2" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "scipy", specifier = ">=1.17.1" },
 ]
-provides-extras = ["gpu", "viz"]
+provides-extras = ["gpu", "viz", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -225,6 +241,8 @@ dev = [
     { name = "pre-commit", specifier = ">=4.5.1" },
     { name = "pytest", specifier = ">=9.0.2" },
 ]
+gpu = [{ name = "cupy-cuda12x", specifier = ">=14.0.1" }]
+viz = [{ name = "matplotlib", specifier = ">=3.10.8" }]
 
 [[package]]
 name = "filelock"
