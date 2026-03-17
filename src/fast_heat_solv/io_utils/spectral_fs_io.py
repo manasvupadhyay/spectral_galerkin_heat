@@ -4,7 +4,7 @@ import h5py
 import numpy as np
 from datetime import datetime
 from typing import Any, Dict, Optional, Union
-from fast_heat_solv.core.io import IOManager
+from fast_heat_solv.io_utils.io_base import IOManager
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@ import numpy as np
 import os
 
 if TYPE_CHECKING:
-    from fast_heat_solv.interfaces.laser import LaserPath
+    from fast_heat_solv.core.laser import LaserPath
 
 @dataclass
 class NumParams:

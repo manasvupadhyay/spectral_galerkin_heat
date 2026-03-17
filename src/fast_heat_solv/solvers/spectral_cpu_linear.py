@@ -1,8 +1,8 @@
 import numpy as np
 import fast_heat_solv.physics.spectral_cpu_kernels as kernels
 from fast_heat_solv.core.parameters import SimulationContext
-from fast_heat_solv.interfaces.solver import HeatSolver
-from fast_heat_solv.interfaces.laser import LaserState, LaserPath
+from fast_heat_solv.solvers.base import HeatSolver
+from fast_heat_solv.core.laser import LaserState, LaserPath
 from typing import Optional
 
 class SpectralSolverCPULinear(HeatSolver):

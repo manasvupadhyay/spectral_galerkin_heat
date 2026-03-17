@@ -1,105 +1,138 @@
 # Architecture & Design
 
-The project is structured around the **Abstract Factory** pattern, enabling easy extension to new backends (CPU, GPU, distributed) and numerical methods (Spectral, FEM, etc.).
+The project is structured around the **Abstract Factory** pattern, enabling easy extension to new
+backends (CPU, GPU, distributed) and numerical methods (Spectral, FEM, etc.).
+
+Each submodule owns its own abstract base class (`base.py`) co-located with its concrete
+implementations — there is no separate `interfaces/` package.
 
 ## Directory Structure
 
 ```text
 fastHeatSolv/
-├── main.py                     # Entry point: parses args, instantiates SimulationFactory
-├── config/                     # YAML configuration files for simulation parameters
-├── data/
-│   └── paths/                  # G-code files for laser paths
-├── out/                        # Simulation results (per-run subfolders)
-├── core/
-│   ├── workflow.py             # Simulation loop (orchestrator, strategy pattern)
-│   ├── parameters.py           # Data classes: PhysParams, NumParams, GeomParams, IOParams
-│   └── io.py                   # Abstract base class for IOManager
-├── interfaces/
-│   ├── factory.py              # Abstract Factory: interface for creating solvers, IO managers
-│   └── solver.py               # Abstract Product: HeatSolver interface
-├── implementations/
-│   ├── factories/              # Concrete Factories (CPU, GPU, FEM)
-│   ├── solvers/                # Concrete Solvers (Spectral, FEM wrappers)
-│   ├── file_io/                # Concrete IO Managers
-│   └── physics/                # Low-level physics kernels
-└── utils/                      # Utilities (DCT, visualization, logging)
+├── pyproject.toml                  # Package definition and dependencies
+├── README.md
+├── src/
+│   └── fast_heat_solv/
+│       ├── __init__.py             # Package version
+│       ├── runner.py               # StandaloneHeatRunner: simulation loop orchestrator
+│       ├── core/
+│       │   ├── parameters.py       # Data classes: SimulationContext, NumParams, MaterialParams, …
+│       │   └── laser.py            # LaserState dataclass + LaserPath ABC
+│       ├── solvers/
+│       │   ├── base.py             # HeatSolver ABC
+│       │   ├── spectral_cpu.py     # SpectralSolverCPU  (NumPy / Numba)
+│       │   ├── spectral_gpu.py     # SpectralSolverGPU  (CuPy)
+│       │   └── spectral_cpu_linear.py
+│       ├── factories/
+│       │   ├── base.py             # SimulationFactory ABC
+│       │   ├── cpu_factory.py      # CPUSimulationFactory
+│       │   ├── gpu_factory.py      # GPUSimulationFactory
+│       │   └── cpu_linear_factory.py
+│       ├── physics/
+│       │   ├── spectral_cpu_kernels.py   # Low-level CPU spectral kernels
+│       │   ├── spectral_gpu_kernels.py   # Low-level GPU spectral kernels
+│       │   └── spectral_helpers.py       # DCT reconstruction utilities
+│       └── io_utils/
+│           ├── io_base.py          # IOManager ABC
+│           ├── spectral_fs_io.py   # LocalFSIOManager  (HDF5 + XDMF)
+│           ├── gcode_path.py       # GCodeLaserPath: parses G-code into laser trajectory
+│           ├── loader.py           # Data-loading utilities
+│           └── cut_views.py        # 2-D cut-view visualisation
+├── simulations/
+│   ├── main.py                     # CLI entry point: parses YAML, dispatches factory, runs simulation
+│   ├── example_orchestrator.py     # Library usage example (no I/O, frame-by-frame)
+│   └── config/                     # YAML configuration files + G-code paths
+├── tests/
+│   ├── test_compute_L2_error.py    # Correctness tests for L2 comparison pipeline
+│   ├── test_recon_dct.py           # DCT reconstruction correctness + benchmark
+│   └── compute_L2_error.py         # L2 / L∞ error computation utility (CLI + library)
+├── research/
+│   └── run_convergence.py          # Mesh convergence study
+└── docs/
+    └── ARCHITECTURE.md
 ```
 
 ## Component Descriptions
 
-- **Client (`main.py`)**: Entry point that parses arguments (CLI/YAML) and injects the appropriate Factory into the Workflow.
-- **Workflow (`core/workflow.py`)**: The high-level director that manages the time loop, physics updates, and IO events.
-- **Factory Interface (`interfaces/factory.py`)**: Abstract definitions for creating solvers and managers.
-- **Solvers (`implementations/solvers/`)**: The mathematical engines.
+- **CLI (`simulations/main.py`)**: Parses a YAML config, selects the appropriate factory, and
+  delegates execution to `StandaloneHeatRunner`.
+
+- **Runner (`runner.py`)**: `StandaloneHeatRunner` — the simulation loop orchestrator.
+  Owns the `while t < t_end` loop, delegates all physics to `HeatSolver` and all I/O to
+  `IOManager`. Has *no* knowledge of the numerical method or storage backend.
+
+- **Factory base (`factories/base.py`)**: `SimulationFactory` ABC — declares `create_heat_solver()`
+  and `create_io_manager()`. Concrete factories wire together solver + I/O for a specific backend.
+
+- **Solver base (`solvers/base.py`)**: `HeatSolver` ABC — declares `initialize()`, `step()`, and
+  `finalize()`. Concrete solvers contain all physics; they never perform I/O.
+
+- **IO base (`io_utils/io_base.py`)**: `IOManager` ABC — declares the full I/O contract
+  (`initialize`, `process_step`, `process_end`, `finalize`, `save_step`, …).
+
+- **Laser (`core/laser.py`)**: `LaserState` dataclass and `LaserPath` ABC.  Used by both solvers
+  (to query laser position/power) and `io_utils/gcode_path.py` (concrete path from G-code).
+
+- **Physics (`physics/`)**: Pure numerical kernels (Numba/CuPy). No I/O, no state — only
+  array-in / array-out functions called by the solvers.
 
 ## Extending the Framework
 
-To add a new solver (e.g., Finite Difference):
-1. Create `interfaces/solver.py` compliant implementation in `implementations/solvers/`.
-2. Create a factory in `implementations/factories/`.
-3. Register the method in `main.py`.
+To add a new solver backend (e.g. Finite Difference):
+
+1. Create `src/fast_heat_solv/solvers/fd_cpu.py` implementing `HeatSolver` from `solvers/base.py`.
+2. Create `src/fast_heat_solv/factories/fd_factory.py` implementing `SimulationFactory` from
+   `factories/base.py`.
+3. Register the new backend in `simulations/main.py`.
 
 ## Architecture Diagram
 
 ```mermaid
 flowchart TD
-    %% --- Theme & Styling ---
-    classDef container fill:#2d2d2d,stroke:#555,color:#fff;
-    classDef client fill:#ff7675,stroke:#d63031,stroke-width:2px,color:#000;
-    classDef interface fill:#81ecec,stroke:#00cec9,stroke-width:2px,stroke-dasharray: 5 5,color:#000;
-    classDef factory fill:#55efc4,stroke:#00b894,stroke-width:2px,color:#000;
-    classDef product fill:#fdcb6e,stroke:#e17055,stroke-width:2px,color:#000;
+    %% --- Styling ---
+    classDef client   fill:#ff7675,stroke:#d63031,stroke-width:2px,color:#000;
+    classDef abstract fill:#81ecec,stroke:#00cec9,stroke-width:2px,stroke-dasharray:5 5,color:#000;
+    classDef concrete fill:#55efc4,stroke:#00b894,stroke-width:2px,color:#000;
+    classDef product  fill:#fdcb6e,stroke:#e17055,stroke-width:2px,color:#000;
+    classDef core     fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#000;
 
-    %% --- Main Architecture Container ---
-    subgraph Architecture [System Architecture]
-        style Architecture fill:#333333,stroke:#666,color:#fff
-        
-        %% Client Layer
-        subgraph ClientLayer [Client Side]
-            style ClientLayer fill:#404040,stroke:#777,color:#fff
-            Main[main.py]:::client
-            Workflow[SimulationWorkflow]:::client
-            Context[SimulationContext]:::client
-            
-            Main --> Context
-            Main --> Workflow
-        end
+    %% --- Nodes ---
+    CLI["simulations/main.py"]:::client
+    Runner["runner.py\nStandaloneHeatRunner"]:::client
+    Context["core/parameters.py\nSimulationContext"]:::core
+    Laser["core/laser.py\nLaserState · LaserPath"]:::core
 
-        %% Interface Layer
-        subgraph InterfaceLayer [Abstract Interfaces]
-            style InterfaceLayer fill:#404040,stroke:#777,color:#fff
-            ISimFactory["<< Interface >><br>SimulationFactory"]:::interface
-            IHeat["<< Interface >><br>HeatSolver"]:::interface
-        end
+    IFact["factories/base.py\n≪abstract≫ SimulationFactory"]:::abstract
+    ISolv["solvers/base.py\n≪abstract≫ HeatSolver"]:::abstract
+    IIO["io_utils/io_base.py\n≪abstract≫ IOManager"]:::abstract
 
-        %% Implementation Layer
-        subgraph ImplementationLayer [Concrete Implementations]
-            style ImplementationLayer fill:#404040,stroke:#777,color:#fff
-            
-            %% Factories
-            CPUFact[CPUSimulationFactory]:::factory
-            GPUFact[GPUSimulationFactory]:::factory
-            
-            %% Products
-            CPUSolv[SpectralCPUSolver]:::product
-            GPUSolv[SpectralGPUSolver]:::product
-        end
+    CPUFact["factories/cpu_factory.py\nCPUSimulationFactory"]:::concrete
+    GPUFact["factories/gpu_factory.py\nGPUSimulationFactory"]:::concrete
 
-        %% Relationships
-        Workflow -->|Uses| ISimFactory
-        Workflow -->|Calls| IHeat
+    CPUSolv["solvers/spectral_cpu.py\nSpectralSolverCPU"]:::product
+    GPUSolv["solvers/spectral_gpu.py\nSpectralSolverGPU"]:::product
+    FSIO["io_utils/spectral_fs_io.py\nLocalFSIOManager"]:::product
 
-        %% Factory Implementations
-        CPUFact -.->|Implements| ISimFactory
-        GPUFact -.->|Implements| ISimFactory
+    %% --- Relationships ---
+    CLI -->|"creates context + factory"| Context
+    CLI -->|"instantiates"| Runner
+    Runner -->|"uses"| IFact
+    Runner -->|"calls"| ISolv
+    Runner -->|"calls"| IIO
 
-        %% Factory Creation Links
-        CPUFact -->|Creates| CPUSolv
-        GPUFact -->|Creates| GPUSolv
+    IFact -.->|"implemented by"| CPUFact
+    IFact -.->|"implemented by"| GPUFact
 
-        %% Product Implementations
-        CPUSolv -.->|Implements| IHeat
-        GPUSolv -.->|Implements| IHeat
-    end
+    CPUFact -->|"creates"| CPUSolv
+    CPUFact -->|"creates"| FSIO
+    GPUFact -->|"creates"| GPUSolv
+    GPUFact -->|"creates"| FSIO
+
+    CPUSolv -.->|"implements"| ISolv
+    GPUSolv -.->|"implements"| ISolv
+    FSIO    -.->|"implements"| IIO
+
+    CPUSolv -->|"queries"| Laser
+    GPUSolv -->|"queries"| Laser
 ```

@@ -3,9 +3,9 @@
 <Xdmf Version="2.0">
  <Domain>
    <Grid Name="Error" GridType="Uniform" Time="0.005">
-     <Topology TopologyType="3DRectMesh" Dimensions="1001 257 38"/>
+     <Topology TopologyType="3DRectMesh" Dimensions="1001 257 90"/>
      <Geometry GeometryType="VXVYVZ">
-       <DataItem Dimensions="38" NumberType="Float" Precision="4" Format="HDF">
+       <DataItem Dimensions="90" NumberType="Float" Precision="4" Format="HDF">
           error.h5:/X
        </DataItem>
        <DataItem Dimensions="257" NumberType="Float" Precision="4" Format="HDF">
@@ -16,22 +16,22 @@
        </DataItem>
      </Geometry>
      <Attribute Name="error" AttributeType="Scalar" Center="Node">
-       <DataItem Dimensions="1001 257 38" NumberType="Float" Precision="4" Format="HDF">
+       <DataItem Dimensions="1001 257 90" NumberType="Float" Precision="4" Format="HDF">
           error.h5:/error
        </DataItem>
      </Attribute>
      <Attribute Name="abs_error" AttributeType="Scalar" Center="Node">
-       <DataItem Dimensions="1001 257 38" NumberType="Float" Precision="4" Format="HDF">
+       <DataItem Dimensions="1001 257 90" NumberType="Float" Precision="4" Format="HDF">
           error.h5:/abs_error
        </DataItem>
      </Attribute>
      <Attribute Name="T_a" AttributeType="Scalar" Center="Node">
-       <DataItem Dimensions="1001 257 38" NumberType="Float" Precision="4" Format="HDF">
+       <DataItem Dimensions="1001 257 90" NumberType="Float" Precision="4" Format="HDF">
           error.h5:/T_a
        </DataItem>
      </Attribute>
      <Attribute Name="T_b" AttributeType="Scalar" Center="Node">
-       <DataItem Dimensions="1001 257 38" NumberType="Float" Precision="4" Format="HDF">
+       <DataItem Dimensions="1001 257 90" NumberType="Float" Precision="4" Format="HDF">
           error.h5:/T_b
        </DataItem>
      </Attribute>

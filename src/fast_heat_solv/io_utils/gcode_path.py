@@ -1,4 +1,4 @@
-from fast_heat_solv.interfaces.laser import LaserPath, LaserState
+from fast_heat_solv.core.laser import LaserPath, LaserState
 import numpy as np
 
 class GCodeLaserPath(LaserPath):

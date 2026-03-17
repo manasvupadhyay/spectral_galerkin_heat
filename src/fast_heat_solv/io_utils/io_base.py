@@ -9,8 +9,8 @@ class IOManager(ABC):
     """
     Abstract interface for Input/Output management in the simulation workflow.
     Handles data persistence (saving results) and potentially retrieval (checkpointing).
-    
-    This enforces a standard contract regardless of whether we write to 
+
+    This enforces a standard contract regardless of whether we write to
     local filesystem, HDF5, cloud storage, or databases.
     """
 
@@ -19,7 +19,7 @@ class IOManager(ABC):
         """
         Setup the output environment based on the simulation context.
         Must determine the unique 'run_id' and create necessary directory structures.
-        
+
         Args:
             context: The SimulationContext object containing configuration (context.io is now a flexible dictionary from YAML, not IOParams).
         """
@@ -43,24 +43,24 @@ class IOManager(ABC):
     def get_output_path(self, filename: str, subdir: Optional[str] = None) -> str:
         """
         Helper to construct a full path for a given filename within the current run directory.
-        
+
         Args:
             filename: Name of the file.
             subdir: Optional subdirectory (e.g., 'fields', 'profiles').
-            
+
         Returns:
             Full absolute path str.
         """
         pass
-    
+
     @abstractmethod
     def load_step(self, step: Union[int, str] = 'latest') -> Optional[Dict[str, Any]]:
         """
         Retrieve simulation state for a specific step. Used for checkpointing or post-processing.
-        
+
         Args:
             step: Step index to load, or 'latest' to find the most recent.
-            
+
         Returns:
             Dictionary containing loaded state (scalars, arrays, time), or None if not found.
         """

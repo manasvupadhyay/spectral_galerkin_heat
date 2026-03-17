@@ -11,7 +11,7 @@ class LaserState:
 
 class LaserPath(ABC):
     """Abstract interface for defining laser movement and power evolution."""
-    
+
     @abstractmethod
     def get_state(self, time: float, dt: float) -> LaserState:
         """Returns laser position, power, and velocity at a given simulation time."""

@@ -1,5 +1,6 @@
-"""Core package — simulation parameters, IO base class, and runner."""
+"""Core package — simulation parameters and laser definitions."""
 
+from .laser import LaserState, LaserPath
 from .parameters import (
     SimulationContext,
     NumParams,
@@ -10,10 +11,11 @@ from .parameters import (
 
 
 __all__ = [
+    "LaserState",
+    "LaserPath",
     "SimulationContext",
     "NumParams",
     "MaterialParams",
     "GeomParams",
     "LaserParams",
-    
 ]

@@ -12,9 +12,9 @@ import os
 import platform
 from typing import Optional, Dict, Any
 
-from fast_heat_solv.interfaces.factory import SimulationFactory
-from fast_heat_solv.interfaces.solver import HeatSolver
-from fast_heat_solv.interfaces.io import IOManager
+from fast_heat_solv.factories.base import SimulationFactory
+from fast_heat_solv.solvers.base import HeatSolver
+from fast_heat_solv.io_utils.io_base import IOManager
 from fast_heat_solv.core.parameters import SimulationContext
 
 logger = logging.getLogger(__name__)

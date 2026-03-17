@@ -1,6 +1,6 @@
-from fast_heat_solv.interfaces.factory import SimulationFactory
-from fast_heat_solv.interfaces.solver import HeatSolver
-from fast_heat_solv.core.io import IOManager # Import interface from core, not stdlib io
+from fast_heat_solv.factories.base import SimulationFactory
+from fast_heat_solv.solvers.base import HeatSolver
+from fast_heat_solv.io_utils.io_base import IOManager
 
 # Concrete implementations
 # Note: 'file_io' folder name is used to avoid conflict with Python's built-in 'io' module

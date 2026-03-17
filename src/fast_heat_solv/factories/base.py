@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any
-from .solver import HeatSolver
-from .io import IOManager
+from fast_heat_solv.solvers.base import HeatSolver
+from fast_heat_solv.io_utils.io_base import IOManager
 
 class SimulationFactory(ABC):
     """
@@ -9,7 +9,7 @@ class SimulationFactory(ABC):
     Allows switching between different implementations (CPU/GPU, Spectral/FEM)
     without changing the main workflow logic.
     """
-    
+
     def __init__(self, context: Any):
         self.context = context
 

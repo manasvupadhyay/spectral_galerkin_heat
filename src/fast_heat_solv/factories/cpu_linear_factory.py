@@ -1,6 +1,6 @@
-from fast_heat_solv.interfaces.factory import SimulationFactory
-from fast_heat_solv.interfaces.solver import HeatSolver
-from fast_heat_solv.core.io import IOManager
+from fast_heat_solv.factories.base import SimulationFactory
+from fast_heat_solv.solvers.base import HeatSolver
+from fast_heat_solv.io_utils.io_base import IOManager
 
 from fast_heat_solv.io_utils.spectral_fs_io import LocalFSIOManager
 from ..solvers.spectral_cpu_linear import SpectralSolverCPULinear

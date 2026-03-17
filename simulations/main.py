@@ -10,7 +10,7 @@ from dataclasses import asdict
 # Ensure we can import from local modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))); sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from fast_heat_solv.solver_base import StandaloneHeatRunner
+from fast_heat_solv.runner import StandaloneHeatRunner
 from fast_heat_solv.core.parameters import (
     SimulationContext, NumParams, MaterialParams, GeomParams, LaserParams
 )
