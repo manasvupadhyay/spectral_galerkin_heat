@@ -9,8 +9,8 @@ import csv
 # We assume standard yaml package is available (often used via PyYAML)
 import yaml
 
-# Add validation_results to sys.path to directly import the compare function (saves subprocessing overhead)
-sys.path.append(os.path.join(os.path.dirname(__file__), 'validation_results'))
+# Add project root to sys.path so the tests package is importable.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from tests.compute_L2_error import compare
 
 import math
@@ -63,13 +63,13 @@ def run_simulation_and_get_error(param_name, param_val, nx, ny, nz, template_yam
     config['domain']['mesh'] = [nx, ny, nz]
     
     # 3. Create a temporary yaml config
-    tmp_yaml = "config/tmp_convergence.yaml"
+    tmp_yaml = "simulations/config/tmp_convergence.yaml"
     with open(tmp_yaml, 'w') as f:
         yaml.dump(config, f)
         
     # 4. Run the simulation
     # Using check=True will raise an error if the simulation crashes
-    subprocess.run(["python", "main.py", tmp_yaml], check=True)
+    subprocess.run(["python", "simulations/main.py", tmp_yaml], check=True)
     
     # 5. Locate the newly created simulation directory and output xmf
     latest_out = get_latest_dir("out")
@@ -89,7 +89,7 @@ def run_simulation_and_get_error(param_name, param_val, nx, ny, nz, template_yam
     print(f"  -> Found target field: {latest_xmf}")
     
     # 6. Compute L2 Error against eagar_tsai.xmf
-    eagar_tsai_path = "validation_results/eagar_tsai_corrected.xmf"
+    eagar_tsai_path = "validation_results/validation.xdmf"
     if not os.path.exists(eagar_tsai_path):
         raise FileNotFoundError(f"Reference file {eagar_tsai_path} not found. Please generate it first.")
         
@@ -120,17 +120,17 @@ def run_simulation_and_get_error(param_name, param_val, nx, ny, nz, template_yam
     print("  -> Cleanup done.\n")
 
 def main():
-    base_yaml = "config/standard_test.yaml"
-    csv_file_path = "convergence_results.csv"
+    base_yaml = "simulations/config/standard_test.yaml"
+    csv_file_path = "convergence_results_FE.csv"
     
     # Base configuration
-    base_nx, base_ny, base_nz = 800, 300, 1800 # Starting mesh size 
+    base_nx, base_ny, base_nz = 512, 256, 1000 # Starting mesh size 
     
     # User-requested ranges
     # Generate 10 log-spaced integer mesh sizes (inclusive endpoints)
     nx_range = log_spaced_ints(10, 512, 10)
     ny_range = log_spaced_ints(10, 256, 10)
-    nz_range = log_spaced_ints(10, 1500, 10)
+    nz_range = log_spaced_ints(10, 1000, 10)
     
     print("Starting convergence tests with the following mesh sizes:")
     print(f"  nx: {nx_range}")

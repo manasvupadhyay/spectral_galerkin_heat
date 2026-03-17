@@ -182,6 +182,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "h5py" },
+    { name = "matplotlib" },
     { name = "numba" },
     { name = "numpy" },
     { name = "pyfftw" },
@@ -223,6 +224,7 @@ requires-dist = [
     { name = "cupy-cuda12x", marker = "extra == 'gpu'", specifier = ">=14.0.1" },
     { name = "h5py", specifier = ">=3.16.0" },
     { name = "isort", marker = "extra == 'dev'", specifier = ">=8.0.1" },
+    { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.10.8" },
     { name = "numba", specifier = ">=0.64.0" },
     { name = "numpy", specifier = ">=2.4.3" },

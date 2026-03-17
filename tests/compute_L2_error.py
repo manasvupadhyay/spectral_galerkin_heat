@@ -66,6 +66,7 @@ import logging
 import os
 import sys
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -317,7 +318,8 @@ def _build_structured_interpolator(sf: StructuredField):
     """Return a ``RegularGridInterpolator`` for a StructuredField.
 
     The interpolator accepts points of shape (N, 3) where columns are
-    (x, y, z) and returns interpolated temperature values.
+    (z, y, x) — matching the array dimension order — and returns
+    interpolated temperature values.
 
     ``RegularGridInterpolator`` performs **trilinear** interpolation
     on a rectilinear grid.  It is exact at the original grid nodes and
@@ -432,6 +434,11 @@ def _make_common_grid(
 #  Evaluate a field on a structured grid
 # ---------------------------------------------------------------------------
 
+# Default slab size: number of z-planes per chunk for chunked evaluation.
+# Each slab queries (slab_nz * ny * nx) points — tune to balance memory vs overhead.
+_SLAB_MAX_POINTS = 500_000
+
+
 def _evaluate_on_grid(
     fd: FieldData,
     x: np.ndarray,
@@ -441,6 +448,10 @@ def _evaluate_on_grid(
     """Evaluate *fd* at every node of a rectilinear (x, y, z) grid.
 
     Returns an array of shape ``(nz, ny, nx)``.
+
+    For large grids the evaluation is done in z-slabs to limit peak
+    memory usage (each slab holds at most ``_SLAB_MAX_POINTS`` query
+    points).
     """
     nz, ny, nx = len(z), len(y), len(x)
 
@@ -454,20 +465,64 @@ def _evaluate_on_grid(
         ):
             return fd.T.copy()
 
-        # Trilinear interpolation via RegularGridInterpolator
         interp = _build_structured_interpolator(fd)
-        # Build full meshgrid query: shape (nz*ny*nx, 3) in (z, y, x) order
-        Zg, Yg, Xg = np.meshgrid(z, y, x, indexing="ij")
-        pts = np.column_stack([Zg.ravel(), Yg.ravel(), Xg.ravel()])
-        return interp(pts).reshape(nz, ny, nx)
+        return _eval_structured_chunked(interp, x, y, z)
 
     # Unstructured
     interp = _build_unstructured_interpolator(fd)
-    Xg, Yg, Zg = np.meshgrid(x, y, z, indexing="ij")
-    pts = np.column_stack([Xg.ravel(), Yg.ravel(), Zg.ravel()])
-    vals = interp(pts).reshape(nx, ny, nz)
-    # Transpose (nx, ny, nz) → (nz, ny, nx) for consistency
-    return vals.transpose(2, 1, 0)
+    return _eval_unstructured_chunked(interp, x, y, z)
+
+
+def _eval_structured_chunked(
+    interp,
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+) -> np.ndarray:
+    """Evaluate a RegularGridInterpolator in z-slabs.
+
+    The interpolator expects query points in (z, y, x) order.
+    """
+    nz, ny, nx = len(z), len(y), len(x)
+    slab_nz = max(1, _SLAB_MAX_POINTS // (ny * nx))
+    result = np.empty((nz, ny, nx), dtype=np.float64)
+
+    for z0 in range(0, nz, slab_nz):
+        z1 = min(z0 + slab_nz, nz)
+        z_chunk = z[z0:z1]
+        Zg, Yg, Xg = np.meshgrid(z_chunk, y, x, indexing="ij")
+        pts = np.column_stack([Zg.ravel(), Yg.ravel(), Xg.ravel()])
+        result[z0:z1] = interp(pts).reshape(z1 - z0, ny, nx)
+
+    return result
+
+
+def _eval_unstructured_chunked(
+    interp,
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+) -> np.ndarray:
+    """Evaluate a LinearNDInterpolator in z-slabs.
+
+    The interpolator expects query points in (x, y, z) order.
+    Result is returned in (nz, ny, nx) convention.
+    """
+    nz, ny, nx = len(z), len(y), len(x)
+    slab_nz = max(1, _SLAB_MAX_POINTS // (ny * nx))
+    result = np.empty((nz, ny, nx), dtype=np.float64)
+
+    for z0 in range(0, nz, slab_nz):
+        z1 = min(z0 + slab_nz, nz)
+        z_chunk = z[z0:z1]
+        # meshgrid with (x, y, z_chunk): shape (nx, ny, chunk_nz)
+        Xg, Yg, Zg = np.meshgrid(x, y, z_chunk, indexing="ij")
+        pts = np.column_stack([Xg.ravel(), Yg.ravel(), Zg.ravel()])
+        vals = interp(pts).reshape(nx, ny, z1 - z0)
+        # Transpose (nx, ny, chunk_nz) → (chunk_nz, ny, nx)
+        result[z0:z1] = vals.transpose(2, 1, 0)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -693,13 +748,13 @@ def compare(
         )
         print()
 
-        print("  Interpolating field A ...", end=" ", flush=True)
-        T_a = _evaluate_on_grid(field_a, x, y, z)
-        print("done")
-
-        print("  Interpolating field B ...", end=" ", flush=True)
-        T_b = _evaluate_on_grid(field_b, x, y, z)
-        print("done")
+        print("  Interpolating fields A & B in parallel ...", flush=True)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            future_a = pool.submit(_evaluate_on_grid, field_a, x, y, z)
+            future_b = pool.submit(_evaluate_on_grid, field_b, x, y, z)
+            T_a = future_a.result()
+            T_b = future_b.result()
+        print("  done")
 
     # 3. Compute norms
     print()
