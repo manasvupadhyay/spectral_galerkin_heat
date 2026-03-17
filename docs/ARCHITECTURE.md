@@ -36,19 +36,11 @@ fastHeatSolv/
 │       └── io_utils/
 │           ├── io_base.py          # IOManager ABC
 │           ├── spectral_fs_io.py   # LocalFSIOManager  (HDF5 + XDMF)
-│           ├── gcode_path.py       # GCodeLaserPath: parses G-code into laser trajectory
-│           ├── loader.py           # Data-loading utilities
-│           └── cut_views.py        # 2-D cut-view visualisation
+|           ...
 ├── simulations/
 │   ├── main.py                     # CLI entry point: parses YAML, dispatches factory, runs simulation
 │   ├── example_orchestrator.py     # Library usage example (no I/O, frame-by-frame)
 │   └── config/                     # YAML configuration files + G-code paths
-├── tests/
-│   ├── test_compute_L2_error.py    # Correctness tests for L2 comparison pipeline
-│   ├── test_recon_dct.py           # DCT reconstruction correctness + benchmark
-│   └── compute_L2_error.py         # L2 / L∞ error computation utility (CLI + library)
-├── research/
-│   └── run_convergence.py          # Mesh convergence study
 └── docs/
     └── ARCHITECTURE.md
 ```
