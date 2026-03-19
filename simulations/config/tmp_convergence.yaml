@@ -1,8 +1,8 @@
 domain:
   mesh:
-  - 138
+  - 800
   - 256
-  - 1000
+  - 1700
   size:
   - 0.005
   - 0.0025
@@ -10,8 +10,6 @@ domain:
 io:
   at_end:
   - full_volume
-  - profiles
-  - cut_views
   cut_views_planes:
   - xy
   - yz
@@ -42,7 +40,7 @@ material:
   name: 316L
   rho: 7850.0
 simulation:
-  backend: cpu
+  backend: gpu
   dt: 2.5e-06
   duration: 0.005
   method: spectral

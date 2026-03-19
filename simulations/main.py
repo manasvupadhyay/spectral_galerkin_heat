@@ -3,12 +3,10 @@ import yaml
 import logging
 import sys
 import os
+import shutil
 import numpy as np
 from typing import Dict, Any, List
 from dataclasses import asdict
-
-# Ensure we can import from local modules
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))); sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from fast_heat_solv.runner import StandaloneHeatRunner
 from fast_heat_solv.core.parameters import (
@@ -94,19 +92,64 @@ def main():
     
     run_dir = None
 
+    def _is_gpu_oom(exc):
+        """Check if exception is a CuPy OutOfMemoryError (or wraps one)."""
+        def _check_one(e):
+            # Check by type name (works even if cupy import fails)
+            if type(e).__name__ == "OutOfMemoryError" and "cupy" in type(e).__module__:
+                return True
+            # Also try direct isinstance check
+            try:
+                import cupy.cuda.memory
+                if isinstance(e, cupy.cuda.memory.OutOfMemoryError):
+                    return True
+            except ImportError:
+                pass
+            return False
+
+        # Check the exception itself
+        if _check_one(exc):
+            return True
+        # Check the chain of causes
+        cause = getattr(exc, '__cause__', None) or getattr(exc, '__context__', None)
+        while cause:
+            if _check_one(cause):
+                return True
+            cause = getattr(cause, '__cause__', None) or getattr(cause, '__context__', None)
+        return False
+
     # 3. Instantiate Factory & Workflow
 
     try:
         # get_factory only needs context
-        factory = get_factory(context) 
+        factory = get_factory(context)
         workflow = StandaloneHeatRunner(context, factory)
 
         # 4. Run Simulation
         workflow.run()
 
     except Exception as e:
-        logger.exception("Simulation Failed")
-        sys.exit(1)
+        # Check if this is a GPU out-of-memory error - fallback to CPU
+        if backend == "gpu" and _is_gpu_oom(e):
+            logger.warning("GPU out of memory! Falling back to CPU backend...")
+
+            # Clean up the failed output directory before retrying
+            failed_dir = getattr(getattr(workflow, 'io_manager', None), 'base_dir', None)
+            if failed_dir and os.path.exists(failed_dir):
+                logger.info(f"Cleaning up failed GPU output directory: {failed_dir}")
+                shutil.rmtree(failed_dir, ignore_errors=True)
+
+            context.backend = "cpu"
+            try:
+                factory = get_factory(context)
+                workflow = StandaloneHeatRunner(context, factory)
+                workflow.run()
+            except Exception as cpu_e:
+                logger.exception("Simulation failed on CPU fallback")
+                sys.exit(1)
+        else:
+            logger.exception("Simulation Failed")
+            sys.exit(1)
 
     # 5. Post-Processing / Visualization
     viz_cfg = config.get('post_processing', {})

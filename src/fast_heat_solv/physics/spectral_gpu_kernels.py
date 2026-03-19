@@ -98,6 +98,7 @@ class SpectralGrid:
     # Reconstruction constants
     recon_scale: float = 0.0
     Cp32_broadcast: cp.ndarray = None
+    Cp32_broadcast_bottom: cp.ndarray = None
     dct_scale: float = 0.0
     
     # Normalization coefficients
@@ -150,7 +151,7 @@ class SpectralGrid:
         self.Cp32_broadcast = Cp_top[:, None, None]
         
         # Bottom-surface weighting: cos(p*pi*0/Lz) = 1, so no sign alternation
-        bottom = self.Cp.astype(cp.float32)[:, None, None]
+        self.Cp32_broadcast_bottom = self.Cp.astype(cp.float32)[:, None, None]
 
     def prepare_full_reconstruction(self, geom):
         """Compute node-centered grids and full-domain reconstruction bases on demand.
@@ -167,10 +168,15 @@ class SpectralGrid:
         self.y_rec = ((np.arange(ny+1)) * dy).astype(np.float32)
         self.z_rec = ((np.arange(nz+1)) * dz).astype(np.float32)
 
+        # Convert GPU arrays to CPU for reconstruction (output only)
+        Cm_cpu = cp.asnumpy(self.Cm)
+        Cn_cpu = cp.asnumpy(self.Cn)
+        Cp_cpu = cp.asnumpy(self.Cp)
+
         m, n, p = np.arange(nx), np.arange(ny), np.arange(nz)
-        self.Bx_recon = (self.Cm[:, None] * np.cos(np.pi * m[:, None] * self.x_rec[None, :] / Lx)).astype(cp.float32)
-        self.By_recon = (self.Cn[:, None] * np.cos(np.pi * n[:, None] * self.y_rec[None, :] / Ly)).astype(cp.float32)
-        self.Bz_recon = (self.Cp[:, None] * np.cos(np.pi * p[:, None] * self.z_rec[None, :] / Lz)).astype(cp.float32)
+        self.Bx_recon = (Cm_cpu[:, None] * np.cos(np.pi * m[:, None] * self.x_rec[None, :] / Lx)).astype(np.float32)
+        self.By_recon = (Cn_cpu[:, None] * np.cos(np.pi * n[:, None] * self.y_rec[None, :] / Ly)).astype(np.float32)
+        self.Bz_recon = (Cp_cpu[:, None] * np.cos(np.pi * p[:, None] * self.z_rec[None, :] / Lz)).astype(np.float32)
 
 @dataclass
 class FineMeshState:

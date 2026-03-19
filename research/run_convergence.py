@@ -121,16 +121,16 @@ def run_simulation_and_get_error(param_name, param_val, nx, ny, nz, template_yam
 
 def main():
     base_yaml = "simulations/config/standard_test.yaml"
-    csv_file_path = "convergence_results_FE.csv"
+    csv_file_path = "research/convergence_results_FE.csv"
     
     # Base configuration
-    base_nx, base_ny, base_nz = 512, 256, 1000 # Starting mesh size 
+    base_nx, base_ny, base_nz = 600, 256, 1700 # Starting mesh size 
     
     # User-requested ranges
     # Generate 10 log-spaced integer mesh sizes (inclusive endpoints)
-    nx_range = log_spaced_ints(10, 512, 10)
-    ny_range = log_spaced_ints(10, 256, 10)
-    nz_range = log_spaced_ints(10, 1000, 10)
+    nx_range = log_spaced_ints(10, 800, 10)
+    ny_range = log_spaced_ints(10, 300, 10)
+    nz_range = log_spaced_ints(10, 2000, 10)
     
     print("Starting convergence tests with the following mesh sizes:")
     print(f"  nx: {nx_range}")

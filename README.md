@@ -113,20 +113,23 @@ Install everything (GPU + Visualization + Dev tools):
 uv sync --all-extras
 ```
 
-If you prefer to install the package itself in editable mode you can use `pip` directly. 
+If you prefer to install the package itself in editable mode you can use `pip` directly.
 
 ```bash
 python -m pip install -e .
+
+# With GPU support (requires CUDA 12.x)
+python -m pip install -e ".[gpu]"
 ```
 
 ### Usage
 Run a simulation by pointing `main.py` to a configuration file. Because `uv` manages the environment, use `uv run` to execute scripts without needing to manually activate the virtual environment:
 
 ```bash
-uv run python main.py config/fast_test.yaml
+uv run python simulations/main.py simulations/config/fast_test.yaml
 ```
 
-To enable GPU acceleration, ensure your config file (`config/*.yaml`) has:
+To enable GPU acceleration, ensure your config file (`simulations/config/*.yaml`) has:
 
 ```yaml
 simulation:
@@ -138,10 +141,10 @@ simulation:
 Run a simulation by pointing `main.py` to a configuration file:
 
 ```bash
-python main.py config/fast_test.yaml
+python simulations/main.py simulations/config/fast_test.yaml
 ```
 
-To enable GPU acceleration, ensure your config file (`config/*.yaml`) has:
+To enable GPU acceleration, ensure your config file (`simulations/config/*.yaml`) has:
 ```yaml
 simulation:
   backend: "gpu"

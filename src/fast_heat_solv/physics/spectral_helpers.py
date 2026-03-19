@@ -103,9 +103,13 @@ def reconstruct_temperature_DCT(a, SsState):
     # ── Fused 1-D weight vectors: normalization × DCT-I halving ──────
     # Combined weight[i] = C[i] * (0.5 if i>0 else 1.0)
     # Precomputed as 1-D float32 vectors (6 elements total).
-    wx = np.array(grid.Cm, dtype=np.float32); wx[1:] *= 0.5
-    wy = np.array(grid.Cn, dtype=np.float32); wy[1:] *= 0.5
-    wz = np.array(grid.Cp, dtype=np.float32); wz[1:] *= 0.5
+    # Handle both numpy and cupy arrays (GPU solver uses cupy)
+    Cm = grid.Cm.get() if hasattr(grid.Cm, 'get') else grid.Cm
+    Cn = grid.Cn.get() if hasattr(grid.Cn, 'get') else grid.Cn
+    Cp = grid.Cp.get() if hasattr(grid.Cp, 'get') else grid.Cp
+    wx = np.array(Cm, dtype=np.float32); wx[1:] *= 0.5
+    wy = np.array(Cn, dtype=np.float32); wy[1:] *= 0.5
+    wz = np.array(Cp, dtype=np.float32); wz[1:] *= 0.5
 
     # ── Scale on contiguous memory, then copy once into padded ───────
     # Working on a contiguous copy of `a` is faster than writing

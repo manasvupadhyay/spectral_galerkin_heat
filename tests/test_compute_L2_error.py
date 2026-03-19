@@ -21,6 +21,8 @@ from compute_L2_error import (
     UnstructuredField,
     _evaluate_on_grid,
     compute_L2,
+    compute_L2_unstructured,
+    _compute_vertex_volumes,
 )
 
 
@@ -183,7 +185,7 @@ class TestStructuredVsUnstructured:
         T_u = _evaluate_on_grid(uf, x, y, z)
 
         result = compute_L2(T_s, T_u, x, y, z)
-
+        print(f"Structured vs Unstructured L2_rel: {result['L2_rel']:.4f}, pct_valid: {result['pct_valid']:.1f}%")
         # Both represent the same smooth function, so the relative L2
         # error should be small (dominated by the unstructured mesh
         # interpolation accuracy).
@@ -191,3 +193,114 @@ class TestStructuredVsUnstructured:
             f"L2_rel = {result['L2_rel']:.4f} — too large for matching fields"
         )
         assert result["pct_valid"] > 90.0
+
+
+class TestComputeL2Unstructured:
+    """Tests for ``compute_L2_unstructured`` — vertex-weighted integration."""
+
+    @staticmethod
+    def _make_simple_tet_mesh():
+        """Create a simple unit cube mesh with 5 tetrahedra."""
+        # Unit cube corners
+        xyz = np.array([
+            [0, 0, 0],  # 0
+            [1, 0, 0],  # 1
+            [1, 1, 0],  # 2
+            [0, 1, 0],  # 3
+            [0, 0, 1],  # 4
+            [1, 0, 1],  # 5
+            [1, 1, 1],  # 6
+            [0, 1, 1],  # 7
+        ], dtype=np.float64)
+
+        # 5 tetrahedra filling the unit cube
+        connectivity = np.array([
+            [0, 1, 3, 4],
+            [1, 2, 3, 6],
+            [1, 3, 4, 6],
+            [3, 4, 6, 7],
+            [1, 4, 5, 6],
+        ], dtype=np.int64)
+
+        return xyz, connectivity
+
+    def test_vertex_volumes_sum_to_mesh_volume(self):
+        """Vertex volumes should sum to the mesh volume."""
+        xyz, conn = self._make_simple_tet_mesh()
+        vertex_vols = _compute_vertex_volumes(xyz, conn)
+
+        # Unit cube has volume 1.0
+        assert vertex_vols.sum() == pytest.approx(1.0, rel=1e-10)
+
+    def test_zero_error(self):
+        """Identical fields should give L2_abs = 0."""
+        xyz, conn = self._make_simple_tet_mesh()
+        vertex_vols = _compute_vertex_volumes(xyz, conn)
+        T = np.ones(len(xyz))
+
+        result = compute_L2_unstructured(T, T, vertex_vols)
+
+        assert result["L2_abs"] == pytest.approx(0.0, abs=1e-15)
+        assert result["L2_rel"] == pytest.approx(0.0, abs=1e-15)
+        assert not np.isnan(result["L2_abs"]), "L2_abs should never be NaN"
+        assert not np.isnan(result["L2_rel"]), "L2_rel should never be NaN"
+
+    def test_constant_offset(self):
+        """A uniform offset should give known L2 error."""
+        xyz, conn = self._make_simple_tet_mesh()
+        vertex_vols = _compute_vertex_volumes(xyz, conn)
+        vol = vertex_vols.sum()
+
+        T_a = np.ones(len(xyz)) * 2.0
+        T_b = np.ones(len(xyz)) * 1.5
+        delta = 0.5
+
+        result = compute_L2_unstructured(T_a, T_b, vertex_vols)
+        expected_L2 = delta * np.sqrt(vol)
+
+        assert result["L2_abs"] == pytest.approx(expected_L2, rel=1e-10)
+        assert not np.isnan(result["L2_abs"]), "L2_abs should never be NaN"
+
+    def test_nan_masking_no_nan_output(self):
+        """NaN in input should NOT produce NaN in output L2 norms."""
+        xyz, conn = self._make_simple_tet_mesh()
+        vertex_vols = _compute_vertex_volumes(xyz, conn)
+
+        T_a = np.ones(len(xyz))
+        T_b = np.ones(len(xyz))
+
+        # Inject NaN at some vertices (simulating out-of-domain interpolation)
+        T_a[0] = np.nan
+        T_a[1] = np.nan
+
+        result = compute_L2_unstructured(T_a, T_b, vertex_vols)
+
+        # Critical: L2 values must NOT be NaN
+        assert not np.isnan(result["L2_abs"]), "L2_abs must not be NaN when input has NaN"
+        assert not np.isnan(result["L2_rel"]), "L2_rel must not be NaN when input has NaN"
+
+        # The remaining valid points have zero error
+        assert result["L2_abs"] == pytest.approx(0.0, abs=1e-14)
+        assert result["n_nan"] == 2
+        assert result["pct_valid"] < 100.0
+
+    def test_partial_nan_correct_error(self):
+        """With some NaN values, error should be computed on valid points only."""
+        xyz, conn = self._make_simple_tet_mesh()
+        vertex_vols = _compute_vertex_volumes(xyz, conn)
+
+        T_a = np.ones(len(xyz)) * 2.0
+        T_b = np.ones(len(xyz)) * 1.0  # error = 1.0 at valid points
+
+        # Inject NaN at vertex 0
+        T_a[0] = np.nan
+
+        result = compute_L2_unstructured(T_a, T_b, vertex_vols)
+
+        # Valid volume excludes vertex 0
+        valid_vol = vertex_vols[1:].sum()
+        expected_L2 = 1.0 * np.sqrt(valid_vol)  # error = 1.0, integrated over valid vol
+
+        assert not np.isnan(result["L2_abs"]), "L2_abs must not be NaN"
+        assert result["L2_abs"] == pytest.approx(expected_L2, rel=1e-6)
+        assert result["volume"] == pytest.approx(valid_vol, rel=1e-10)

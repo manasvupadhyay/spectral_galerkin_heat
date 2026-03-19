@@ -34,7 +34,7 @@ dev = [
 
 
 #Required for `uv` install:
-#uv sync --group dev --group docs
+#uv sync --group gpu --group viz --group dev
 [dependency-groups]
 gpu = [
     "cupy-cuda12x>=14.0.1",
