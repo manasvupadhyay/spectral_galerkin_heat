@@ -9,9 +9,7 @@ import csv
 # We assume standard yaml package is available (often used via PyYAML)
 import yaml
 
-# Add project root to sys.path so the tests package is importable.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from tests.compute_L2_error import compare
+from compute_L2_error import compare
 
 import math
 
@@ -88,15 +86,15 @@ def run_simulation_and_get_error(param_name, param_val, nx, ny, nz, template_yam
     
     print(f"  -> Found target field: {latest_xmf}")
     
-    # 6. Compute L2 Error against eagar_tsai.xmf
-    eagar_tsai_path = "validation_results/validation.xdmf"
-    if not os.path.exists(eagar_tsai_path):
-        raise FileNotFoundError(f"Reference file {eagar_tsai_path} not found. Please generate it first.")
+    # 6. Compute L2 Error against validation reference 
+    validation_path = "validation_results/validation.xdmf"
+    if not os.path.exists(validation_path):
+        raise FileNotFoundError(f"Reference file {validation_path} not found. Please generate it first.")
         
     print("  -> Computing L2 error differences...")
     # Hide stdout while running evaluate if you prefer, passing output arguments to /dev/null
     norms = compare(
-        path_a=eagar_tsai_path,
+        path_a=validation_path,
         path_b=latest_xmf,
         attr_a="temperature",
         attr_b="temperature"
@@ -124,7 +122,7 @@ def main():
     csv_file_path = "research/convergence_results_FE.csv"
     
     # Base configuration
-    base_nx, base_ny, base_nz = 600, 256, 1700 # Starting mesh size 
+    base_nx, base_ny, base_nz = 600, 256, 500 # Starting mesh size 
     
     # User-requested ranges
     # Generate 10 log-spaced integer mesh sizes (inclusive endpoints)

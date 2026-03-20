@@ -210,35 +210,17 @@ def _save_field(T_data, basename):
         ds.attrs['x_laser'] = x_end
         ds.attrs['y_laser'] = y_laser
 
-    xmf = f"""\
-<?xml version="1.0" ?>
-<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>
-<Xdmf Version="2.0">
- <Domain>
-   <Grid Name="EagarTsai" GridType="Uniform" Time="{t_total}">
-     <Topology TopologyType="3DRectMesh" Dimensions="{nz1} {ny1} {nx1}"/>
-     <Geometry GeometryType="VXVYVZ">
-       <DataItem Dimensions="{nx1}" NumberType="Float" Precision="4" Format="HDF">
-          {h5_ref}:/X
-       </DataItem>
-       <DataItem Dimensions="{ny1}" NumberType="Float" Precision="4" Format="HDF">
-          {h5_ref}:/Y
-       </DataItem>
-       <DataItem Dimensions="{nz1}" NumberType="Float" Precision="4" Format="HDF">
-          {h5_ref}:/Z
-       </DataItem>
-     </Geometry>
-     <Attribute Name="temperature" AttributeType="Scalar" Center="Node">
-       <DataItem Dimensions="{nz1} {ny1} {nx1}" NumberType="Float" Precision="4" Format="HDF">
-          {h5_ref}:/temperature
-       </DataItem>
-     </Attribute>
-   </Grid>
- </Domain>
-</Xdmf>
-"""
-    with open(xmf_path, 'w') as f:
-        f.write(xmf)
+    # Build XDMF using ElementTree via XdmfBuilder
+    from fast_heat_solv.io_utils import XdmfBuilder
+    builder = XdmfBuilder(version="2.0")
+    builder.add_structured_grid(
+        name="EagarTsai",
+        dims=(nz1, ny1, nx1),
+        h5_ref=h5_ref,
+        attributes={"temperature": "temperature"},
+        time=t_total,
+    )
+    builder.write(xmf_path)
 
     print(f"Saved:  {h5_path}")
     print(f"Saved:  {xmf_path}")

@@ -342,14 +342,16 @@ class LocalFSIOManager(IOManager):
 
 def _save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", verbose=False, t=None, step=None):
     """Serialize a 3D scalar field, on a uniform domain, to HDF5 with an accompanying XDMF wrapper. Adds time and step to XMF metadata and filenames."""
+    from .xdmf_io import XdmfBuilder
+
     h5_name = f"{filename_base}.h5"
     xmf_name = f"{filename_base}.xmf"
     h5_ref = os.path.basename(h5_name)
-    
+
 
     x_coords, y_coords, z_coords = grid_coords
     # Ensure all coordinate arrays are NumPy arrays (not CuPy)
-    # TO DO handle that better upstream
+    # TODO handle that better upstream
     if hasattr(x_coords, "get"):
         x_coords = x_coords.get()
     if hasattr(y_coords, "get"):
@@ -376,37 +378,17 @@ def _save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", v
         if step is not None:
             dset.attrs['step'] = step
 
-    # Add time and step as XML attributes in the XMF file
-    time_str = f' Time="{t}"' if t is not None else ''
-    step_str = f' Step="{step}"' if step is not None else ''
-    xmf_content = f'''<?xml version="1.0" ?>
-<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>
-<Xdmf Version="2.0">
- <Domain>
-     <Grid Name="Mesh" GridType="Uniform"{time_str}{step_str}>
-         <Topology TopologyType="3DRectMesh" Dimensions="{nz} {ny} {nx}"/>
-         <Geometry GeometryType="VXVYVZ">
-             <DataItem Dimensions="{nx}" NumberType="Float" Precision="4" Format="HDF">
-                {h5_ref}:/X
-             </DataItem>
-             <DataItem Dimensions="{ny}" NumberType="Float" Precision="4" Format="HDF">
-                {h5_ref}:/Y
-             </DataItem>
-             <DataItem Dimensions="{nz}" NumberType="Float" Precision="4" Format="HDF">
-                {h5_ref}:/Z
-             </DataItem>
-         </Geometry>
-         <Attribute Name="{value_name}" AttributeType="Scalar" Center="Node">
-             <DataItem Dimensions="{nz} {ny} {nx}" NumberType="Float" Precision="4" Format="HDF">
-                {h5_ref}:/{value_name}
-             </DataItem>
-         </Attribute>
-     </Grid>
- </Domain>
-</Xdmf>
-'''
-    with open(xmf_name, "w") as f:
-        f.write(xmf_content)
+    # Build XDMF using ElementTree via XdmfBuilder
+    builder = XdmfBuilder(version="2.0")
+    builder.add_structured_grid(
+        name="Mesh",
+        dims=(nz, ny, nx),
+        h5_ref=h5_ref,
+        attributes={value_name: value_name},
+        time=t,
+        step=step,
+    )
+    builder.write(xmf_name)
 
     if verbose:
         print(f"Saved debug files: {xmf_name} (Open this in Paraview)")

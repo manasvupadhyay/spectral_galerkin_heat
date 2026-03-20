@@ -1,140 +1,46 @@
 import argparse
-import xml.etree.ElementTree as ET
-import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator, griddata
 import os
-import sys
 import logging
+
+from .xdmf_io import load_xdmf, StructuredField, UnstructuredField
 
 logger = logging.getLogger(__name__)
 
+
 # ==========================================
-# 1. PARSING & DATA LOADING
+# 1. DATA LOADING (using xdmf_io)
 # ==========================================
 
-def _parse_xdmf_path(xdmf_path, relative_path_string):
-    """
-    Resolves the h5 file path relative to the xdmf location.
-    Expected string format in XDMF: "filename.h5:/dataset/path"
-    """
-    h5_file, h5_path = relative_path_string.split(":")
-    # Assume h5 file is in same directory as xdmf
-    base_dir = os.path.dirname(xdmf_path)
-    full_h5_path = os.path.join(base_dir, h5_file)
-    return full_h5_path, h5_path
 
 def _load_data(xdmf_path):
     """
-    Parses XDMF to determine grid type (Structured vs Unstructured)
-    and loads the corresponding Temperature and Geometry data.
+    Loads XDMF data using the consolidated load_xdmf function.
+
+    Returns a dict compatible with the legacy format:
+    - For structured: {'x', 'y', 'z', 'T', 'type': 'structured'}
+    - For unstructured: {'xyz', 'T', 'type': 'unstructured'}
     """
-    tree = ET.parse(xdmf_path)
-    root = tree.getroot()
-    
-    # Namespace handling usually not needed for basic XDMF, but safety check
-    # We look for the Domain
-    domain = root.find("Domain")
-    
-    # --- STRATEGY 1: Check for Temporal Collection (Unstructured/Validation format) ---
-    # We look for the LAST grid in a collection to get the "final time step"
-    grids = domain.findall(".//Grid")
-    
-    target_grid = None
-    grid_type = "Unknown"
-    
-    # Heuristic: Find the grid with the 'Temperature' attribute
-    # In temporal files, we want the last one.
-    valid_grids = []
-    for g in grids:
-        if g.find("Attribute") is not None:
-            valid_grids.append(g)
-            
-    if not valid_grids:
-        raise ValueError("Could not find any Grid with Attributes in XDMF.")
-    
-    # "I want only the final time step" -> Take the last valid grid
-    target_grid = valid_grids[-1]
-    
-    topology = target_grid.find("Topology")
-    geometry = target_grid.find("Geometry")
-    attribute = target_grid.find("Attribute")
-    
-    # Fallback: If Topology/Geometry not found in target grid (e.g. due to XInclude), 
-    # look for them in other grids (usually defined in the first Grid for the mesh)
-    if topology is None or geometry is None:
-        logger.warning("Topology/Geometry not found in target grid. Searching in Domain...")
-        for g in domain.findall(".//Grid"):
-            if topology is None and g.find("Topology") is not None:
-                topology = g.find("Topology")
-            if geometry is None and g.find("Geometry") is not None:
-                geometry = g.find("Geometry")
-            
-            if topology is not None and geometry is not None:
-                break
-    
-    if topology is None:
-         raise ValueError("Could not find Topology in XDMF.")
-    if geometry is None:
-         raise ValueError("Could not find Geometry in XDMF.")
+    field = load_xdmf(xdmf_path)
 
-    topo_type = topology.get("TopologyType")
-    
-    data = {}
-    
-    # --- FORMAT 1: Structured (3DRectMesh) ---
-    if topo_type == "3DRectMesh":
-        logger.info(f"Detected Format: Structured Grid ({topo_type})")
-        
-        # Geometry in VXVYVZ format expects 3 DataItems (X, Y, Z vectors)
-        geo_items = geometry.findall("DataItem")
-        
-        # Load X, Y, Z axes
-        axes = []
-        for item in geo_items:
-            h5_file, h5_path = _parse_xdmf_path(xdmf_path, item.text.strip())
-            with h5py.File(h5_file, 'r') as f:
-                axes.append(f[h5_path][:])
-        
-        # Note: XDMF 3DRectMesh dims are typically K J I (Z Y X). 
-        # But VXVYVZ usually lists X, Y, Z. We assign based on length or standard order.
-        # Assuming standard Order: X (0), Y (1), Z (2)
-        data['x'] = axes[0]
-        data['y'] = axes[1]
-        data['z'] = axes[2]
-        data['type'] = 'structured'
-
-        # Load Temperature
-        # Dimensions in XDMF are often Z Y X, we might need to transpose
-        attr_item = attribute.find("DataItem")
-        h5_file, h5_path = _parse_xdmf_path(xdmf_path, attr_item.text.strip())
-        with h5py.File(h5_file, 'r') as f:
-            T = f[h5_path][:]
-            # If shape matches (z, y, x), we are good. If (x,y,z), we leave it.
-            # Standard XDMF is Z, Y, X.
-            data['T'] = T
-
-    # --- FORMAT 2: Unstructured (Tetrahedron/XYZ) ---
+    if isinstance(field, StructuredField):
+        logger.info(f"Detected Format: Structured Grid (3DRectMesh)")
+        return {
+            "x": field.x,
+            "y": field.y,
+            "z": field.z,
+            "T": field.T,
+            "type": "structured",
+        }
     else:
-        logger.info(f"Detected Format: Unstructured Grid ({topo_type})")
-        
-        # Load XYZ Geometry (N x 3)
-        geo_item = geometry.find("DataItem")
-        h5_file, h5_path = _parse_xdmf_path(xdmf_path, geo_item.text.strip())
-        with h5py.File(h5_file, 'r') as f:
-            xyz = f[h5_path][:]
-        
-        data['xyz'] = xyz
-        data['type'] = 'unstructured'
-        
-        # Load Temperature
-        attr_item = attribute.find("DataItem")
-        h5_file, h5_path = _parse_xdmf_path(xdmf_path, attr_item.text.strip())
-        with h5py.File(h5_file, 'r') as f:
-            data['T'] = f[h5_path][:].flatten() # Ensure 1D array
-
-    return data
+        logger.info(f"Detected Format: Unstructured Grid (Tetrahedron)")
+        return {
+            "xyz": field.xyz,
+            "T": field.T,
+            "type": "unstructured",
+        }
 
 # ==========================================
 # 2. INTERPOLATION ENGINE

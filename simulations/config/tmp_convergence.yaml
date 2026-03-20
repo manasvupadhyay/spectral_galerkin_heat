@@ -1,8 +1,8 @@
 domain:
   mesh:
-  - 600
+  - 16
   - 256
-  - 2000
+  - 500
   size:
   - 0.005
   - 0.0025
@@ -40,7 +40,7 @@ material:
   name: 316L
   rho: 7850.0
 simulation:
-  backend: gpu
+  backend: cpu
   dt: 2.5e-06
   duration: 0.005
   method: spectral
