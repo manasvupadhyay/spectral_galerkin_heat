@@ -17,10 +17,15 @@ dependencies = [
 
 #Install with:
 #`pip install -e .[dev]`
-#`pip install -e .[docs]`
+#`pip install -e .[gpu]`
 [project.optional-dependencies]
 gpu = [
     "cupy-cuda12x>=14.0.1",
+    "nvidia-cufft-cu12",
+    "nvidia-cublas-cu12",
+    "nvidia-cusolver-cu12",
+    "nvidia-curand-cu12",
+    "nvidia-cusparse-cu12",
 ]
 viz = [
     "matplotlib>=3.10.8",
@@ -38,6 +43,11 @@ dev = [
 [dependency-groups]
 gpu = [
     "cupy-cuda12x>=14.0.1",
+    "nvidia-cufft-cu12",
+    "nvidia-cublas-cu12",
+    "nvidia-cusolver-cu12",
+    "nvidia-curand-cu12",
+    "nvidia-cusparse-cu12",
 ]
 viz = [
     "matplotlib>=3.10.8",
@@ -60,3 +70,7 @@ testpaths = ["tests"]
 #Recommended for new projects: https://docs.pytest.org/en/stable/explanation/goodpractices.html
 addopts = ["--import-mode=importlib"]
 
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
