@@ -1,0 +1,41 @@
+simulation:
+  name: "gpu_spectral_ellipse_run"
+  method: "spectral"
+  backend: "cpu"
+  duration: 0.01679
+  dt: 0.7e-5
+  update_interval: 20
+
+domain:
+  size: [0.0025, 0.0025, 0.0005]
+  mesh: [256, 260, 300]
+
+material:
+  name: "GenericSteel"
+  rho: 7850.0
+  k: 15.0
+  Cp: 500.0
+  L_f: 267700.0
+  T_solidus: 1658.0
+  T_liquidus: 1723.0
+  T0: 293.0
+  DeltaH_LV: 7.41e6
+  R_v: 150.774
+  Pa: 101325.0
+  T_boil: 3090.0
+
+laser:
+  radius: 60.0e-6
+  absorptivity: 0.30
+  power_nominal: 200.0
+  path:
+    type: "gcode"
+    file: "ellipse.gcode"
+
+io:
+  interval: 10
+  outputs: [full_volume]
+  at_end: [full_volume]
+  profiles_locations:
+    - 'hotspot'
+  cut_views_planes:

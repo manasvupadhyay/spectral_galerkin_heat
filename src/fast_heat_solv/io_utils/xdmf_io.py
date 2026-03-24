@@ -90,6 +90,7 @@ class XdmfBuilder:
         time: Optional[float] = None,
         step: Optional[int] = None,
         precision: int = 4,
+        parent: Optional[ET.Element] = None,
     ) -> ET.Element:
         """Add a structured 3DRectMesh grid to the XDMF document.
 
@@ -121,12 +122,12 @@ class XdmfBuilder:
 
         # Create Grid element with optional time/step
         grid_attribs = {"Name": name, "GridType": "Uniform"}
+            
+        p = parent if parent is not None else self.domain
+        grid = ET.SubElement(p, "Grid", **grid_attribs)
+        
         if time is not None:
-            grid_attribs["Time"] = str(time)
-        if step is not None:
-            grid_attribs["Step"] = str(step)
-
-        grid = ET.SubElement(self.domain, "Grid", **grid_attribs)
+            ET.SubElement(grid, "Time", Value=str(time))
 
         # Topology
         ET.SubElement(
@@ -213,10 +214,11 @@ class XdmfBuilder:
         """
         # Create Grid element
         grid_attribs = {"Name": name, "GridType": "Uniform"}
-        if time is not None:
-            grid_attribs["Time"] = str(time)
 
         grid = ET.SubElement(self.domain, "Grid", **grid_attribs)
+        
+        if time is not None:
+            ET.SubElement(grid, "Time", Value=str(time))
 
         # Topology
         topology = ET.SubElement(

@@ -144,7 +144,7 @@ class FineMeshState:
         Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
         
         self.refinement = 4
-        Lx_box, Ly_box, Lz_box = 0.9e-3, 0.2e-3, 0.04e-3
+        Lx_box, Ly_box, Lz_box = 0.9e-3, 0.9e-3, 0.04e-3
         
         self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
         

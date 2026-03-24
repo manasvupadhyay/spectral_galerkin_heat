@@ -22,6 +22,7 @@ class LocalFSIOManager(IOManager):
         self.base_dir: Optional[str] = None
         self.save_full_fields: bool = False
         self.format_version: str = "1.0"
+        self._saved_xmf_steps = []
         
         # Subdirectories map
         self.dirs = {
@@ -46,10 +47,10 @@ class LocalFSIOManager(IOManager):
         # --- IO scheduling state ----
         io_cfg = context.io if hasattr(context, 'io') else {}
         self._interval = io_cfg.get('interval')
-        self._outputs = io_cfg.get('outputs', [])
-        self._at_end = io_cfg.get('at_end', [])
-        self._profiles_locations = io_cfg.get('profiles_locations', [])
-        self._cut_views_planes = io_cfg.get('cut_views_planes', [])
+        self._outputs = io_cfg.get('outputs') or []
+        self._at_end = io_cfg.get('at_end') or []
+        self._profiles_locations = io_cfg.get('profiles_locations') or []
+        self._cut_views_planes = io_cfg.get('cut_views_planes') or []
 
         if self._interval is None:
             logger.info("io.interval is None: periodic outputs disabled; only 'at_end' outputs will be saved.")
@@ -116,7 +117,9 @@ class LocalFSIOManager(IOManager):
                 filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
                 if hasattr(field, "get"):
                     field = field.get()
-                _save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
+                step_info = _save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
+                self._saved_xmf_steps.append(step_info)
+                self._write_timeseries_xmf()
                 logger.info(f"Saved field for step {step} to {filename_base}.h5/.xmf")
 
             elif output_type == 'modes':
@@ -217,7 +220,9 @@ class LocalFSIOManager(IOManager):
                     
                     if hasattr(field, "get"):
                         field = field.get()
-                    _save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
+                    step_info = _save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
+                    self._saved_xmf_steps.append(step_info)
+                    self._write_timeseries_xmf()
                     logger.info(f"Generated XDMF for cut views at {xdmf_path}")
 
                 # 2. Generate cut views for each plane
@@ -333,6 +338,30 @@ class LocalFSIOManager(IOManager):
         if self._at_end:
             logger.info(f"Final output(s) saved at end: {self._at_end}")
 
+    def _write_timeseries_xmf(self) -> None:
+        if not self._saved_xmf_steps:
+            return
+            
+        out_path = self.get_output_path("temperature_series.xmf", subdir="fields")
+        from .xdmf_io import XdmfBuilder
+        import xml.etree.ElementTree as ET
+        
+        builder = XdmfBuilder(version="2.0")
+        collection = ET.SubElement(builder.domain, "Grid", Name="TimeSeries", GridType="Collection", CollectionType="Temporal")
+        
+        for info in self._saved_xmf_steps:
+            builder.add_structured_grid(
+                name="Mesh",
+                dims=info['dims'],
+                h5_ref=info['h5_ref'],
+                attributes={info['value_name']: info['value_name']},
+                time=info['time'],
+                step=info['step'],
+                parent=collection
+            )
+            
+        builder.write(out_path)
+
     def finalize(self) -> None:
         """
         Nothing specific to close for local FS, just log.
@@ -392,3 +421,11 @@ def _save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", v
 
     if verbose:
         print(f"Saved debug files: {xmf_name} (Open this in Paraview)")
+        
+    return {
+        'time': t,
+        'step': step,
+        'dims': (nz, ny, nx),
+        'h5_ref': h5_ref,
+        'value_name': value_name
+    }
