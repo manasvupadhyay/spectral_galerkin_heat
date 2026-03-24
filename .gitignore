@@ -1,7 +1,6 @@
 out/
 .validation/
 validation_results/
-research/
 
 
 # Python bytecode
