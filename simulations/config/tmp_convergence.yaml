@@ -1,6 +1,6 @@
 domain:
   mesh:
-  - 16
+  - 10
   - 256
   - 500
   size:
@@ -33,8 +33,8 @@ material:
   R_v: 150.774
   T0: 293.0
   T_boil: 3090.0
-  T_liquidus: 1723.0
-  T_solidus: 1658.0
+  T_liquidus: 1800.0
+  T_solidus: 1700
   h_conv: 3000.0
   k: 15.0
   name: 316L

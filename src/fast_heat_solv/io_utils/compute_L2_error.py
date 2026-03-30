@@ -51,7 +51,8 @@ import logging
 import os
 import sys
 import time
-from typing import Dict, Optional, Tuple
+from pathlib import Path
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 
@@ -242,23 +243,19 @@ def _make_common_grid(
 #  Evaluate a field on a structured grid
 # ---------------------------------------------------------------------------
 
-# Default slab size: number of z-planes per chunk for chunked evaluation.
-# Each slab queries (slab_nz * ny * nx) points - tune to balance memory vs overhead.
-_SLAB_MAX_POINTS = 500_000
-
-
 def _evaluate_on_grid(
     fd: FieldData,
     x: np.ndarray,
     y: np.ndarray,
     z: np.ndarray,
+    slab_max_points: int = 500_000,
 ) -> np.ndarray:
     """Evaluate *fd* at every node of a rectilinear (x, y, z) grid.
 
     Returns an array of shape ``(nz, ny, nx)``.
 
     For large grids the evaluation is done in z-slabs to limit peak
-    memory usage (each slab holds at most ``_SLAB_MAX_POINTS`` query
+    memory usage (each slab holds at most ``slab_max_points`` query
     points).
     """
     nz, ny, nx = len(z), len(y), len(x)
@@ -276,13 +273,13 @@ def _evaluate_on_grid(
 
         logger.info("  Building RegularGridInterpolator...")
         interp = _build_structured_interpolator(fd)
-        return _eval_structured_chunked(interp, x, y, z)
+        return _eval_structured_chunked(interp, x, y, z, slab_max_points)
 
     # Unstructured
     logger.info(f"  Building Delaunay triangulation ({len(fd.T)} vertices)...")
     interp = _build_unstructured_interpolator(fd)
     logger.info("  Triangulation complete")
-    return _eval_unstructured_chunked(interp, x, y, z)
+    return _eval_unstructured_chunked(interp, x, y, z, slab_max_points)
 
 
 def _eval_structured_chunked(
@@ -290,13 +287,14 @@ def _eval_structured_chunked(
     x: np.ndarray,
     y: np.ndarray,
     z: np.ndarray,
+    slab_max_points: int = 500_000,
 ) -> np.ndarray:
     """Evaluate a RegularGridInterpolator in z-slabs with progress logging.
 
     The interpolator expects query points in (z, y, x) order.
     """
     nz, ny, nx = len(z), len(y), len(x)
-    slab_nz = max(1, _SLAB_MAX_POINTS // (ny * nx))
+    slab_nz = max(1, slab_max_points // (ny * nx))
     result = np.empty((nz, ny, nx), dtype=np.float64)
 
     n_slabs = (nz + slab_nz - 1) // slab_nz
@@ -330,6 +328,7 @@ def _eval_unstructured_chunked(
     x: np.ndarray,
     y: np.ndarray,
     z: np.ndarray,
+    slab_max_points: int = 500_000,
 ) -> np.ndarray:
     """Evaluate a LinearNDInterpolator in z-slabs with progress logging.
 
@@ -337,7 +336,7 @@ def _eval_unstructured_chunked(
     Result is returned in (nz, ny, nx) convention.
     """
     nz, ny, nx = len(z), len(y), len(x)
-    slab_nz = max(1, _SLAB_MAX_POINTS // (ny * nx))
+    slab_nz = max(1, slab_max_points // (ny * nx))
     result = np.empty((nz, ny, nx), dtype=np.float64)
 
     n_slabs = (nz + slab_nz - 1) // slab_nz
@@ -524,11 +523,11 @@ def compute_L2_unstructured(
 # ---------------------------------------------------------------------------
 
 def compare(
-    path_a: str,
-    path_b: str,
+    path_a: Path,
+    path_b: Path,
     attr_a: Optional[str] = None,
     attr_b: Optional[str] = None,
-    output_base: str = "research/error",
+    output_base: Path = Path("research/error"),
     resolution: Optional[Tuple[int, int, int]] = None,
     write_error: bool = True,
 ) -> Dict[str, float]:
@@ -606,7 +605,7 @@ def compare(
         norms = compute_L2_structured(T_a, T_b, x, y, z)
 
         if write_error:
-            out_path = os.path.abspath(output_base)
+            out_path = Path(output_base).resolve()
             error = T_a - T_b
             write_structured_fields(
                 out_path,
@@ -683,7 +682,7 @@ def compare(
         interp_info = f"RegularGridInterpolator on {struct_label}, evaluated at {unstruct_label} vertices"
 
         if write_error:
-            out_path = os.path.abspath(output_base)
+            out_path = Path(output_base).resolve()
             error = T_a - T_b
             write_unstructured_fields(
                 out_path,
@@ -726,7 +725,7 @@ def compare(
         norms = compute_L2_structured(T_a, T_b, x, y, z)
 
         if write_error:
-            out_path = os.path.abspath(output_base)
+            out_path = Path(output_base).resolve()
             error = T_a - T_b
             write_structured_fields(
                 out_path,
@@ -806,11 +805,11 @@ def main():
         res = tuple(parts[:3])
 
     norms = compare(
-        path_a=args.file_a,
-        path_b=args.file_b,
+        path_a=Path(args.file_a),
+        path_b=Path(args.file_b),
         attr_a=args.attr_a,
         attr_b=args.attr_b,
-        output_base=args.output,
+        output_base=Path(args.output),
         resolution=res,
         write_error=not args.no_error_output,
     )

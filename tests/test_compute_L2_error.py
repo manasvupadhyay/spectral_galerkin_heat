@@ -17,10 +17,7 @@ import pytest
 # Import data classes from io_utils
 from fast_heat_solv.io_utils import StructuredField, UnstructuredField
 
-# Add research/ to path so we can import compute_L2_error computation functions
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'research'))
-
-from compute_L2_error import (
+from fast_heat_solv.io_utils.compute_L2_error import (
     _evaluate_on_grid,
     compute_L2,
     compute_L2_unstructured,

@@ -5,11 +5,12 @@ import glob
 import shutil
 import subprocess
 import csv
+from pathlib import Path
 
 # We assume standard yaml package is available (often used via PyYAML)
 import yaml
 
-from compute_L2_error import compare
+from fast_heat_solv.io_utils.compute_L2_error import compare
 
 import math
 
@@ -94,10 +95,11 @@ def run_simulation_and_get_error(param_name, param_val, nx, ny, nz, template_yam
     print("  -> Computing L2 error differences...")
     # Hide stdout while running evaluate if you prefer, passing output arguments to /dev/null
     norms = compare(
-        path_a=validation_path,
-        path_b=latest_xmf,
+        path_a=Path(validation_path),
+        path_b=Path(latest_xmf),
         attr_a="temperature",
-        attr_b="temperature"
+        attr_b="temperature",
+        output_base=Path(validation_path).with_name('error')
     )
     
     # 7. Write to CSV

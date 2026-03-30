@@ -8,7 +8,7 @@ simulation:
 
 domain:
   size: [0.005, 0.0025, 0.00125] # [Lx, Ly, Lz] in m
-  mesh: [800, 300, 2000]      # [nx, ny, nz] (dimensionless)
+  mesh: [1000, 500, 1500]      # [nx, ny, nz] (dimensionless)
 
 material:
   name: "316L"
@@ -17,8 +17,8 @@ material:
   Cp: 500.0                   # J/(kg·K)
   
   L_f: 267700.0               # J/kg (Latent heat of fusion)
-  T_solidus: 1658.0           # K
-  T_liquidus: 1723.0          # K
+  T_solidus: 1700 #1658.0           # K
+  T_liquidus: 1800.0          # K
   T0: 293.0                   # K (Ambient temperature)
   h_conv: 3000.0               # W/(m²·K) (Bottom convective heat transfer coefficient)
   

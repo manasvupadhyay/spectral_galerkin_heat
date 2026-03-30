@@ -12,6 +12,7 @@ import logging
 import os
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import h5py
@@ -331,12 +332,12 @@ class XdmfBuilder:
         header = '<?xml version="1.0" ?>\n<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>\n'
         return header + xml_str
 
-    def write(self, filepath: str) -> None:
+    def write(self, filepath: Path) -> None:
         """Write the XDMF document to a file.
 
         Parameters
         ----------
-        filepath : str
+        filepath : Path
             Path to the output file
         """
         with open(filepath, "w") as f:
@@ -348,16 +349,16 @@ class XdmfBuilder:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_h5(xdmf_path: str, ref: str) -> Tuple[str, str]:
+def _resolve_h5(xdmf_path: Path, ref: str) -> Tuple[Path, str]:
     """Parse ``filename.h5:/dataset`` and resolve relative to XDMF dir."""
     parts = ref.strip().split(":")
     h5_file = parts[0].strip()
     h5_dset = parts[1].strip() if len(parts) > 1 else "/"
-    base = os.path.dirname(os.path.abspath(xdmf_path))
-    return os.path.join(base, h5_file), h5_dset
+    base = xdmf_path.resolve().parent
+    return base / h5_file, h5_dset
 
 
-def _read_dataitem(xdmf_path: str, item: ET.Element) -> np.ndarray:
+def _read_dataitem(xdmf_path: Path, item: ET.Element) -> np.ndarray:
     """Read a <DataItem> from HDF5."""
     h5_file, h5_dset = _resolve_h5(xdmf_path, item.text)
     with h5py.File(h5_file, "r") as f:
@@ -450,12 +451,12 @@ def _resolve_topology_geometry(domain: ET.Element, grid: ET.Element):
     return topo, geo
 
 
-def load_xdmf(xdmf_path: str, attr_name: Optional[str] = None) -> FieldData:
+def load_xdmf(xdmf_path: Path, attr_name: Optional[str] = None) -> FieldData:
     """Load the **last time step** from an XDMF file.
 
     Parameters
     ----------
-    xdmf_path : str
+    xdmf_path : Path
         Path to the ``.xdmf`` or ``.xmf`` file.
     attr_name : str or None
         Name of the Attribute to load (e.g. ``"temperature"``).
@@ -545,7 +546,7 @@ def load_xdmf(xdmf_path: str, attr_name: Optional[str] = None) -> FieldData:
 
 
 def write_structured_fields(
-    output_base: str,
+    output_base: Path,
     fields: Dict[str, np.ndarray],
     x: np.ndarray,
     y: np.ndarray,
@@ -557,7 +558,7 @@ def write_structured_fields(
 
     Parameters
     ----------
-    output_base : str
+    output_base : Path
         Base path for output files (without extension)
     fields : Dict[str, np.ndarray]
         Mapping of field names to 3D arrays of shape (nz, ny, nx)
@@ -571,9 +572,9 @@ def write_structured_fields(
     if not fields:
         raise ValueError("fields dict cannot be empty")
 
-    h5_path = f"{output_base}.h5"
-    xmf_path = f"{output_base}.xmf"
-    h5_ref = os.path.basename(h5_path)
+    h5_path = output_base.with_suffix(".h5")
+    xmf_path = output_base.with_suffix(".xmf")
+    h5_ref = h5_path.name
 
     # Get dimensions from first field
     first_field = next(iter(fields.values()))
@@ -607,7 +608,7 @@ def write_structured_fields(
 
 
 def write_unstructured_fields(
-    output_base: str,
+    output_base: Path,
     fields: Dict[str, np.ndarray],
     xyz: np.ndarray,
     connectivity: np.ndarray,
@@ -617,7 +618,7 @@ def write_unstructured_fields(
 
     Parameters
     ----------
-    output_base : str
+    output_base : Path
         Base path for output files (without extension)
     fields : Dict[str, np.ndarray]
         Mapping of field names to 1D arrays of shape (n_vertices,)
@@ -631,9 +632,9 @@ def write_unstructured_fields(
     if not fields:
         raise ValueError("fields dict cannot be empty")
 
-    h5_path = f"{output_base}.h5"
-    xmf_path = f"{output_base}.xdmf"
-    h5_ref = os.path.basename(h5_path)
+    h5_path = output_base.with_suffix(".h5")
+    xmf_path = output_base.with_suffix(".xdmf")
+    h5_ref = h5_path.name
 
     n_vertices = len(xyz)
     n_tets = len(connectivity)
