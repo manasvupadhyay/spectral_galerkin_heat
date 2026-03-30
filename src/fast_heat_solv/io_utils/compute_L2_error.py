@@ -438,27 +438,25 @@ def compute_L2_structured(
     err = T_a - T_b
 
     valid = np.isfinite(err)
-    if not valid.any():
-        raise RuntimeError("No valid (non-NaN) points in the overlap region.")
+    if not valid.all():
+        raise ValueError("Error fields contain NaN values, indicating a severe issue (e.g. out of bounds interpolation).")
 
     wx = _trapezoidal_weights(x)
     wy = _trapezoidal_weights(y)
     wz = _trapezoidal_weights(z)
     W = wz[:, None, None] * wy[None, :, None] * wx[None, None, :]
 
-    W_valid = np.where(valid, W, 0.0)
-
-    volume = W_valid.sum()
-    L2_sq = np.nansum(W_valid * err**2)
-    ref_sq = np.nansum(W_valid * T_a**2)
+    volume = W.sum()
+    L2_sq = np.sum(W * err**2)
+    ref_sq = np.sum(W * T_a**2)
 
     L2_abs = np.sqrt(L2_sq)
     L2_rel = L2_abs / np.sqrt(ref_sq) if ref_sq > 0 else np.inf
-    Linf = np.nanmax(np.abs(err))
+    Linf = np.max(np.abs(err))
 
-    n_nan = (~valid).sum()
-    n_total = valid.size
-    pct_valid = valid.sum() / n_total * 100
+    n_nan = 0
+    n_total = err.size
+    pct_valid = 100.0
 
     return {
         "L2_abs": float(L2_abs),
@@ -485,26 +483,22 @@ def compute_L2_unstructured(
     err = T_a - T_b
 
     valid = np.isfinite(err) & np.isfinite(T_a) & np.isfinite(T_b)
-    if not valid.any():
-        raise RuntimeError("No valid (non-NaN) points in the overlap region.")
+    if not valid.all():
+        raise ValueError("Error fields contain NaN values, indicating a severe issue.")
 
-    W = np.where(valid, vertex_volumes, 0.0)
-
-    # Mask NaN values to avoid 0 * nan = nan propagation
-    err_masked = np.where(valid, err, 0.0)
-    T_a_masked = np.where(valid, T_a, 0.0)
+    W = vertex_volumes
 
     volume = W.sum()
-    L2_sq = np.sum(W * err_masked**2)
-    ref_sq = np.sum(W * T_a_masked**2)
+    L2_sq = np.sum(W * err**2)
+    ref_sq = np.sum(W * T_a**2)
 
     L2_abs = np.sqrt(L2_sq)
     L2_rel = L2_abs / np.sqrt(ref_sq) if ref_sq > 0 else np.inf
-    Linf = np.nanmax(np.abs(err))
+    Linf = np.max(np.abs(err))
 
-    n_nan = (~valid).sum()
-    n_total = valid.size
-    pct_valid = valid.sum() / n_total * 100
+    n_nan = 0
+    n_total = err.size
+    pct_valid = 100.0
 
     return {
         "L2_abs": float(L2_abs),

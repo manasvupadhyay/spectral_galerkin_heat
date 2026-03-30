@@ -121,7 +121,7 @@ def run_simulation_and_get_error(param_name, param_val, nx, ny, nz, template_yam
 
 def main():
     base_yaml = "simulations/config/standard_test.yaml"
-    csv_file_path = "research/convergence_results_FE.csv"
+    csv_file_path = "validation_results/convergence_results_FE.csv"
     
     # Base configuration
     base_nx, base_ny, base_nz = 600, 256, 500 # Starting mesh size 
