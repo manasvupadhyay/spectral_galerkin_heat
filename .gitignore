@@ -20,4 +20,8 @@ __pycache__/
 *.xdmf
 
 # Files from packaging/build metadata
-*.egg-info
+*.egg-info/
+fastheatsolv.egg-info/
+fastheatsolv.egg-info/PKG-INFO
+src/fast_heat_solv/fastheatsolv.egg-info/
+src/fast_heat_solv/fastheatsolv.egg-info/PKG-INFO
