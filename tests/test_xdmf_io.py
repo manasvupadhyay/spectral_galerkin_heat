@@ -1,7 +1,7 @@
 """Tests for xdmf_io module."""
-import os
 import tempfile
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -35,7 +35,9 @@ class TestXdmfBuilder:
 
         grid = root.find(".//Grid")
         assert grid.get("Name") == "Test"
-        assert grid.get("Time") == "1.5"
+        time_elem = grid.find("Time")
+        assert time_elem is not None, "Expected a <Time> child element"
+        assert time_elem.get("Value") == "1.5"
 
         topo = grid.find("Topology")
         assert topo.get("TopologyType") == "3DRectMesh"
@@ -70,7 +72,7 @@ class TestWriteReadRoundtrip:
 
     def test_roundtrip_structured_field(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            base = os.path.join(tmpdir, "test_field")
+            base = Path(tmpdir) / "test_field"
 
             x = np.linspace(0, 1, 10)
             y = np.linspace(0, 2, 15)
@@ -79,7 +81,7 @@ class TestWriteReadRoundtrip:
 
             write_structured_fields(base, {"T": field}, x, y, z, time=2.0)
 
-            loaded = load_xdmf(f"{base}.xmf")
+            loaded = load_xdmf(base.with_suffix(".xmf"))
 
             assert isinstance(loaded, StructuredField)
             np.testing.assert_allclose(loaded.x, x, rtol=1e-5)

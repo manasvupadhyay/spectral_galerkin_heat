@@ -101,7 +101,7 @@ class TestEvaluateOnGrid:
 
     def test_unstructured_interpolation(self):
         """Unstructured (scattered) field evaluated on a structured grid."""
-        uf = _make_unstructured(5000)
+        uf = _make_unstructured(10000)
         x = np.linspace(0.1, 0.9, 10)
         y = np.linspace(0.1, 0.9, 10)
         z = np.linspace(0.1, 0.9, 8)
@@ -109,12 +109,10 @@ class TestEvaluateOnGrid:
 
         Zg, Yg, Xg = np.meshgrid(z, y, x, indexing="ij")
         T_ref = _analytical(Xg, Yg, Zg)
-
-        # LinearNDInterpolator on 5000 deterministic points over [0,1]³:
-        # piecewise-linear interpolation error depends on triangle size.
-        # With 5000 points the typical simplex edge is small, so expect
-        # errors on the order of 1e-1 to 1e-2.
-        assert T == pytest.approx(T_ref, rel=0.25, abs=0.01)
+        
+        # rel covers the interior;
+        # abs is the fallback for near-zero values 
+        assert T == pytest.approx(T_ref, rel=0.01, abs=0.01)
 
     def test_output_shape(self):
         """Output shape should always be (nz, ny, nx)."""

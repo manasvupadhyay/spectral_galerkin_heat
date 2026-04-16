@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 compute_L2_error.py
 ===================
@@ -30,26 +29,14 @@ Numerical integration
 - **Unstructured evaluation**: lumped mass integration using vertex
   volumes computed from the tetrahedral mesh connectivity
 
-Usage
------
-    python compute_L2_error.py file_A.xdmf file_B.xdmf [options]
-
-    # Compare spectral output vs FE validation:
-    python compute_L2_error.py \\
-        ../out/sim/fields/field_step000200.xmf \\
-        validation.xdmf \\
-        --attr-a temperature --attr-b Temperature
-
-    # Fast convergence study (skip error output):
-    python compute_L2_error.py spectral.xmf fe.xdmf --no-error-output
+CLI
+---
+See ``scripts/compute_L2_error.py``.
 """
 
 from __future__ import annotations
 
-import argparse
 import logging
-import os
-import sys
 import time
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Union
@@ -66,12 +53,6 @@ from fast_heat_solv.io_utils import (
     write_unstructured_fields,
 )
 
-# Configure logging at module level so it works when imported
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
 logger = logging.getLogger(__name__)
 
 
@@ -753,65 +734,3 @@ def compare(
     print("=" * 70)
 
     return norms
-
-
-# ---------------------------------------------------------------------------
-#  CLI
-# ---------------------------------------------------------------------------
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Compute L2 norm error between two XDMF solution files."
-    )
-    parser.add_argument("file_a", help="Path to XDMF file A (reference)")
-    parser.add_argument("file_b", help="Path to XDMF file B")
-    parser.add_argument(
-        "--attr-a",
-        default=None,
-        help="Attribute name in file A (default: first found)",
-    )
-    parser.add_argument(
-        "--attr-b",
-        default=None,
-        help="Attribute name in file B (default: first found)",
-    )
-    parser.add_argument(
-        "--output",
-        default="error",
-        help="Base name for error output files (default: 'error')",
-    )
-    parser.add_argument(
-        "--resolution",
-        default=None,
-        help="Grid resolution for two-unstructured case, e.g. '128,128,128'",
-    )
-    parser.add_argument(
-        "--no-error-output",
-        action="store_true",
-        help="Skip writing error XDMF/H5 files (faster for convergence studies)",
-    )
-
-    args = parser.parse_args()
-
-    res = None
-    if args.resolution:
-        parts = [int(x) for x in args.resolution.split(",")]
-        res = tuple(parts[:3])
-
-    norms = compare(
-        path_a=Path(args.file_a),
-        path_b=Path(args.file_b),
-        attr_a=args.attr_a,
-        attr_b=args.attr_b,
-        output_base=Path(args.output),
-        resolution=res,
-        write_error=not args.no_error_output,
-    )
-
-    # Exit with non-zero if there were NaN issues
-    if norms["pct_valid"] < 50.0:
-        sys.exit(2)
-
-
-if __name__ == "__main__":
-    main()

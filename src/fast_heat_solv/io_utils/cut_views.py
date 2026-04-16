@@ -1,4 +1,5 @@
 import argparse
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator, griddata
@@ -370,7 +371,7 @@ if __name__ == "__main__":
     # Typical call :python utils/cut_views.py out/0_perfect_sim/fields/field_step002000.xmf --center 0.0095 0.0025 0.002475 --width 0.00035 --height 0.00005 --liquidus 1820 --out cut_spectral.pdf
 
     generate_plots(
-        xdmf_path=args.xdmf_file,
+        xdmf_path=Path(args.xdmf_file),
         output_dir=None, # Not used if specific_output_filename is set or save_images is False (mostly)
         show_ui=show_ui,
         save_images=save_images, 
