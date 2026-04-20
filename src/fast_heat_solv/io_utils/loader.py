@@ -9,7 +9,9 @@ logger = logging.getLogger(__name__)
 class SimulationResult:
     """
     Interface for loading simulation results from a specific run directory.
+    
     Assumes standard LocalFSIO structure:
+    
       root/run_id/
         fields/
         profiles/

@@ -11,8 +11,8 @@ sys.path.insert(0, os.path.abspath('../src'))
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'fastHeatSolv'
-copyright = '2026, Maxime Andrieux'
-author = 'Maxime Andrieux'
+copyright = '2026, Theo Andrieux'
+author = 'Theo Andrieux'
 
 version = '0.1.0'
 release = '0.1.0'
@@ -37,4 +37,10 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
 
-autodoc_mock_imports = ['cupy']
+autodoc_mock_imports = ['cupy', 'cupyx']
+
+suppress_warnings = [
+    'ref.python',
+    'misc.highlighting_failure',
+    'myst.xref_missing'
+]

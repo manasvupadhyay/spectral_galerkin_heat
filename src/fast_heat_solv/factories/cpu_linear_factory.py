@@ -8,9 +8,11 @@ from ..solvers.spectral_cpu_linear import SpectralSolverCPULinear
 class CPULinearSimulationFactory(SimulationFactory):
     """
     Concrete Factory for CPU-based purely linear simulations.
+
     Creates:
-      - SpectralSolverCPULinear: The linear CPU solver.
-      - LocalFSIOManager: Filesystem-based output handler.
+      
+    - SpectralSolverCPULinear: The linear CPU solver.
+    - LocalFSIOManager: Filesystem-based output handler.
     """
 
     def create_heat_solver(self) -> HeatSolver:
