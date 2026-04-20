@@ -25,7 +25,18 @@ extensions = [
     'sphinx.ext.napoleon',
     'myst_parser',
     'sphinxcontrib.mermaid',
+    'autoapi.extension',
 ]
+
+autoapi_dirs = ['../src/fast_heat_solv']
+autoapi_type = 'python'
+autoapi_options = [
+    'members',
+    'undoc-members',
+    'show-inheritance',
+    'show-module-summary',
+]
+autoapi_ignore = ['*__pycache__*']
 
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
@@ -39,3 +50,4 @@ html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
 
 autodoc_mock_imports = ['cupy', 'cupyx']
+napoleon_use_ivar = True

@@ -81,7 +81,7 @@ def reconstruct_temperature_volume(a, SsState):
     ----------
     a : ndarray
         Spectral coefficients.
-    SsState : SpectralSolverState
+    SsState : fast_heat_solv.physics.spectral_cpu_kernels.SpectralSolverState
         The solver state containing grid reconstruction bases.
 
     Returns
@@ -103,9 +103,9 @@ def reconstruct_temperature_volume(a, SsState):
     if Bx is None or By is None or Bz is None:
         raise RuntimeError("Reconstruction bases not initialized on SsState. Call prepare_full_reconstruction()/full_reconstruction() first.")
 
-    T_step1 = np.tensordot(a, Bx, axes=(2, 0))  # (nz, ny, nx)
+    T_step1 = np.tensordot(a, Bx, axes=(2, 0))  # (N_z, N_y, N_x)
     T_step2 = np.tensordot(T_step1, By, axes=(1, 0))  # (nz, nx, ny)
-    T_full = np.tensordot(T_step2, Bz, axes=(0, 0))  # (nx, ny, nz)
+    T_full = np.tensordot(T_step2, Bz, axes=(0, 0))  # (N_x, N_y, N_z)
 
     return T_full.astype(np.float32)
 
@@ -119,7 +119,7 @@ def reconstruct_temperature_DCT(a, SsState):
                                           * Cp*cos(p*pi*z/Lz)
 
     evaluated on the **node-centered** grid  x_j = j*dx  (j = 0..nx),
-    and likewise for y and z.  Output shape is **(nx+1, ny+1, nz+1)**,
+    and likewise for y and z.  Output shape is **(N_x+1, N_y+1, N_z+1)**,
     identical to :func:`reconstruct_temperature_volume`.
 
     The reconstruction grid is integer-spaced (node-centred), which maps
@@ -129,14 +129,14 @@ def reconstruct_temperature_DCT(a, SsState):
 
     Parameters
     ----------
-    a : ndarray, shape (nz, ny, nx)
+    a : ndarray, shape (N_z, N_y, N_x)
         Spectral coefficients (CuPy arrays are moved to CPU automatically).
-    SsState : SpectralSolverState
+    SsState : fast_heat_solv.physics.spectral_cpu_kernels.SpectralSolverState
         Must have ``grid.Cm``, ``grid.Cn``, ``grid.Cp`` normalization vectors.
 
     Returns
     -------
-    T : ndarray, shape (nx+1, ny+1, nz+1), dtype float32
+    T : ndarray, shape (N_x+1, N_y+1, N_z+1), dtype float32
         Node-centred temperature field.
     """
     if hasattr(a, 'get'):
@@ -175,7 +175,7 @@ def reconstruct_temperature_DCT(a, SsState):
     T = scipy.fft.dctn(padded, type=1, norm=None, axes=(0, 1, 2),
                         overwrite_x=True, workers=-1)
 
-    # ── Transpose (nz+1, ny+1, nx+1) → (nx+1, ny+1, nz+1) ─────────
+    # ── Transpose (nz+1, ny+1, nx+1) → (N_x+1, N_y+1, N_z+1) ─────────
     return np.ascontiguousarray(T.transpose(2, 1, 0), dtype=np.float32)
 
 def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
@@ -190,7 +190,7 @@ def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
         Simulation numerical parameters containing mesh discretizations.
     geom : GeomParams
         Simulation domain geometry.
-    SsState : SpectralSolverState
+    SsState : fast_heat_solv.physics.spectral_cpu_kernels.SpectralSolverState
         Current solver state.
     coords : ndarray
         The (N, 3) shaped array containing float coordinates to evaluate at.
@@ -244,10 +244,10 @@ def save_temp_profiles(
     Sample temperature along dense lines using exact modal expansion.
     
     Args:
-        a: Spectral coefficients (nz, ny, nx).
-        num: Numerical params (nx, ny, nz).
+        a: Spectral coefficients (N_z, N_y, N_x).
+        num: Numerical params (N_x, N_y, N_z).
         geom: Geometric params (Lx, Ly, Lz).
-        SsState: Spectral Solver State.
+        SsState: fast_heat_solv.physics.spectral_cpu_kernels.SpectralSolverState
         laser: Laser object (for centering).
         center: "laser", "hotspot", or tuple (x, y).
         num_points: Number of sampling points along each axis.

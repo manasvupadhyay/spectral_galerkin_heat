@@ -19,5 +19,11 @@ __pycache__/
 *.xmf
 *.xdmf
 
+
+# Sphinx documentation temporaries
+docs/_build/
+docs/api/
+
 # Files from packaging/build metadata
 *.egg-info/_build/
+*.egg-info

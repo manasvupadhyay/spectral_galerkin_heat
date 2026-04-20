@@ -40,7 +40,7 @@ class SpectralSolverGPU(HeatSolver):
 
         Returns
         -------
-        SpectralSolverState
+        fast_heat_solv.physics.spectral_gpu_kernels.SpectralSolverState
             The initialized GPU solver state object.
         """
         self.context = context
@@ -76,7 +76,7 @@ class SpectralSolverGPU(HeatSolver):
         Returns
         -------
         tuple
-            SsState : SpectralSolverState
+            SsState : fast_heat_solv.physics.spectral_gpu_kernels.SpectralSolverState
                  The updated GPU solver state.
             metrics : dict
                  Metrics from the iteration, such as max temperature and number of evaporation steps.

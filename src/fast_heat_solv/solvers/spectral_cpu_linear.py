@@ -40,7 +40,7 @@ class SpectralSolverCPULinear(HeatSolver):
 
         Returns
         -------
-        SpectralSolverState
+        fast_heat_solv.physics.spectral_cpu_kernels.SpectralSolverState
             The initialized solver state object containing grid buffers and spectra.
         
         Raises
@@ -84,7 +84,7 @@ class SpectralSolverCPULinear(HeatSolver):
         Returns
         -------
         tuple
-            SsState : SpectralSolverState
+            SsState : fast_heat_solv.physics.spectral_cpu_kernels.SpectralSolverState
                  The updated linear solver state.
             metrics : dict
                  Metrics from the iteration, such as max temperature and number of evaporation steps.
