@@ -43,7 +43,7 @@ python -m pip install -e ".[gpu]"  # With GPU support
 
 ## Architecture
 
-fastHeatSolv is built around the **Abstract Factory pattern**, isolating physical computation kernels (`HeatSolver`) from data telemetry (`IOManager`). See the [Architecture Guide](docs/ARCHITECTURE.md) for deep-dives into how the event loop operates and how to extend the framework with new numerical backends.
+fastHeatSolv is built around the **Abstract Factory pattern**, isolating physical computation kernels (`HeatSolver`) from data telemetry (`IOManager`). See the [Architecture Guide](https://github.com/TheoADX/fastHeatSolv/blob/main/docs/ARCHITECTURE.md) for deep-dives into how the event loop operates and how to extend the framework with new numerical backends.
 
 ## Citation
 

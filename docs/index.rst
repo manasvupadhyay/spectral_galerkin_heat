@@ -6,8 +6,18 @@ fastHeatSolv Documentation
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents:
+   :caption: User Guide:
+
+   configuration
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Developer Guide:
 
    ARCHITECTURE
-   configuration
-   api/modules
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Reference:
+
+   api

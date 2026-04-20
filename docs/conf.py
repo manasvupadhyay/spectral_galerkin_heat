@@ -39,3 +39,9 @@ html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
 
 autodoc_mock_imports = ['cupy', 'cupyx']
+
+suppress_warnings = [
+    'ref.python',                 # Ignore missing or multiple targets for python references
+    'misc.highlighting_failure',  # Ignore missing Highlighting for mermaid diagrams
+    'myst.xref_missing',          # Ignore some myst cross references
+]
