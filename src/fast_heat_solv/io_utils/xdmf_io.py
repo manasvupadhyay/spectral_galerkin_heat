@@ -99,8 +99,8 @@ class XdmfBuilder:
         ----------
         name : str
             Name of the grid (e.g., "Error", "Mesh")
-        dims : tuple of (nz, ny, nx)
-            Grid dimensions in z, y, x order
+        dims : tuple of int
+            Grid dimensions in (nz, ny, nx) order
         h5_ref : str
             HDF5 filename reference (basename only)
         coord_datasets : tuple of str

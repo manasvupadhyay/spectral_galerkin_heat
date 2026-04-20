@@ -186,7 +186,7 @@ class SpectralSolverGPU(HeatSolver):
         Parameters
         ----------
         temperature_field : np.ndarray or cupy.ndarray
-            A 3-D array (shape ``(nz, ny, nx)``) containing temperatures.
+            A 3-D array (shape ``(N_z, N_y, N_x)``) containing temperatures.
         
         Raises
         ------
