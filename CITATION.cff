@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use this software in your research, please cite it as below."
+authors:
+  - family-names: "Andrieux"
+    given-names: "Théo"
+    affiliation: "LMS, École Polytechnique"
+  - family-names: "Dichamp"
+    given-names: "Jules"
+    affiliation: "LMS, École Polytechnique"
+  - family-names: "Upadhyay"
+    given-names: "Manas V."
+    affiliation: "LMS, École Polytechnique"
+title: "fastHeatSolv"
+version: 1.0.0
+date-released: 2026-04-20
+url: "https://github.com/TheoADX/fastHeatSolv"

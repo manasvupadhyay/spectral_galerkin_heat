@@ -44,3 +44,33 @@ Physical material parameters needed by solvers.
 Export settings.
 * **interval**: Time interval to trigger volumetric mesh exports (`float`).
 * **outputs**: Formats accepted like `['fields']`.
+
+**Extended Output Control**
+The `io` section allows control over what is saved and when:
+- `interval`: How often to save outputs during the simulation (in seconds).
+- `outputs`: List of output types to save at each interval (e.g., `full_volume`).
+- `at_end`: List of output types to save at the end of the simulation (e.g., `profiles`, `cut_views`).
+- `profiles_locations`: Optional, (x,y) tuple or `'laser'` or `'hotspot'`.
+- `cut_views_planes`: Optional, planes for extracting 2D cut views (e.g., `xy`, `yz`, `xz`).
+
+This enables efficient disk usage and post-processing tailored to your needs.
+
+### Global Dataclass `SimulationContext`
+
+All configuration sections are deserialized into a unified `SimulationContext` object passed to the Abstract Factory.
+
+```python
+from dataclasses import dataclass
+from fast_heat_solv.core.parameters import NumParams, GeomParams, MaterialParams, IOParams
+from fast_heat_solv.core.laser import LaserPath
+
+@dataclass
+class SimulationContext:
+    num: NumParams
+    geom: GeomParams
+    mat: MaterialParams
+    laser_path: LaserPath
+    io: IOParams
+    method: str = "spectral"
+    backend: str = "cpu"
+```

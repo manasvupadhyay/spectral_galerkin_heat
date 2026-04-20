@@ -115,3 +115,53 @@ flowchart TD
     CPUSolv -->|"queries"| Laser
     GPUSolv -->|"queries"| Laser
 ```
+
+## Laser Path Strategy
+
+The solver uses a consistent reference frame: the top surface is always $z = L_z$.
+
+```
+ +Z (BUILD DIRECTION)
+            ^          ^  +y
+            |         /
+            |        /
+            | +=====================+   <-- Top Layer, Lasered (z = Lz)
+            |/=====================/|
+            +====================+  |
+            |                    |  |
+            |        CUBOID      |  +
+            |        (PART)      | /   <-- Base Layer sits on platform
+(X,Y,Z=0)   |                    |/
+ORIGIN >----+====================+--------------------> +X
+                 ( X-Y Plane)
+```
+
+The `LaserPath` interface decouples heat source physics (e.g., Gaussian) from movement logic:
+
+```python
+from dataclasses import dataclass
+from abc import ABC, abstractmethod
+
+@dataclass
+class LaserState:
+    x: float
+    y: float
+    power: float
+    is_on: bool
+
+class LaserPath(ABC):
+    @abstractmethod
+    def get_state(self, time: float) -> LaserState:
+        """Returns laser position and power at a given simulation time."""
+        pass
+
+class GCodeLaserPath(LaserPath):
+    def __init__(self, gcode_file: str):
+        self.segments = self._parse_gcode(gcode_file)
+        # Segments would contain: (start_pos, end_pos, start_time, end_time, power)
+    
+    def _parse_gcode(self, filepath):
+        # Parses G0 (move), G1 (linear cut), M words for power
+        # Calculates timing based on F (feed rate)
+        pass
+```

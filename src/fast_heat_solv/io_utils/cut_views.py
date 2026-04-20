@@ -1,3 +1,13 @@
+"""
+2D cut view plotting utilities for evaluating simulation exports.
+
+Author: Théo Andrieux (@TheoADX)
+Copyright: (c) 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique. All rights reserved.
+"""
+
+__author__ = "Théo Andrieux"
+__copyright__ = "Copyright 2026, LMS, École Polytechnique"
+
 import argparse
 from pathlib import Path
 import numpy as np

@@ -1,3 +1,13 @@
+"""
+Spectral CPU Linear Solver Implementation.
+
+Author: Théo Andrieux (@TheoADX)
+Copyright: (c) 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique. All rights reserved.
+"""
+
+__author__ = "Théo Andrieux"
+__copyright__ = "Copyright 2026, LMS, École Polytechnique"
+
 import numpy as np
 import fast_heat_solv.physics.spectral_cpu_kernels as kernels
 from fast_heat_solv.core.parameters import SimulationContext

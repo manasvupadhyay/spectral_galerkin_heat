@@ -4,7 +4,13 @@ StandaloneHeatRunner – self-contained simulation runner.
 This class extracts the time-stepping loop, I/O management, and telemetry
 from ``SimulationWorkflow``. It is the recommended entry-point for running
 fastHeatSolv in **standalone** mode (i.e. driven by a YAML config file).
+
+Author: Théo Andrieux (@TheoADX)
+Copyright: (c) 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique. All rights reserved.
 """
+
+__author__ = "Théo Andrieux"
+__copyright__ = "Copyright 2026, LMS, École Polytechnique"
 
 import time
 import logging

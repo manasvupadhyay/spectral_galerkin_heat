@@ -1,3 +1,13 @@
+"""
+Abstract interface for Heat Equation Solvers.
+
+Author: Théo Andrieux (@TheoADX)
+Copyright: (c) 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique. All rights reserved.
+"""
+
+__author__ = "Théo Andrieux"
+__copyright__ = "Copyright 2026, LMS, École Polytechnique"
+
 from abc import ABC, abstractmethod
 from typing import Any, Tuple, Dict, Optional
 import numpy as np
