@@ -1,0 +1,76 @@
+[project]
+name = "fastheatsolv"
+version = "0.1.0"
+description = "A fast solver for the heat equation using spectral methods and GPU acceleration."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "h5py>=3.16.0",
+    "matplotlib>=3.10.8",
+    "numba>=0.64.0",
+    "numpy>=2.4.3",
+    "pyfftw>=0.15.1",
+    "pyyaml>=6.0.3",
+    "scipy>=1.17.1",
+]
+
+
+#Install with:
+#`pip install -e .[dev]`
+#`pip install -e .[gpu]`
+[project.optional-dependencies]
+gpu = [
+    "cupy-cuda12x>=14.0.1",
+    "nvidia-cufft-cu12",
+    "nvidia-cublas-cu12",
+    "nvidia-cusolver-cu12",
+    "nvidia-curand-cu12",
+    "nvidia-cusparse-cu12",
+]
+viz = [
+    "matplotlib>=3.10.8",
+]
+dev = [
+    "black>=26.3.1",
+    "isort>=8.0.1",
+    "pre-commit>=4.5.1",
+    "pytest>=9.0.2",
+]
+
+
+#Required for `uv` install:
+#uv sync --group gpu --group viz --group dev
+[dependency-groups]
+gpu = [
+    "cupy-cuda12x>=14.0.1",
+    "nvidia-cufft-cu12",
+    "nvidia-cublas-cu12",
+    "nvidia-cusolver-cu12",
+    "nvidia-curand-cu12",
+    "nvidia-cusparse-cu12",
+]
+viz = [
+    "matplotlib>=3.10.8",
+]
+dev = [
+    "black>=26.3.1",
+    "isort>=8.0.1",
+    "pre-commit>=4.5.1",
+    "pytest>=9.0.2",
+]
+
+
+#Path to the library source code
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+#Path to the tests folder
+testpaths = ["tests"]
+#Recommended for new projects: https://docs.pytest.org/en/stable/explanation/goodpractices.html
+addopts = ["--import-mode=importlib"]
+
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
