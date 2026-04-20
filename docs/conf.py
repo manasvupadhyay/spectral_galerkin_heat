@@ -24,6 +24,7 @@ extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.napoleon',
     'myst_parser',
+    'sphinxcontrib.mermaid',
 ]
 
 templates_path = ['_templates']
@@ -38,9 +39,3 @@ html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
 
 autodoc_mock_imports = ['cupy', 'cupyx']
-
-suppress_warnings = [
-    'ref.python',
-    'misc.highlighting_failure',
-    'myst.xref_missing'
-]

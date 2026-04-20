@@ -1,13 +1,13 @@
 # fastHeatSolv
 
 **A semi-analytical, modular solution for the heat equation with support for CPU/GPU backends and G-code-driven laser paths.**
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![License](https://img.shields.io/badge/license-CC%20BY--NC--ND-blue.svg)
 
 ---
 
 fastHeatSolv is a modular framework designed for simulating heat transfer in additive manufacturing. It uses semi-analytical spectral methods to achieve high performance on both CPU and GPU hardware, and fully supports complex laser trajectories parsed directly from G-code.
 
-## 🚀 Quickstart
+## Quickstart
 
 This project uses [`uv`](https://uv.io) for fast, reliable dependency and virtual environment management.
 
@@ -25,7 +25,7 @@ uv run python simulations/main.py simulations/config/standard_test.yaml
 
 *Results are automatically saved to `out/<timestamp>_<tag>/` with HDF5/XDMF formats ready for ParaView.*
 
-## 🔧 Installation & Environments
+## Installation & Environments
 
 Depending on your hardware, you can request `uv` to install different dependency groups:
 
@@ -40,23 +40,12 @@ python -m pip install -e .
 python -m pip install -e ".[gpu]"  # With GPU support
 ```
 
-## 📚 Documentation
 
-Detailed documentation covering architecture, configuration parameters (YAML), API references, and the mathematical methods used by the spectral solvers is generated via **Sphinx**.
-
-To build and view the full documentation locally:
-```bash
-uv sync --group docs
-cd docs
-make html
-```
-Then, open `docs/_build/html/index.html` in your web browser.
-
-## 🏗️ Architecture
+## Architecture
 
 fastHeatSolv is built around the **Abstract Factory pattern**, isolating physical computation kernels (`HeatSolver`) from data telemetry (`IOManager`). See the [Architecture Guide](docs/ARCHITECTURE.md) for deep-dives into how the event loop operates and how to extend the framework with new numerical backends.
 
-## 📜 Citation
+## Citation
 
 If you use this code in your research, please cite:
 
