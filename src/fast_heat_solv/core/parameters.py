@@ -8,7 +8,26 @@ if TYPE_CHECKING:
 
 @dataclass
 class NumParams:
-    """Numerical parameters for the simulation."""
+    """
+    Numerical parameters for the simulation.
+
+    Attributes
+    ----------
+    dt : float
+        Time step size in seconds.
+    nx : int
+        Number of grid points in the x direction.
+    ny : int
+        Number of grid points in the y direction.
+    nz : int
+        Number of grid points in the z direction.
+    t_end : float, optional
+        End time of the simulation in seconds, by default 0.0.
+    update_interval : float, optional
+        Time interval for logging updates in seconds, by default 1e-3.
+    save_all : bool, optional
+        Flag to indicate if all data should be saved, by default False.
+    """
     dt: float
     nx: int
     ny: int
@@ -19,7 +38,38 @@ class NumParams:
 
 @dataclass
 class MaterialParams:
-    """Material properties."""
+    """
+    Material properties for the simulation.
+
+    Attributes
+    ----------
+    name : str, optional
+        Name of the material, by default "Material".
+    rho : float, optional
+        Density of the material in kg/m^3, by default 1.0.
+    k : float, optional
+        Thermal conductivity in W/(m·K), by default 1.0.
+    Cp : float, optional
+        Specific heat capacity in J/(kg·K), by default 1.0.
+    L_f : float, optional
+        Latent heat of fusion in J/kg, by default 0.0.
+    T_solidus : float, optional
+        Solidus temperature in Kelvin, by default 0.0.
+    T_liquidus : float, optional
+        Liquidus temperature in Kelvin, by default 0.0.
+    Pa : float, optional
+        Ambient pressure in Pa, by default 0.
+    R_v : float, optional
+        Specific gas constant of the vapor in J/(kg·K), by default 0.
+    T_boil : float, optional
+        Boiling temperature in Kelvin, by default 0.
+    DeltaH_LV : float, optional
+        Latent heat of vaporization in J/kg, by default 0.
+    T0 : float, optional
+        Reference or initial temperature in Kelvin, by default 0.
+    h_conv : float, optional
+        Convective heat transfer coefficient in W/(m^2·K), by default 0.0.
+    """
     name: str = "Material"
     rho: float = 1.0
     k: float = 1.0
@@ -37,12 +87,48 @@ class MaterialParams:
 
     @property
     def diff(self) -> float:
-        """Thermal diffusivity."""
+        """
+        Calculates the thermal diffusivity of the material.
+
+        Returns
+        -------
+        float
+            Thermal diffusivity computed as `k / (rho * Cp)`.
+        """
         return self.k / (self.rho * self.Cp)
 
 @dataclass
 class GeomParams:
-    """Geometric parameters and grid generation."""
+    """
+    Geometric parameters and grid generation properties.
+
+    Attributes
+    ----------
+    Lx : float
+        Domain length in the x direction in meters.
+    Ly : float
+        Domain length in the y direction in meters.
+    Lz : float
+        Domain length in the z direction in meters.
+    nx : int
+        Number of grid points in the x direction.
+    ny : int
+        Number of grid points in the y direction.
+    nz : int
+        Number of grid points in the z direction.
+    x : np.ndarray
+        1D array of x coordinates.
+    y : np.ndarray
+        1D array of y coordinates.
+    z : np.ndarray
+        1D array of z coordinates.
+    dx : float
+        Grid spacing in the x direction.
+    dy : float
+        Grid spacing in the y direction.
+    dz : float
+        Grid spacing in the z direction.
+    """
     Lx: float
     Ly: float
     Lz: float
@@ -70,7 +156,18 @@ class GeomParams:
 
 @dataclass
 class LaserParams:
-    """Laser source parameters."""
+    """
+    Laser source parameters.
+
+    Attributes
+    ----------
+    radius : float
+        Radius of the laser beam.
+    absorptivity : float
+        Absorptivity coefficient of the material for the given laser.
+    power : float, optional
+        Base power if constant, or maximum power of the laser, by default 0.0.
+    """
     radius: float
     absorptivity: float
     power: float = 0.0 # Base power if constant, or max power
@@ -79,12 +176,25 @@ class LaserParams:
 class SimulationContext:
     """
     Aggregate context holding all simulation parameters.
-    io: flat dictionary from YAML config with keys:
-        - interval: float, output interval for time-stepped outputs
-        - outputs: list[str], outputs to save at each interval
-        - at_end: list[str], outputs to save at the end
-        - profiles_locations: list[list[float]], locations for profiles
-        - cut_views_planes: list[str], planes for cut views
+
+    Attributes
+    ----------
+    num : NumParams
+        Numerical computation parameters.
+    mat : MaterialParams
+        Material properties parameters.
+    geom : GeomParams
+        Geometric and domain parameters.
+    laser : LaserParams
+        Laser configuration parameters.
+    laser_path : LaserPath
+        Object determining the laser trajectory and state over time.
+    io : dict
+        Flat dictionary defining input/output options (e.g., intervals, planes).
+    method : str, optional
+        Simulation calculation method (e.g., 'spectral' or 'fem'), by default 'spectral'.
+    backend : str, optional
+        Backend target for computations (e.g., 'cpu' or 'gpu'), by default 'cpu'.
     """
     num: 'NumParams'
     mat: 'MaterialParams'
@@ -100,6 +210,25 @@ class SimulationContext:
 
     @classmethod
     def from_dict(cls, cfg: Dict[str, Any], config_dir: Optional[str] = None) -> 'SimulationContext':
+        """
+        Parses a nested dictionary and instantiates a full `SimulationContext`.
+
+        Parameters
+        ----------
+        cfg : dict
+            Parsed dictionary typically loaded from a YAML configuration file.
+            Should contain keys like 'simulation', 'domain', 'material',
+            'laser', and 'io'.
+        config_dir : str, optional
+            Path to the directory containing the configuration file. Used to
+            resolve relative paths for external assets like G-code files,
+            by default None.
+
+        Returns
+        -------
+        SimulationContext
+            A populated simulation context ready to initialize solver factories.
+        """
         real_t = np.float32
         sim_cfg = cfg.get('simulation', {})
         domain_cfg = cfg.get('domain', {})
