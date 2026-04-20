@@ -20,4 +20,4 @@ __pycache__/
 *.xdmf
 
 # Files from packaging/build metadata
-*.egg-info/
+*.egg-info/_build/

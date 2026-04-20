@@ -5,199 +5,62 @@
 
 ---
 
-## Table of Contents
+fastHeatSolv is a modular framework designed for simulating heat transfer in additive manufacturing. It uses semi-analytical spectral methods to achieve high performance on both CPU and GPU hardware, and fully supports complex laser trajectories parsed directly from G-code.
 
-- [Overview](#overview)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Output & Visualization](#output--visualization)
-- [Architecture](#architecture)
-- [Citation](#citation)
+## 🚀 Quickstart
 
----
+This project uses [`uv`](https://uv.io) for fast, reliable dependency and virtual environment management.
 
-## Overview
-
-fastHeatSolv is a modular framework for simulating heat transfer in additive manufacturing. It uses semi-analytical spectral methods for high performance on both CPU and GPU, and supports complex laser trajectories defined via G-code.
-
-Key features:
-- **Fast Spectral Solvers**: GPU-accelerated (via CuPy) and CPU-optimized (NumPy/SciPy).
-- **G-Code Support**: Direct simulation of toolpaths from printer instructions.
-- **Modular Design**: Extensible via Abstract Factory pattern (see [Architecture](docs/ARCHITECTURE.md)).
-
-### Solver Logic
-
-The solver logic is detailed hereafter.
-
-```mermaid
-flowchart TD
-    %% --- Theme & Styling ---
-    classDef container fill:#2d2d2d,stroke:#555,color:#fff;
-    classDef terminator fill:#ff6b6b,stroke:#c0392b,stroke-width:2px,color:#000;
-    classDef process fill:#4ecdc4,stroke:#1abc9c,stroke-width:2px,color:#000;
-    classDef decision fill:#ffeaa7,stroke:#f39c12,stroke-width:2px,color:#000,shape:diamond;
-    classDef heat fill:#74b9ff,stroke:#0984e3,stroke-width:2px,color:#000;
-    classDef micro fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#000;
-
-    %% --- Main Container ---
-    subgraph MainLoop [Simulation Lifecycle]
-        direction TB
-        style MainLoop fill:#333333,stroke:#666,color:#fff
-
-        Start((Start)):::terminator
-        Init[1. Initialize System]:::process
-
-        %% Time Loop Check
-        LoopCondition{t < t_end?}:::decision
-
-        %% --- Inner Loop Container ---
-        subgraph TimeStep [Time Step Execution]
-          style TimeStep fill:#404040,stroke:#777,color:#fff
-
-          %% Heat Solver Step
-          HeatSolver[3a. Heat Solver Step<br/>Compute Temperature Field]:::heat
-
-          %% (Microstructure disabled) Heat solver now proceeds to IO
-
-          HeatSolver --> IOCheck
-        end
-
-        IOCheck[4. IO Check<br/>Write Data if Needed]:::process
-        Logging[5. Logging / Update ETA]:::process
-        End((End)):::terminator
-
-        %% Connections
-        Start --> Init
-        Init --> LoopCondition
-        LoopCondition -- Yes --> HeatSolver
-        IOCheck --> Logging
-        Logging --> LoopCondition
-        LoopCondition -- No --> End
-    end
-```
-## Installation
-
-This project uses `uv` for fast, reliable dependency and virtual environment management.
-
-### Prerequisites
-- Install `uv` (https://uv.io)
-- Python 3.9+
-- CUDA Toolkit (Optional, for GPU backend)
-
-### Setup
-1. Clone the repository:
 ```bash
+# Clone the repository
 git clone https://github.com/TheoADX/fastHeatSolv.git
 cd fastHeatSolv
-```
 
-2. Install dependencies and build the environment
-
-By running the commands below, `uv` will automatically create a virtual environment (`.venv`) and install the exact dependencies needed. You can decide exactly what environment you want to build.
-
-Install CPU core only (Recommended for standard use):
-
-```bash
+# Install the standard CPU environment
 uv sync
+
+# Run the standard test simulation
+uv run python simulations/main.py simulations/config/standard_test.yaml
 ```
 
-Install for GPU execution:
+*Results are automatically saved to `out/<timestamp>_<tag>/` with HDF5/XDMF formats ready for ParaView.*
 
-```bash
-uv sync --extra gpu
-```
+## 🔧 Installation & Environments
 
-Install everything (GPU + Visualization + Dev tools):
+Depending on your hardware, you can request `uv` to install different dependency groups:
 
-```bash
-uv sync --all-extras
-```
+- **CPU Core (Recommended)**: `uv sync`
+- **GPU Backend**: `uv sync --group gpu` *(Requires CUDA 12.x)*
+- **Visualization**: `uv sync --group viz`
+- **Everything**: `uv sync --all-groups`
 
-If you prefer to install the package itself in editable mode you can use `pip` directly.
-
+Alternatively, you can install the package in editable mode using standard `pip`:
 ```bash
 python -m pip install -e .
-
-# With GPU support (requires CUDA 12.x)
-python -m pip install -e ".[gpu]"
+python -m pip install -e ".[gpu]"  # With GPU support
 ```
 
-### Usage
-Run a simulation by pointing `main.py` to a configuration file. Because `uv` manages the environment, use `uv run` to execute scripts without needing to manually activate the virtual environment:
+## 📚 Documentation
 
+Detailed documentation covering architecture, configuration parameters (YAML), API references, and the mathematical methods used by the spectral solvers is generated via **Sphinx**.
+
+To build and view the full documentation locally:
 ```bash
-uv run python simulations/main.py simulations/config/fast_test.yaml
+uv sync --group docs
+cd docs
+make html
 ```
+Then, open `docs/_build/html/index.html` in your web browser.
 
-To enable GPU acceleration, ensure your config file (`simulations/config/*.yaml`) has:
+## 🏗️ Architecture
 
-```yaml
-simulation:
-  backend: "gpu"
-```
+fastHeatSolv is built around the **Abstract Factory pattern**, isolating physical computation kernels (`HeatSolver`) from data telemetry (`IOManager`). See the [Architecture Guide](docs/ARCHITECTURE.md) for deep-dives into how the event loop operates and how to extend the framework with new numerical backends.
 
-## Usage
-
-Run a simulation by pointing `main.py` to a configuration file:
-
-```bash
-python simulations/main.py simulations/config/fast_test.yaml
-```
-
-To enable GPU acceleration, ensure your config file (`simulations/config/*.yaml`) has:
-```yaml
-simulation:
-  backend: "gpu"
-```
-
-### Configuration
-Configuration is handled via YAML files in the `config/` directory. See `config/fast_test.yaml` for a documented example of parameters (domain size, material properties, laser path).
-
-## Output & Visualization
-
-Results are saved to `out/<timestamp>_<tag>/`:
-- **Fields**: `.h5` / `.xmf` (Open with ParaView).
-- **Profiles**: `.txt` temperature profiles.
-- **Cut Views**: `.png` meltpool profiles
-- **Logs**: Execution logs.
-
-## Architecture
-
-(see [Architecture](docs/ARCHITECTURE.md)).
-
-## Citation
+## 📜 Citation
 
 If you use this code in your research, please cite:
 
-TBW
-
-
-```yaml
-simulation:
-  name: "spectral_test_run"
-  method: "spectral"          # Options: "spectral", "fem"
-  backend: "cpu"              # Options: "cpu" (standard), "gpu" (if supported)
-  duration: 0.012             # s
-  dt: 6.0e-6                  # s
-  update_interval: 20         # steps (ETA update frequency)
-
-domain:
-  size: [0.01, 0.005, 0.0025] # [Lx, Ly, Lz] in m
-  mesh: [512, 256, 1024]      # [nx, ny, nz] (dimensionless)
-
-material:
-  name: "GenericSteel"
-  rho: 7850.0                 # kg/m^3
-  k: 15.0                     # W/(m·K)
-  Cp: 500.0                   # J/(kg·K)
-  L_f: 267700.0               # J/kg (Latent heat of fusion)
-  T_solidus: 1700.0           # K
-  T_liquidus: 1800.0          # K
-  T0: 293.0                   # K (Ambient temperature)
-  
-  # Evaporation parameters
-  DeltaH_LV: 7.41e6           # J/kg (Specific enthalpy of vaporization)
-  R_v: 150.774                # J/(kg·K) (Specific gas constant for vapor)
+*(Citation to be added)*
   Pa: 101325.0                # Pa (Ambient pressure)
   T_boil: 3090.0              # K
 
