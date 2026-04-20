@@ -8,15 +8,23 @@ from typing import Optional
 class SpectralSolverCPULinear(HeatSolver):
     """
     SpectralSolverCPULinear implements a strictly linear spectral method 
-    for solving the heat equation on the CPU. It disables latent heat 
-    and evaporation, applying only the laser source.
+    for solving the heat equation on the CPU.
+    
+    It disables latent heat and evaporation, applying only the laser source.
     Useful for testing against exact linear analytical solutions.
     """
     def __init__(self, context: Optional[SimulationContext] = None):
         """
+        Initializes the SpectralSolverCPULinear.
+
         Optionally attach a SimulationContext at construction time.
         The context can also be provided (or overridden) later via
         ``initialize(context)``.
+
+        Parameters
+        ----------
+        context : SimulationContext, optional
+            A dataclass containing complete simulation parameters, by default None.
         """
         self.context: Optional[SimulationContext] = context
         self.state: Optional[kernels.SpectralSolverState] = None
@@ -25,11 +33,20 @@ class SpectralSolverCPULinear(HeatSolver):
         """
         Set up the spectral solver state, allocate buffers, and set the initial condition.
 
-        Args:
-            context: If provided, replaces the stored SimulationContext.
+        Parameters
+        ----------
+        context : SimulationContext, optional
+            If provided, replaces the stored SimulationContext. By default None.
 
-        Returns:
-            SpectralSolverState: The initialized solver state object.
+        Returns
+        -------
+        SpectralSolverState
+            The initialized solver state object containing grid buffers and spectra.
+        
+        Raises
+        ------
+        RuntimeError
+            If SimulationContext is neither provided here nor at construction.
         """
         if context is not None:
             self.context = context
@@ -54,14 +71,23 @@ class SpectralSolverCPULinear(HeatSolver):
     def step(self, t, dt):
         """
         Advance the spectral solution by one time step linearly.
-        Only the laser source is applied. No latent heat or evaporation.
         
-        Args:
-            t (float): Current simulation time.
-            dt (float): Time step size.
-            
-        Returns:
-            tuple: (updated SpectralSolverState, metrics dict)
+        Only the laser source is applied. No latent heat or evaporation.
+
+        Parameters
+        ----------
+        t : float
+            Current simulation time.
+        dt : float
+            Time step size.
+
+        Returns
+        -------
+        tuple
+            SsState : SpectralSolverState
+                 The updated linear solver state.
+            metrics : dict
+                 Metrics from the iteration, such as max temperature and number of evaporation steps.
         """
         # Unpack context attributes
         context = self.context
@@ -119,6 +145,16 @@ class SpectralSolverCPULinear(HeatSolver):
     def set_state(self, temperature_field: np.ndarray) -> None:
         """
         Overwrite the internal spectral coefficients from a spatial temperature field.
+
+        Parameters
+        ----------
+        temperature_field : np.ndarray
+            A 3-D array (shape ``(nz, ny, nx)``) containing temperatures.
+        
+        Raises
+        ------
+        RuntimeError
+            If called before the solver is initialized.
         """
         if self.state is None or self.context is None:
             raise RuntimeError("Solver must be initialized before calling set_state().")
@@ -129,6 +165,6 @@ class SpectralSolverCPULinear(HeatSolver):
 
     def finalize(self) -> None:
         """
-        Clean up resources.
+        Clean up CPU resources.
         """
         pass

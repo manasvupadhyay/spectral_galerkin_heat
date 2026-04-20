@@ -20,10 +20,14 @@ class HeatSolver(ABC):
         Stores the context internally, allocates fields and spectral
         coefficients, and returns the initial state object.
 
-        Args:
-            context: Full simulation parameters (geometry, material, etc.).
+        Parameters
+        ----------
+        context : SimulationContext
+            Full simulation parameters (geometry, material, etc.).
 
-        Returns:
+        Returns
+        -------
+        Any
             The initial state object (implementation-dependent).
         """
         pass
@@ -31,18 +35,22 @@ class HeatSolver(ABC):
     @abstractmethod
     def step(self, t: float, dt: float) -> Tuple[Any, Dict[str, float]]:
         """
-        Advance the simulation by one time step *dt*.
+        Advance the simulation by one time step `dt`.
 
+        Parameters
+        ----------
+        t : float
+            Current simulation time.
+        dt : float
+            Time step size.
 
-        Args:
-            t: Current simulation time.
-            dt: Time step size.
-
-        Returns:
-            Tuple containing:
-            - new_state: The evolved state object.
-            - metrics: Dictionary of scalar diagnostics
-              (e.g., ``{'P_laser': 50.0, 'T_max': 2000.0}``).
+        Returns
+        -------
+        tuple
+            new_state : Any
+                The evolved state object.
+            metrics : dict
+                Dictionary of scalar diagnostics (e.g., {'P_laser': 50.0, 'T_max': 2000.0}).
         """
         pass
 

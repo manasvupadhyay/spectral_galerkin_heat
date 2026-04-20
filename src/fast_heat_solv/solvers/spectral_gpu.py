@@ -9,14 +9,22 @@ from typing import Optional, Any, Tuple, Dict
 class SpectralSolverGPU(HeatSolver):
     """
     SpectralSolverGPU implements a spectral method for solving the heat equation on the GPU.
+    
     It manages the solver state, initialization, and time-stepping logic, including laser source,
     latent heat, and evaporation effects. The solver is designed for modularity and performance.
     """
     def __init__(self, context: Optional[SimulationContext] = None):
         """
+        Initializes the SpectralSolverGPU.
+
         Optionally attach a SimulationContext at construction time.
         The context can also be provided (or overridden) later via
         ``initialize(context)``.
+
+        Parameters
+        ----------
+        context : SimulationContext, optional
+            A dataclass containing complete simulation parameters, by default None.
         """
         self.context: Optional[SimulationContext] = context
         self.state: Optional[kernels.SpectralSolverState] = None
@@ -25,11 +33,15 @@ class SpectralSolverGPU(HeatSolver):
         """
         Set up the spectral solver state, allocate buffers, and set the initial condition.
 
-        Args:
-            context: If provided, replaces the stored SimulationContext.
+        Parameters
+        ----------
+        context : SimulationContext
+            Replaces the stored SimulationContext.
 
-        Returns:
-            SpectralSolverState: The initialized solver state object.
+        Returns
+        -------
+        SpectralSolverState
+            The initialized GPU solver state object.
         """
         self.context = context
 
@@ -51,12 +63,23 @@ class SpectralSolverGPU(HeatSolver):
     def step(self, t: float, dt: float) -> Tuple[Any, Dict[str, float]]:
         """
         Advance the spectral solution by one time step using ETD1 and nonlinear evaporation correction.
+        
         Handles laser source, latent heat, and evaporation effects.
-        Args:
-            t (float): Current simulation time.
-            dt (float): Time step size.
-        Returns:
-            tuple: (updated SpectralSolverState, metrics dict)
+
+        Parameters
+        ----------
+        t : float
+            Current simulation time.
+        dt : float
+            Time step size.
+
+        Returns
+        -------
+        tuple
+            SsState : SpectralSolverState
+                 The updated GPU solver state.
+            metrics : dict
+                 Metrics from the iteration, such as max temperature and number of evaporation steps.
         """
         context = self.context
         geom = context.geom
@@ -160,9 +183,15 @@ class SpectralSolverGPU(HeatSolver):
         Converts the cell-centred temperature array into spectral (DCT) modes
         so that the solver can continue stepping from the injected state.
 
-        Args:
-            temperature_field: 3-D array of shape ``(nz, ny, nx)``.
-                Accepts NumPy or CuPy arrays.
+        Parameters
+        ----------
+        temperature_field : np.ndarray or cupy.ndarray
+            A 3-D array (shape ``(nz, ny, nx)``) containing temperatures.
+        
+        Raises
+        ------
+        RuntimeError
+            If called before the solver is initialized.
         """
         if self.state is None or self.context is None:
             raise RuntimeError("Solver must be initialized before calling set_state().")
