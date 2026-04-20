@@ -25,24 +25,69 @@ def _get_kernels(arr):
 
 
 def C_coef(N, L, xp=np):
-    """Compute normalization coefficients for DCT-II."""
+    """
+    Compute normalization coefficients for DCT-II.
+
+    Parameters
+    ----------
+    N : int
+        Number of modes.
+    L : float
+        Domain length.
+    xp : module, optional
+        Array module to use (e.g., numpy or cupy), by default np.
+
+    Returns
+    -------
+    ndarray
+        Normalization coefficients of size N.
+    """
     C = xp.sqrt(2.0 / L) * xp.ones(N)
     C[0] = xp.sqrt(1.0 / L)
     return C
 
 def _cosine_basis_along_axis(n_modes, length, coords):
-    """Compute cosine basis values cos(k*pi*x/L) for given coordinates."""
+    """
+    Compute cosine basis values cos(k*pi*x/L) for given coordinates.
+
+    Parameters
+    ----------
+    n_modes : int
+        Number of modes to compute.
+    length : float
+        Domain length along the axis.
+    coords : ndarray
+        1D array of coordinates where the basis is evaluated.
+
+    Returns
+    -------
+    ndarray
+        2D array of shape (n_modes, len(coords)) with basis values.
+    """
     indices = np.arange(n_modes, dtype=np.float64)
     return np.cos(np.pi * indices[:, None] * coords[None, :] / length)
 
 def reconstruct_temperature_volume(a, SsState):
-    """Reconstruct the temperature field on the full simulation grid.
+    """
+    Reconstruct the temperature field on the full simulation grid.
     
-    note : the reconstruction bases (Bx, By, Bz) must be precomputed before, 
-    The reconstruction grid is node centered in x, y, z
+    note : the reconstruction bases (Bx, By, Bz) must be precomputed before.
+    The reconstruction grid is node centered in x, y, z.
     
     This function is now legacy, can be still used for exact reconstruction 
-    but DCT version is faster. (DCT can be tested against this for correctness)
+    but DCT version is faster. (DCT can be tested against this for correctness).
+
+    Parameters
+    ----------
+    a : ndarray
+        Spectral coefficients.
+    SsState : SpectralSolverState
+        The solver state containing grid reconstruction bases.
+
+    Returns
+    -------
+    ndarray
+        Full volumetric temperature field array.
     """
 
     if hasattr(a, 'get'):
@@ -134,7 +179,27 @@ def reconstruct_temperature_DCT(a, SsState):
     return np.ascontiguousarray(T.transpose(2, 1, 0), dtype=np.float32)
 
 def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
-    """Evaluate the temperature field at arbitrary points using modal expansion."""
+    """
+    Evaluate the temperature field at arbitrary points using modal expansion.
+
+    Parameters
+    ----------
+    a : ndarray
+        Spectral coefficients (CPU or GPU array).
+    num : NumParams
+        Simulation numerical parameters containing mesh discretizations.
+    geom : GeomParams
+        Simulation domain geometry.
+    SsState : SpectralSolverState
+        Current solver state.
+    coords : ndarray
+        The (N, 3) shaped array containing float coordinates to evaluate at.
+
+    Returns
+    -------
+    ndarray
+        Array of shape N with temperature values at each queried point.
+    """
     coords = np.asarray(coords, dtype=np.float32)
     if coords.ndim != 2 or coords.shape[1] != 3:
         raise ValueError("coords must be of shape (N, 3)")
