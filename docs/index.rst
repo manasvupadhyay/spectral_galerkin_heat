@@ -5,28 +5,21 @@ fastHeatSolv Documentation
 
 fastHeatSolv is a modular framework designed for simulating heat transfer in additive manufacturing. It uses semi-analytical spectral methods to achieve high performance on both CPU and GPU hardware, and fully supports complex laser trajectories parsed directly from G-code.
 
-Quickstart
-----------
+.. figure:: _images/lines_12.png
+   :alt: Simulation of a laser path with fastHeatSolv
+   :width: 500px
+   :align: center
 
-.. code-block:: bash
-
-   # Clone the repository
-   git clone https://github.com/TheoADX/fastHeatSolv.git
-   cd fastHeatSolv
-
-   # Install the standard CPU environment
-   uv sync
-
-   # Run the standard test simulation
-   uv run python simulations/main.py simulations/config/standard_test.yaml
-
-Outputs will be saved in unstructured formats ready for ParaView.
+   *Simulation of a laser path with fastHeatSolv.*
 
 .. toctree::
    :maxdepth: 2
    :caption: User Guide:
 
+   installation
+   theory
    configuration
+   examples
 
 .. toctree::
    :maxdepth: 2

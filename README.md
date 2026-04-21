@@ -9,7 +9,13 @@
 
 fastHeatSolv is a modular framework designed for simulating heat transfer in additive manufacturing. It uses semi-analytical spectral methods to achieve high performance on both CPU and GPU hardware, and fully supports complex laser trajectories parsed directly from G-code.
 
-## Quickstart
+## Usage
+
+`fastHeatSolv` can be used in two main ways: as a standalone simulation runner via CLI, or as an imported Python library.
+
+### 1. CLI Pipeline (Standalone)
+
+When interacting via the CLI, the solver uses `simulations/main.py` and is fully driven by a `.yaml` configuration file. Output is saved to disk using formats suited for ParaView.
 
 This project uses [`uv`](https://uv.io) for fast environment management.
 
@@ -35,6 +41,41 @@ uv run python simulations/main.py simulations/config/standard_test.yaml
 ```
 
 *Results are automatically saved to `out/<timestamp>_<tag>/` with HDF5/XDMF formats.*
+
+### 2. Library Integration
+
+You can import `fastHeatSolv` as a library. 
+
+In this mode, you pass a dictionary into `SimulationContext.from_dict(...)` and drive the steps directly.
+
+Here is a brief demonstration (see `simulations/example_orchestrator.py` for the full script):
+
+```python
+from fast_heat_solv.core.parameters import SimulationContext
+from fast_heat_solv.solvers.spectral_cpu import SpectralSolverCPU
+
+config = {
+    "simulation": { "method": "spectral", "backend": "cpu", "dt": 6e-6, "duration": 6e-5 },
+    "domain": { "size": [0.01, 0.005, 0.0025], "mesh": [64, 32, 16] },
+    "material": { "rho": 7850.0, "k": 15.0, "Cp": 500.0, "name": "316L" },
+    "laser": { "radius": 60.0e-6, "absorptivity": 0.30, "power_nominal": 200.0, 
+               "path": { "type": "gcode", "file": "linear_track.gcode" } },
+    "io": {}, # Empty: No I/O involvement
+}
+
+# 1. Build the context
+context = SimulationContext.from_dict(config)
+
+# 2. Instantiate and initialize the solver
+solver = SpectralSolverCPU()
+state = solver.initialize(context)
+
+# 3. Time loop
+t, dt = 0.0, context.num.dt
+while t < context.num.t_end:
+    state, metrics = solver.step(t, dt)
+    t += dt
+```
 
 ## Installation & Environments
 
