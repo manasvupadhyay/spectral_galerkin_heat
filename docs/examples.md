@@ -2,7 +2,7 @@
 
 fastHeatSolv models are driven entirely by YAML configuration files, allowing you to run various simulation scenarios without writing custom Python control loops.
 
-## The Standard Test
+## A Standard Test
 
 The primary example included is the `standard_test.yaml`, which sets up a classical moving point source or distributed heat source problem based on analytical solutions.
 
@@ -41,7 +41,7 @@ laser:
     v_y: 0.0  # Velocity in Y
 ```
 
-## Library Integration (Orchestrator)
+## Library Integration 
 
 While `fastHeatSolv` provides a standalone CLI, it is also designed to be fully usable as a Python library. This is useful if you want to integrate the solver in a broader codebase where you want to execute the simulation step by step.
 
