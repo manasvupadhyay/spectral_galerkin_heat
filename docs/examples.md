@@ -1,10 +1,10 @@
 # Examples
 
-fastHeatSolv models are driven entirely by YAML configuration files, allowing you to run various simulation scenarios without writing custom Python control loops.
+fastHeatSolv models can be driven entirely by YAML configuration files.
 
 ## A Standard Test
 
-The primary example included is the `standard_test.yaml`, which sets up a classical moving point source or distributed heat source problem based on analytical solutions.
+The primary example included is {download}`standard_test.yaml <../simulations/config/standard_test.yaml>`, which sets a gaussian laser heat source hitting the surface of a cuboid domain.
 
 Run it using:
 ```bash
@@ -18,34 +18,61 @@ A typical configuration file contains the physical metrics and solver parameters
 ```yaml
 # simulations/config/standard_test.yaml
 simulation:
-  backend: "cpu" # Options: ["cpu", "gpu", "cpu_linear"]
-  t_end: 0.05    # Simulation duration in seconds
-  dt: 0.001      # Time step
+  name: "spectral_test_run"
+  method: "spectral"          # Options: "spectral", "fem"
+  backend: "cpu"              # Options: "cpu" (standard), "gpu" (if supported)
+  duration: 0.012         # s
+  dt: 2.5e-6                  # s
+  update_interval: 20         # steps (ETA update frequency)
 
-output:
-  base_dir: "results"
-  prefix: "standard_test"
-  save_interval: 10 # Save output every 10 steps
+domain:
+  size: [0.005, 0.0025, 0.00125] # [Lx, Ly, Lz] in m
+  mesh: [1000, 500, 1500]      # [nx, ny, nz] (dimensionless)
 
 material:
-  rho: 7850.0  # Density (kg/m^3)
-  cp: 500.0    # Specific Heat (J/kg.K)
-  k: 15.0      # Thermal Conductivity (W/m.K)
+  name: "316L"
+  rho: 7850.0                 # kg/m^3
+  k: 15.0                     # W/(m·K)
+  Cp: 500.0                   # J/(kg·K)
+  
+  L_f: 267700.0               # J/kg (Latent heat of fusion)
+  T_solidus: 1700 #1658.0           # K
+  T_liquidus: 1800.0          # K
+  T0: 293.0                   # K (Ambient temperature)
+  h_conv: 3000.0               # W/(m²·K) (Bottom convective heat transfer coefficient)
+  
+  # Evaporation parameters
+  DeltaH_LV: 7.41e6           # J/kg (Specific enthalpy of vaporization)
+  R_v: 150.774                # J/(kg·K) (Specific gas constant for vapor)
+  Pa: 101325.0                # Pa (Ambient pressure)
+  T_boil: 3090.0              # K
 
 laser:
-  power: 500.0   # Laser Power in Watts
-  radius: 0.0001 # Beam Radius (100 µm)
+  radius: 60.0e-6             # m (r_b)
+  absorptivity: 0.30          # (dimensionless, 0.0 to 1.0)
+  power_nominal: 200.0        # W
+  
   path:
-    type: "constant_velocity"
-    v_x: 0.8  # Velocity in X
-    v_y: 0.0  # Velocity in Y
+    type: "gcode"
+    file: "linear_track.gcode"
+
+io:
+  interval: null                      # (Output frequency, nb of steps) 
+  outputs: [full_volume]              # [full_volume]
+  at_end: [full_volume, profiles]     # [full_volume, profiles, cut_views, modes]  
+  profiles_locations:
+    - 'laser'                       # Location in m, 'laser' or 'hotspot' for dynamic center
+  cut_views_planes:
+    - xy
+    - yz
+    - xz
 ```
 
 ## Library Integration 
 
 While `fastHeatSolv` provides a standalone CLI, it is also designed to be fully usable as a Python library. This is useful if you want to integrate the solver in a broader codebase where you want to execute the simulation step by step.
 
-See [`simulations/example_orchestrator.py`](../simulations/example_orchestrator.py) for a complete example. 
+See {download}`example_orchestrator.py <../simulations/example_orchestrator.py>` for a complete example. 
 
 ```python
 from fast_heat_solv.core.parameters import SimulationContext

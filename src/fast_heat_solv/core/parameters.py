@@ -21,29 +21,34 @@ class NumParams:
     """
     Numerical parameters for the simulation.
 
+    These parameters control time-stepping accuracy and spatial discretization.
+    The spectral method's accuracy depends critically on adequate resolution.
+
     Attributes
     ----------
     dt : float
-        Time step size in seconds.
+        Time step size in seconds. 
     nx : int
-        Number of grid points in the x direction.
+        Number of spectral modes in the x direction.
     ny : int
-        Number of grid points in the y direction.
+        Number of spectral modes in the y direction.
     nz : int
-        Number of grid points in the z direction.
+        Number of spectral modes in the z direction.
     t_end : float, optional
-        End time of the simulation in seconds, by default 0.0.
+        Total simulation duration in seconds, by default 0.0.
+        The solver runs from t=0 to t=t_end with time step dt.
     update_interval : float, optional
-        Time interval for logging updates in seconds, by default 1e-3.
+        Wall-clock or simulation-time interval between logging/output updates in seconds,
+        by default 1e-3.
     save_all : bool, optional
-        Flag to indicate if all data should be saved, by default False.
+        If True, save the full temperature field at every time step;  default False.
     """
     dt: float
     nx: int
     ny: int
     nz: int
     t_end: float = 0.0
-    update_interval: float = 1e-3  # Time interval for logging updates
+    update_interval: float = 1e-3
     save_all: bool = False
 
 @dataclass
@@ -51,34 +56,54 @@ class MaterialParams:
     """
     Material properties for the simulation.
 
+    These properties define the thermal and thermodynamic behavior of the workpiece.
+    All temperatures must be in Kelvin; all energies in joules per unit mass.
+
     Attributes
     ----------
     name : str, optional
-        Name of the material, by default "Material".
+        Material identifier (e.g., "316L", "Aluminum"). Used for logging and output,
+        by default "Material".
     rho : float, optional
-        Density of the material in kg/m^3, by default 1.0.
+        Density in kg/m³. Determines heat capacity and latent heat effects. Typical
+        range: 2700 (Al) to 8960 (Cu) kg/m³, by default 1.0.
     k : float, optional
-        Thermal conductivity in W/(m·K), by default 1.0.
+        Thermal conductivity in W/(m·K). Controls heat diffusion rate and cooling speed.
+        Critical for predicting melt pool shape and solidification. Typical range:
+        15–429 W/(m·K), by default 1.0.
     Cp : float, optional
-        Specific heat capacity in J/(kg·K), by default 1.0.
+        Specific heat capacity in J/(kg·K). Energy required to raise material
+        temperature by 1 K. Typical range: 385–4180 J/(kg·K), by default 1.0.
     L_f : float, optional
-        Latent heat of fusion in J/kg, by default 0.0.
+        Latent heat of fusion in J/kg. Energy released/absorbed during solid↔liquid
+        phase transition (around melting point). Set to 0.0 for isothermal models,
+        by default 0.0.
     T_solidus : float, optional
-        Solidus temperature in Kelvin, by default 0.0.
+        Solidus temperature in Kelvin. Below this, material is fully solid.
+        Must be < T_liquidus. For single-phase analysis, set both to the melting point,
+        by default 0.0.
     T_liquidus : float, optional
-        Liquidus temperature in Kelvin, by default 0.0.
+        Liquidus temperature in Kelvin. Above this, material is fully liquid.
+        by default 0.0.
     Pa : float, optional
-        Ambient pressure in Pa, by default 0.
+        Ambient (atmospheric) pressure in Pa. Used for evaporation calculations.
+        Standard: 101325 Pa, by default 0.
     R_v : float, optional
-        Specific gas constant of the vapor in J/(kg·K), by default 0.
+        Specific gas constant of the vapor in J/(kg·K). For Ar or vapor phase.
+        by default 0.
     T_boil : float, optional
-        Boiling temperature in Kelvin, by default 0.
+        Boiling temperature in Kelvin. Above this, material evaporates.
+        For 316L steel: ~3090 K, by default 0.
     DeltaH_LV : float, optional
-        Latent heat of vaporization in J/kg, by default 0.
+        Latent heat of vaporization in J/kg. Energy released during liquid→vapor
+        transition. Typically 1–10 MJ/kg depending on material, by default 0.
     T0 : float, optional
-        Reference or initial temperature in Kelvin, by default 0.
+        Initial/ambient temperature in Kelvin. All temperatures computed relative
+        to T0 as reference. Typical: 293 K (room temperature), by default 0.
     h_conv : float, optional
-        Convective heat transfer coefficient in W/(m^2·K), by default 0.0.
+        Convective heat transfer coefficient in W/(m²·K) at the domain boundary.
+        Controls boundary cooling (e.g., bottom surface). Typical: 50–5000 W/(m²·K),
+        by default 0.0.
     """
     name: str = "Material"
     rho: float = 1.0
@@ -91,53 +116,58 @@ class MaterialParams:
     R_v: float = 0
     T_boil: float = 0
     DeltaH_LV: float = 0
-    T0: float = 0 # Reference temperature
-    h_conv: float = 0.0  # Convective heat transfer coefficient (W/(m²·K))
+    T0: float = 0
+    h_conv: float = 0.0
     # Add more fields as needed from your YAML/config
 
     @property
     def diff(self) -> float:
         """
-        Calculates the thermal diffusivity of the material.
+        Thermal diffusivity in m²/s.
+
+        Computed as k / (rho * Cp), this dimensionless group governs the rate of
+        heat diffusion. Higher values → faster heat propagation. Controls the
+        characteristic time scale for thermal evolution independent of domain size.
 
         Returns
         -------
         float
-            Thermal diffusivity computed as `k / (rho * Cp)`.
+            Thermal diffusivity in m²/s.
         """
         return self.k / (self.rho * self.Cp)
 
 @dataclass
 class GeomParams:
     """
-    Geometric parameters and grid generation properties.
+    Rectangular domain [0, Lx] × [0, Ly] × [0, Lz] with uniform spectral grid.
+    Derived fields (x, y, z, dx, dy, dz) computed in __post_init__.
 
     Attributes
     ----------
     Lx : float
-        Domain length in the x direction in meters.
+        Domain size in x direction (meters).
     Ly : float
-        Domain length in the y direction in meters.
+        Domain size in y direction (meters).
     Lz : float
-        Domain length in the z direction in meters.
+        Domain size in z direction (meters).
     nx : int
-        Number of grid points in the x direction.
+        Number of grid points in x.
     ny : int
-        Number of grid points in the y direction.
+        Number of grid points in y.
     nz : int
-        Number of grid points in the z direction.
+        Number of grid points in z.
     x : np.ndarray
-        1D array of x coordinates.
+        1D x coordinates (computed, cell-centered).
     y : np.ndarray
-        1D array of y coordinates.
+        1D y coordinates (computed, cell-centered).
     z : np.ndarray
-        1D array of z coordinates.
+        1D z coordinates (computed, node-centered).
     dx : float
-        Grid spacing in the x direction.
+        Grid spacing in x = Lx / nx.
     dy : float
-        Grid spacing in the y direction.
+        Grid spacing in y = Ly / ny.
     dz : float
-        Grid spacing in the z direction.
+        Grid spacing in z = Lz / nz.
     """
     Lx: float
     Ly: float
@@ -172,39 +202,41 @@ class LaserParams:
     Attributes
     ----------
     radius : float
-        Radius of the laser beam.
+        Beam radius (meters). Typically 30–100 μm for additive manufacturing.
     absorptivity : float
-        Absorptivity coefficient of the material for the given laser.
+        Absorptivity coefficient (0–1, dimensionless). Fraction of incident power
+        absorbed by material; rest is reflected.
     power : float, optional
-        Base power if constant, or maximum power of the laser, by default 0.0.
+        Nominal/maximum laser power (watts), by default 0.0. Actual power may vary
+        via :class:`LaserPath.get_state`.
     """
     radius: float
     absorptivity: float
-    power: float = 0.0 # Base power if constant, or max power
+    power: float = 0.0
 
 @dataclass
 class SimulationContext:
     """
-    Aggregate context holding all simulation parameters.
+    Complete simulation configuration: numerics, material, domain, laser, and I/O.
 
     Attributes
     ----------
     num : NumParams
-        Numerical computation parameters.
+        Numerical parameters (time step, grid resolution, duration).
     mat : MaterialParams
-        Material properties parameters.
+        Material thermal and thermodynamic properties.
     geom : GeomParams
-        Geometric and domain parameters.
+        Domain geometry and grid definition.
     laser : LaserParams
-        Laser configuration parameters.
+        Laser beam parameters (radius, absorptivity, nominal power).
     laser_path : LaserPath
-        Object determining the laser trajectory and state over time.
+        Laser trajectory and power evolution over time.
     io : dict
-        Flat dictionary defining input/output options (e.g., intervals, planes).
+        I/O configuration (output intervals, visualization planes, etc.).
     method : str, optional
-        Simulation calculation method (e.g., 'spectral' or 'fem'), by default 'spectral'.
+        Solver method ('spectral' or 'fem'), by default 'spectral'.
     backend : str, optional
-        Backend target for computations (e.g., 'cpu' or 'gpu'), by default 'cpu'.
+        Compute backend ('cpu' or 'gpu'), by default 'cpu'.
     """
     num: 'NumParams'
     mat: 'MaterialParams'

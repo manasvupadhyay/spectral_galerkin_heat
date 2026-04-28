@@ -3,9 +3,9 @@ import os
 import scipy.fft
 
 try:
-    import cupy as cp
+    import cupy as _cp
 except ImportError:
-    cp = None
+    _cp = None
 
 # Default to CPU kernels for module-level access, but dispatch properly in functions
 import fast_heat_solv.physics.spectral_cpu_kernels as kernels
@@ -24,7 +24,7 @@ def _get_kernels(arr):
     return kernels
 
 
-def C_coef(N, L, xp=np):
+def _C_coef(N, L, xp=np):
     """
     Compute normalization coefficients for DCT-II.
 

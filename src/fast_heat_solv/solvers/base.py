@@ -16,10 +16,15 @@ from fast_heat_solv.core.parameters import SimulationContext
 class HeatSolver(ABC):
     """
     Abstract interface for a Heat Equation Solver.
-    Encapsulates the physics engine and numerical methods.
 
-    The solver manages its own internal state. Callers interact with
-    it through ``initialize``, ``step``, ``set_state`` and ``finalize``.
+    Encapsulates the physics engine and numerical methods for solving the
+    transient heat equation with phase change and evaporation.
+
+    **Contract:**
+    - Call ``initialize`` once before ``step``.
+    - Call ``step`` repeatedly to advance time.
+    - Call ``finalize`` to release resources (GPU memory, etc.).
+    - Do not modify returned state objects; call ``step`` to evolve.
     """
 
     @abstractmethod

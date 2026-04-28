@@ -17,10 +17,10 @@ from typing import Optional
 
 class SpectralSolverCPU(HeatSolver):
     """
-    SpectralSolverCPU implements a spectral method for solving the heat equation on the CPU.
-    
-    It manages the solver state, initialization, and time-stepping logic, including laser source,
-    latent heat, and evaporation effects. The solver is designed for modularity and performance.
+    Spectral method CPU solver for the heat equation with phase change and evaporation.
+
+    Uses fast Fourier transforms (FFT) and exponential time differencing (ETD1)
+    for accuracy and speed on multi-core CPUs.
     """
     def __init__(self, context: Optional[SimulationContext] = None):
         """

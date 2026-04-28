@@ -1,9 +1,30 @@
+"""
+CPU-based spectral method kernels for the heat equation.
+
+Public functions in this module are called by SpectralSolverCPU:
+- ``update_modes_etd1``: Time integration step
+- ``compute_latent_heat_source``: Latent heat and evaporation effects
+- ``reconstruct_surface_temperature``: Extract solution on top surface
+"""
+
 import numpy as np
 from numba import njit, prange
 from scipy.ndimage import shift as scipy_shift
 from fast_heat_solv.physics import spectral_helpers as spec_hp
 import pyfftw
 from dataclasses import dataclass
+
+__all__ = [
+    "SpectralSolverState",
+    "SpectralGrid",
+    "FineMeshState",
+    "update_modes_etd1",
+    "add_source_term_modes",
+    "add_bottom_surface_source",
+    "compute_latent_heat_source",
+    "reconstruct_surface_temperature",
+    "reconstruct_bottom_temperature",
+]
 
 # ======================================
 # Spectral Method CPU State Definition
@@ -55,9 +76,9 @@ class SpectralGrid:
         self.z = ((np.arange(nz) + 0.5) * dz).astype(np.float32)
         
         # Normalization coefficients
-        self.Cm = spec_hp.C_coef(nx, Lx)
-        self.Cn = spec_hp.C_coef(ny, Ly)
-        self.Cp = spec_hp.C_coef(nz, Lz)
+        self.Cm = spec_hp._C_coef(nx, Lx)
+        self.Cn = spec_hp._C_coef(ny, Ly)
+        self.Cp = spec_hp._C_coef(nz, Lz)
         
         # Scaling factors
         self.dct_scale = np.float32((dx * dy) * np.sqrt((nx * ny) / (Lx * Ly)))

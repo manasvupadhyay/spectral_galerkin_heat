@@ -7,7 +7,7 @@
 
 ---
 
-fastHeatSolv is a modular framework designed for simulating heat transfer in additive manufacturing. It uses semi-analytical spectral methods to achieve high performance on both CPU and GPU hardware, and fully supports complex laser trajectories parsed directly from G-code.
+fastHeatSolv is a modular framework designed for simulating heat transfer in additive manufacturing. It uses semi-analytical spectral methods to achieve high performance on both CPU and GPU hardware, and fully supports complex laser trajectories.
 
 ## Usage
 
@@ -15,7 +15,7 @@ fastHeatSolv is a modular framework designed for simulating heat transfer in add
 
 ### 1. CLI Pipeline (Standalone)
 
-When interacting via the CLI, the solver uses `simulations/main.py` and is fully driven by a `.yaml` configuration file. Output is saved to disk using formats suited for ParaView.
+When interacting via the CLI, the solver uses `simulations/main.py` and is fully driven by a `.yaml` configuration file.
 
 This project uses [`uv`](https://uv.io) for fast environment management.
 

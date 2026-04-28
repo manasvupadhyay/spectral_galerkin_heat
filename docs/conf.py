@@ -32,16 +32,18 @@ autoapi_dirs = ['../src/fast_heat_solv']
 autoapi_type = 'python'
 autoapi_options = [
     'members',
-    'undoc-members',
     'show-inheritance',
     'show-module-summary',
 ]
 autoapi_ignore = ['*__pycache__*']
+autoapi_root = 'api'
 
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
-
+# Type hint rendering
+autodoc_typehints = 'description'
+autodoc_typehints_format = 'short'
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
@@ -51,3 +53,4 @@ html_static_path = ['_static']
 
 autodoc_mock_imports = ['cupy', 'cupyx']
 napoleon_use_ivar = True
+napoleon_include_init_method = False
