@@ -86,19 +86,12 @@ class SpectralSolverCPULinear(HeatSolver):
             grid.x, grid.y, laser_state.x, laser_state.y,
             laser_params.radius, laser_coef
         )
-        
-        q_dct = kernels.DCT_II(q_las)
 
         # 2. Linear step (ETD1)
-        # Decay term: a * exp(-K*dt) -> a
         np.multiply(SsState.a, SsState.K, out=SsState.a, casting='same_kind')
-        
-        # Evaluate source term in spectral space: S_n = C * q_dct
-        S_n = grid.dct_scale * q_dct
-        np.multiply(1.0, S_n, out=buffers.B_buffer, casting='same_kind')
-        
-        # First guess for a_temp: a + S_n * (1 - exp(-K*dt)) / K -> a_temp
-        kernels.update_modes_etd1(SsState.a, SsState.KK, grid.Cp32_broadcast, buffers.B_buffer, buffers.a_temp)
+
+        S_n = grid.dct_scale * kernels.DCT_II(q_las)
+        kernels.update_modes_etd1(SsState.a, SsState.KK, grid.Cp32_broadcast, S_n, buffers.a_temp)
 
         # Reconstruct surface temperature just for metrics
         T_temp = kernels.reconstruct_surface_temperature(buffers.a_temp, SsState)

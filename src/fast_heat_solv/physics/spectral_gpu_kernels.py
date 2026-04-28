@@ -249,9 +249,9 @@ class FineMeshState:
         self.Bz_fine_full = (grid.Cp[:, None] * cp.cos(np.pi * p[:, None] * z_fine_global[None, :] / Lz)).astype(cp.float32)
         
         # Box dimensions
-        self.nx_box = int(cp.ceil(Lx_box / self.dx_fine))
-        self.ny_box = int(cp.ceil(Ly_box / self.dy_fine))
-        self.nz_box = self.nz_fine_total
+        self.nx_box = min(int(cp.ceil(Lx_box / self.dx_fine)), self.nx_fine_total)
+        self.ny_box = min(int(cp.ceil(Ly_box / self.dy_fine)), self.ny_fine_total)
+        self.nz_box = min(int(cp.ceil(Lz_box / self.dz_fine)), self.nz_fine_total)
         
         # Allocation for active window
         self.Bx_fine = cp.zeros((geom.nx, self.nx_box), dtype=cp.float32)
@@ -486,40 +486,49 @@ def _reconstruct_temperature_box(a, SsState):
 
 
 
-def compute_latent_heat_source(Q_buffer, phys, laser_state, num, SsState, alpha=0.2):
-    """
-    Compute volumetric latent heat source Q (W/m^3).
-    HIGH-LEVEL ORCHESTRATOR (Runs in Python, calls CUDA Kernels).
-    """
-    if SsState.fine_mesh is None:
-        return
-
+def initialize_latent_heat_if_needed(SsState):
+    """Initialize fine-mesh T_prev from current trial modes on the first time step."""
     fm = SsState.fine_mesh
-
-    # 1. Reconstruct Temperature on Fine Mesh
+    if fm is None or fm.T_prev is not None:
+        return
     T_box, _ = _reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
+    fm.T_prev = T_box.copy()
+    if fm.Q_prev is None:
+        fm.Q_prev = cp.zeros_like(SsState.buffers.Q_latent_buffer)
 
-    # 2. Initialize/Retrieve State buffers
-    if fm.T_prev is None:
-        fm.T_prev = cp.zeros_like(T_box)
-        fm.T_prev[:] = T_box[:]
-        fm.Q_prev = cp.zeros_like(Q_buffer)
+
+def shift_latent_heat_history(fm, laser_state, num):
+    """Shift T_prev and Q_prev to align with the current laser position.
+
+    Call once per time step, before the fixed-point iteration begins.
+    """
+    if fm is None or fm.T_prev is None:
+        return
+    shift_x = laser_state.v[0] * num.dt
+    shift_y = laser_state.v[1] * num.dt
+    shift_pixels = (0, -shift_y / fm.dy_fine, -shift_x / fm.dx_fine)
+    T_prev_shifted = cp.empty_like(fm.T_prev)
+    cupy_ndimage.shift(fm.T_prev, shift_pixels, output=T_prev_shifted, order=1, mode='nearest')
+    fm.T_prev = T_prev_shifted
+    if fm.Q_prev is not None:
+        Q_prev_shifted = cp.empty_like(fm.Q_prev)
+        cupy_ndimage.shift(fm.Q_prev, shift_pixels, output=Q_prev_shifted, order=1, mode='constant', cval=0.0)
+        fm.Q_prev = Q_prev_shifted
+
+
+def compute_latent_heat_source(Q_buffer, phys, num, SsState):
+    """Compute volumetric latent heat source Q (W/m^3) on the fine mesh.
+
+    Uses the current trial modes (buffers.a_temp) and the stored T_prev.
+    Does not update T_prev; call update_latent_heat_history after convergence.
+    """
+    fm = SsState.fine_mesh
+    if fm is None or fm.T_prev is None:
         Q_buffer.fill(0.0)
         return
 
-    # 3. Shift Previous Fields to Current Frame
-    shift_x = laser_state.v[0] * num.dt
-    shift_y = laser_state.v[1] * num.dt
+    T_box, _ = _reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
 
-    shift_pixels = (0, -shift_y / fm.dy_fine, -shift_x / fm.dx_fine)
-
-    # Order=1 (Linear) usually sufficient for smooth fields like T
-    T_prev_aligned = cp.empty_like(fm.T_prev)
-    Q_prev_aligned = cp.empty_like(fm.Q_prev)
-    cupy_ndimage.shift(fm.T_prev, shift_pixels, output=T_prev_aligned, order=1, mode='nearest')
-    cupy_ndimage.shift(fm.Q_prev, shift_pixels, output=Q_prev_aligned, order=1, mode='constant', cval=0.0)
-
-    # 4. Compute Source Term (Calls CUDA Kernel)
     nz_box, ny_box, nx_box = T_box.shape
     threadsperblock = (8, 8, 8)
     blockspergrid = (
@@ -527,21 +536,24 @@ def compute_latent_heat_source(Q_buffer, phys, laser_state, num, SsState, alpha=
         (ny_box + threadsperblock[1] - 1) // threadsperblock[1],
         (nx_box + threadsperblock[2] - 1) // threadsperblock[2]
     )
-
     compute_source_term_from_temperature[blockspergrid, threadsperblock](
-        T_box, T_prev_aligned,
+        T_box, fm.T_prev,
         phys.T_solidus, phys.T_liquidus,
         phys.rho, phys.L_f, num.dt,
         Q_buffer
     )
 
-    # 5. Apply Relaxation
-    if alpha < 1.0:
-        Q_buffer[:] = alpha * Q_buffer + (1.0 - alpha) * Q_prev_aligned
 
-    # 6. Update History
+def update_latent_heat_history(SsState):
+    """Store the converged fine-mesh temperature as T_prev for the next step.
+
+    Call once per time step, after the fixed-point iteration has converged.
+    """
+    fm = SsState.fine_mesh
+    if fm is None:
+        return
+    T_box, _ = _reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
     fm.T_prev[:] = T_box[:]
-    fm.Q_prev[:] = Q_buffer[:]
 
 
 def DCT_II(q):
@@ -614,6 +626,6 @@ def shift_flux(field: cp.ndarray, shift: tuple, geom) -> cp.ndarray:
     """Translate a surface flux field by ``shift=(dx, dy)`` meters on GPU."""
     dx, dy = shift
     shift_pixels = (dy / geom.dy, dx / geom.dx)
-    # cupyx shift
-    cupy_ndimage.shift(field, shift_pixels, order=1, mode='constant', cval=0.0, output=field)
-    return field
+    out = cp.empty_like(field)
+    cupy_ndimage.shift(field, shift_pixels, order=1, mode='constant', cval=0.0, output=out)
+    return out
