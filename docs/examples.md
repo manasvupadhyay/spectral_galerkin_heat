@@ -1,6 +1,6 @@
 # Examples
 
-fastHeatSolv models can be driven entirely by YAML configuration files.
+`fastHeatSolv` models can be driven entirely by `YAML` configuration files.
 
 ## A Standard Test
 
