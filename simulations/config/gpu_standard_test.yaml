@@ -36,7 +36,7 @@ laser:
     file: "linear_track.gcode"
 
 io:
-  interval: null # 0.0012            # (Output frequency, number of steps)
+  output_interval: null               # (Output frequency, number of steps)
   outputs: [] # [full_volume]      
   at_end: [profiles, cut_views]  
   profiles_locations:

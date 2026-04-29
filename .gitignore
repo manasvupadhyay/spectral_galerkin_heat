@@ -15,6 +15,7 @@ __pycache__/
 *.log
 *.txt
 *.png
+!docs/_images/*.png
 *.h5
 *.xmf
 *.xdmf

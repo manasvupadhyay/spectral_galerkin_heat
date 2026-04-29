@@ -14,7 +14,7 @@ io:
   - xy
   - yz
   - xz
-  interval: null
+  output_interval: null
   outputs: []
   profiles_locations:
   - hotspot

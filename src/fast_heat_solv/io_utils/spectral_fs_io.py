@@ -35,7 +35,7 @@ class LocalFSIOManager(IOManager):
     def initialize(self, context: Any) -> None:
         """
         Setup directory structure: root/run_id/{subdirs}
-        Also parses IO scheduling config (interval, outputs, at_end, etc.).
+        Also parses IO scheduling config (output_interval, outputs, at_end, etc.).
         """
         self.context = context  # Store context for later use
         # 1. Extract config
@@ -46,20 +46,20 @@ class LocalFSIOManager(IOManager):
 
         # --- IO scheduling state ----
         io_cfg = context.io if hasattr(context, 'io') else {}
-        self._interval = io_cfg.get('interval')
+        self._interval = io_cfg.get('output_interval')
         self._outputs = io_cfg.get('outputs') or []
         self._at_end = io_cfg.get('at_end') or []
         self._profiles_locations = io_cfg.get('profiles_locations') or []
         self._cut_views_planes = io_cfg.get('cut_views_planes') or []
 
         if self._interval is None:
-            logger.info("io.interval is None: periodic outputs disabled; only 'at_end' outputs will be saved.")
+            logger.info("io.output_interval is None: periodic outputs disabled; only 'at_end' outputs will be saved.")
             self._next_output_step: float = float('inf')
         else:
             try:
                 self._next_output_step = int(self._interval)
             except Exception:
-                logger.warning(f"Invalid io.interval '{self._interval}' - disabling periodic outputs.")
+                logger.warning(f"Invalid io.output_interval '{self._interval}' - disabling periodic outputs.")
                 self._next_output_step = float('inf')
         
         # 2. Generate Run ID

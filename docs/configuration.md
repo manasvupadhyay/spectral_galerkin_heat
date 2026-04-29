@@ -9,10 +9,10 @@ You can find these configurations under `simulations/config/`.
 Declares the backend behavior.
 * **name**: Identifier tag for the run (`str`).
 * **method**: Defines the solver type (e.g. `"spectral"`).
-* **backend**: Execution device `cpu` or `gpu`.
-* **duration**: Physical total execution time (`float` seconds).
-* **dt**: Time step size (`float` seconds).
-* **update_interval**: ETA prints to terminal threshold.
+* **backend**: Execution device `"cpu"` or `"gpu"`.
+* **duration**: Physical total execution time (`float`, seconds).
+* **dt**: Time step size (`float`, seconds).
+* **update_interval**: Number of steps between ETA prints to terminal (`int`, steps).
 
 ### `domain`
 Sets the dimensions and grid resolutions.
@@ -21,7 +21,7 @@ Sets the dimensions and grid resolutions.
 
 ### `material`
 Physical material parameters needed by solvers.
-* **rho**: Density (`kg/m^3`)
+* **rho**: Density (`kg/m³`)
 * **k**: Thermal conductivity (`W/(m·K)`)
 * **Cp**: Specific heat capacity (`J/(kg·K)`)
 * **L_f**: Latent heat of fusion (`J/kg`)
@@ -32,28 +32,27 @@ Physical material parameters needed by solvers.
 * **R_v**: Specific gas constant for vapor (`J/(kg·K)`)
 * **Pa**: Ambient pressure (`Pa`)
 * **T_boil**: Boiling temperature (`K`)
-* **h_conv**: Convective heat transfer coefficient (`W/(m^2·K)`)
+* **h_conv**: Convective heat transfer coefficient (`W/(m²·K)`)
 
 ### `laser`
-* **radius**: Beam radius (`float`).
-* **absorptivity**: Power fraction absorbed (`float`).
-* **power_nominal**: Target base emitted power (`float` Watts).
+* **radius**: Beam radius (`m`).
+* **absorptivity**: Power fraction absorbed (dimensionless, 0–1).
+* **power_nominal**: Target base emitted power (`W`).
 * **path**: Contains string `file` directing to `.gcode` outputs.
 
 ### `io`
-Export settings.
-* **interval**: Time interval to trigger volumetric mesh exports (`float`).
-* **outputs**: Formats accepted like `['fields']`.
+Export settings controlling what is saved and when.
 
-**Extended Output Control**
-The `io` section allows control over what is saved and when:
-- `interval`: How often to save outputs during the simulation (in seconds).
-- `outputs`: List of output types to save at each interval (e.g., `full_volume`).
-- `at_end`: List of output types to save at the end of the simulation (e.g., `profiles`, `cut_views`).
-- `profiles_locations`: Optional, (x,y) tuple or `'laser'` or `'hotspot'`.
-- `cut_views_planes`: Optional, planes for extracting 2D cut views (e.g., `xy`, `yz`, `xz`).
+- **output_interval**: Number of steps between outputs during the simulation (`int`, steps). Set to `null` to disable periodic outputs.
+- **outputs**: List of output types to save at each interval (e.g., `full_volume`). See {ref}`output-types` for all available types.
+- **at_end**: List of output types to save at the end of the simulation (e.g., `profiles`, `cut_views`). See {ref}`output-types` for all available types.
+- **profiles_locations**: Optional. `(x, y)` tuple or `'laser'` or `'hotspot'` for a dynamic center.
+- **cut_views_planes**: Optional. Planes for extracting 2D cut views (e.g., `xy`, `yz`, `xz`).
 
-This enables efficient disk usage and post-processing tailored to your needs.
+(output-types)=
+#### Output Types
+
+> **Note:** Detailed documentation for each output type is a work in progress. The following types are currently supported: `full_volume`, `profiles`, `cut_views`, `modes`.
 
 ### Global Dataclass `SimulationContext`
 
