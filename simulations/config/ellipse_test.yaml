@@ -2,32 +2,62 @@ simulation:
   name: "gpu_spectral_ellipse_run"
   method: "spectral"
   backend: "cpu"
-  duration: 0.01679
-  dt: 0.7e-5
-  update_interval: 20
+  duration:
+    value: 0.01679
+    unit: "s"
+  dt:
+    value: 0.7e-5
+    unit: "s"
+  update_interval: 20         # steps
 
 domain:
-  size: [0.0025, 0.0025, 0.0005]
-  mesh: [256, 260, 300]
+  size: [0.0025, 0.0025, 0.0005]  # [Lx, Ly, Lz] in m
+  mesh: [256, 260, 300]            # [nx, ny, nz]
 
 material:
   name: "GenericSteel"
-  rho: 7850.0
-  k: 15.0
-  Cp: 500.0
-  L_f: 267700.0
-  T_solidus: 1658.0
-  T_liquidus: 1723.0
-  T0: 293.0
-  DeltaH_LV: 7.41e6
-  R_v: 150.774
-  Pa: 101325.0
-  T_boil: 3090.0
+  rho:
+    value: 7850.0
+    unit: "kg/m3"
+  k:
+    value: 15.0
+    unit: "W/(m.K)"
+  Cp:
+    value: 500.0
+    unit: "J/(kg.K)"
+  L_f:
+    value: 267700.0
+    unit: "J/kg"
+  T_solidus:
+    value: 1658.0
+    unit: "K"
+  T_liquidus:
+    value: 1723.0
+    unit: "K"
+  T0:
+    value: 293.0
+    unit: "K"
+  DeltaH_LV:
+    value: 7.41e6
+    unit: "J/kg"
+  R_v:
+    value: 150.774
+    unit: "J/(kg.K)"
+  Pa:
+    value: 101325.0
+    unit: "Pa"
+  T_boil:
+    value: 3090.0
+    unit: "K"
 
 laser:
-  radius: 60.0e-6
+  radius:
+    value: 60.0e-6
+    unit: "m"
   absorptivity: 0.30
-  power_nominal: 200.0
+  power_nominal:
+    value: 200.0
+    unit: "W"
   path:
     type: "gcode"
     file: "ellipse.gcode"

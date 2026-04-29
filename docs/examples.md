@@ -21,47 +21,75 @@ simulation:
   name: "spectral_test_run"
   method: "spectral"          # Options: "spectral", "fem"
   backend: "cpu"              # Options: "cpu" (standard), "gpu" (if supported)
-  duration: 0.012         # s
-  dt: 2.5e-6                  # s
+  duration:
+    value: 0.005
+    unit: "s"
+  dt:
+    value: 2.5e-6
+    unit: "s"
   update_interval: 20         # steps (ETA update frequency)
 
 domain:
-  size: [0.005, 0.0025, 0.00125] # [Lx, Ly, Lz] in m
-  mesh: [1000, 500, 1500]      # [nx, ny, nz] (dimensionless)
+  size: [0.005, 0.0025, 0.00125]  # [Lx, Ly, Lz] in m
+  mesh: [1000, 500, 1500]         # [nx, ny, nz]
 
 material:
   name: "316L"
-  rho: 7850.0                 # kg/m^3
-  k: 15.0                     # W/(m·K)
-  Cp: 500.0                   # J/(kg·K)
-  
-  L_f: 267700.0               # J/kg (Latent heat of fusion)
-  T_solidus: 1700 #1658.0           # K
-  T_liquidus: 1800.0          # K
-  T0: 293.0                   # K (Ambient temperature)
-  h_conv: 3000.0               # W/(m²·K) (Bottom convective heat transfer coefficient)
-  
-  # Evaporation parameters
-  DeltaH_LV: 7.41e6           # J/kg (Specific enthalpy of vaporization)
-  R_v: 150.774                # J/(kg·K) (Specific gas constant for vapor)
-  Pa: 101325.0                # Pa (Ambient pressure)
-  T_boil: 3090.0              # K
+  rho:
+    value: 7850.0
+    unit: "kg/m3"
+  k:
+    value: 15.0
+    unit: "W/(m.K)"
+  Cp:
+    value: 500.0
+    unit: "J/(kg.K)"
+  L_f:
+    value: 267700.0
+    unit: "J/kg"
+  T_solidus:
+    value: 1700
+    unit: "K"
+  T_liquidus:
+    value: 1800.0
+    unit: "K"
+  T0:
+    value: 293.0
+    unit: "K"
+  h_conv:
+    value: 3000.0
+    unit: "W/(m2.K)"
+  DeltaH_LV:
+    value: 7.41e6
+    unit: "J/kg"
+  R_v:
+    value: 150.774
+    unit: "J/(kg.K)"
+  Pa:
+    value: 101325.0
+    unit: "Pa"
+  T_boil:
+    value: 3090.0
+    unit: "K"
 
 laser:
-  radius: 60.0e-6             # m (r_b)
-  absorptivity: 0.30          # (dimensionless, 0.0 to 1.0)
-  power_nominal: 200.0        # W
-  
+  radius:
+    value: 60.0e-6
+    unit: "m"
+  absorptivity: 0.30
+  power_nominal:
+    value: 200.0
+    unit: "W"
   path:
     type: "gcode"
     file: "linear_track.gcode"
 
 io:
-  interval: null                      # (Output frequency, nb of steps) 
-  outputs: [full_volume]              # [full_volume]
-  at_end: [full_volume, profiles]     # [full_volume, profiles, cut_views, modes]  
+  output_interval: null               # (Output frequency, nb of steps)
+  outputs: [full_volume]
+  at_end: [full_volume, profiles]
   profiles_locations:
-    - 'laser'                       # Location in m, 'laser' or 'hotspot' for dynamic center
+    - 'laser'                         # 'laser', 'hotspot', or explicit [x, y] in m
   cut_views_planes:
     - xy
     - yz

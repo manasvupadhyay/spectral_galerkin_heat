@@ -16,6 +16,13 @@ import os
 if TYPE_CHECKING:
     from fast_heat_solv.core.laser import LaserPath
 
+def _get_value(v):
+    """Accept a plain scalar or a {value: ..., unit: ...} mapping."""
+    if isinstance(v, dict):
+        return v['value']
+    return v
+
+
 @dataclass
 class NumParams:
     """
@@ -278,8 +285,8 @@ class SimulationContext:
         sim_backend = sim_cfg.get('backend', 'cpu').lower()
         Lx, Ly, Lz = domain_cfg['size']
         nx, ny, nz = domain_cfg['mesh']
-        t_end = sim_cfg.get('duration', 0.01)
-        dt = real_t(sim_cfg['dt'])
+        t_end = _get_value(sim_cfg.get('duration', 0.01))
+        dt = real_t(_get_value(sim_cfg['dt']))
         
         num_params = NumParams(
             dt=float(dt),
@@ -298,25 +305,25 @@ class SimulationContext:
         mat_cfg = cfg.get('material', {})
         mat_params = MaterialParams(
             name=mat_cfg.get('name', 'Material'),
-            rho=real_t(mat_cfg['rho']),
-            k=real_t(mat_cfg['k']),
-            Cp=real_t(mat_cfg['Cp']),
-            L_f=real_t(mat_cfg.get('L_f', 0.0)),
-            T_solidus=real_t(mat_cfg.get('T_solidus', 0.0)),
-            T_liquidus=real_t(mat_cfg.get('T_liquidus', 0.0)),
-            Pa=real_t(mat_cfg.get('Pa', 0.0)),
-            R_v=real_t(mat_cfg.get('R_v', 0.0)),
-            T_boil=real_t(mat_cfg.get('T_boil', 0.0)),
-            DeltaH_LV=real_t(mat_cfg.get('DeltaH_LV', 0.0)),
-            T0=real_t(mat_cfg.get('T0', 0.0)),
-            h_conv=real_t(mat_cfg.get('h_conv', 0.0))
+            rho=real_t(_get_value(mat_cfg['rho'])),
+            k=real_t(_get_value(mat_cfg['k'])),
+            Cp=real_t(_get_value(mat_cfg['Cp'])),
+            L_f=real_t(_get_value(mat_cfg.get('L_f', 0.0))),
+            T_solidus=real_t(_get_value(mat_cfg.get('T_solidus', 0.0))),
+            T_liquidus=real_t(_get_value(mat_cfg.get('T_liquidus', 0.0))),
+            Pa=real_t(_get_value(mat_cfg.get('Pa', 0.0))),
+            R_v=real_t(_get_value(mat_cfg.get('R_v', 0.0))),
+            T_boil=real_t(_get_value(mat_cfg.get('T_boil', 0.0))),
+            DeltaH_LV=real_t(_get_value(mat_cfg.get('DeltaH_LV', 0.0))),
+            T0=real_t(_get_value(mat_cfg.get('T0', 0.0))),
+            h_conv=real_t(_get_value(mat_cfg.get('h_conv', 0.0)))
         )
 
         laser_cfg = cfg.get('laser', {})
         laser_params = LaserParams(
-            radius=real_t(laser_cfg['radius']),
-            absorptivity=real_t(laser_cfg['absorptivity']),
-            power=real_t(laser_cfg.get('power_nominal'))
+            radius=real_t(_get_value(laser_cfg['radius'])),
+            absorptivity=real_t(_get_value(laser_cfg['absorptivity'])),
+            power=real_t(_get_value(laser_cfg.get('power_nominal')))
         )
         
         # Laser Path

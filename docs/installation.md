@@ -43,3 +43,13 @@ uv run python simulations/main.py <path_to_config.yaml>
 # Run the standard test simulation
 uv run python simulations/main.py simulations/config/standard_test.yaml
 ```
+
+## Building the Documentation
+
+Requires `make` (available via your system package manager: `apt install make`, `brew install make`, etc.).
+
+```bash
+uv run make -C docs html
+```
+
+The HTML output is written to `docs/_build/html/`. Open `docs/_build/html/index.html` in a browser to view it.

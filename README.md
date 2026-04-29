@@ -84,7 +84,14 @@ Depending on your hardware, you can request `uv` to install different dependency
 - **CPU Core (Recommended)**: `uv sync`
 - **GPU Backend**: `uv sync --group gpu` *(Requires CUDA 12.x)*
 - **Visualization**: `uv sync --group viz`
+- **Docs**: `uv sync --group docs`
 - **Everything**: `uv sync --all-groups`
+
+To build the documentation locally:
+```bash
+uv run make -C docs html
+# Output: docs/_build/html/index.html
+```
 
 Alternatively, you can install the package in editable mode using standard `pip`:
 ```bash

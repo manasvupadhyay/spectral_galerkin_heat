@@ -19,6 +19,7 @@ fastHeatSolv is a modular framework designed for simulating heat transfer in add
    installation
    theory
    configuration
+   outputs
    examples
 
 .. toctree::

@@ -1,12 +1,14 @@
+---
+tocdepth: 1
+---
+
+(output-types)=
 # Output Types
 
 Output types are triggered either periodically (every `output_interval` steps, via `outputs`) or once at the end of the simulation (via `at_end`). Both keys accept any combination of the types listed below.
 
 All outputs are written under `out/<run_id>/`, where `<run_id>` is a timestamp combined with the simulation `name`.
 
----
-
-(output-types)=
 ## `full_volume`
 
 Reconstructs the full 3D temperature field from spectral coefficients and writes it to disk as HDF5 + XDMF.

@@ -49,11 +49,6 @@ Export settings controlling what is saved and when.
 - **profiles_locations**: Optional. `(x, y)` tuple or `'laser'` or `'hotspot'` for a dynamic center.
 - **cut_views_planes**: Optional. Planes for extracting 2D cut views (e.g., `xy`, `yz`, `xz`).
 
-(output-types)=
-#### Output Types
-
-> **Note:** Detailed documentation for each output type is a work in progress. The following types are currently supported: `full_volume`, `profiles`, `cut_views`, `modes`.
-
 ### Global Dataclass `SimulationContext`
 
 All configuration sections are deserialized into a unified `SimulationContext` object passed to the Abstract Factory.
