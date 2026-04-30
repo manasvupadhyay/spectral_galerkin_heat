@@ -8,11 +8,11 @@ You can find these configurations under `simulations/config/`.
 ### `simulation`
 Declares the backend behavior.
 * **name**: Identifier tag for the run (`str`).
-* **method**: Defines the solver type (e.g. `"spectral"`).
-* **backend**: Execution device `"cpu"` or `"gpu"`.
+* **method**: Defines the solver type (`str`, e.g. `"spectral"`).
+* **backend**: Execution device (`str`, `"cpu"` or `"gpu"`).
 * **duration**: Physical total execution time (`float`, seconds).
 * **dt**: Time step size (`float`, seconds).
-* **update_interval**: Number of steps between ETA prints to terminal (`int`, steps).
+* **update_interval**: Number of steps between ETA prints to terminal (`int`, dimensionless).
 
 ### `domain`
 Sets the dimensions and grid resolutions.
@@ -43,7 +43,7 @@ Physical material parameters needed by solvers.
 ### `io`
 Export settings controlling what is saved and when.
 
-- **output_interval**: Number of steps between outputs during the simulation (`int`, steps). Set to `null` to disable periodic outputs.
+- **output_interval**: Number of steps between outputs during the simulation (`int`, dimensionless). Set to `null` to disable periodic outputs.
 - **outputs**: List of output types to save at each interval (e.g., `full_volume`). See {ref}`output-types` for all available types.
 - **at_end**: List of output types to save at the end of the simulation (e.g., `profiles`, `cut_views`). See {ref}`output-types` for all available types.
 - **profiles_locations**: Optional. `(x, y)` tuple or `'laser'` or `'hotspot'` for a dynamic center.

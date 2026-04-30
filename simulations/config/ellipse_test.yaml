@@ -63,7 +63,7 @@ laser:
     file: "ellipse.gcode"
 
 io:
-  output_interval: 10
+  output_interval: 10          # (Output frequency, dimensionless)
   outputs: [full_volume]
   at_end: [full_volume]
   profiles_locations:

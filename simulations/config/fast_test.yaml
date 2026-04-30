@@ -63,7 +63,7 @@ laser:
     file: "linear_track.gcode"
 
 io:
-  output_interval: 1                  # (Output frequency, number of steps)
+  output_interval: 1                  # (Output frequency, dimensionless)
   outputs: []
   at_end: ["profiles", "cut_views"]
   profiles_locations:
