@@ -86,7 +86,8 @@ def main():
     # 1. Load Config & Context
     logger.info(f"Loading configuration from {args.config}")
     config = load_config(args.config)
-    config_dir = os.path.dirname(os.path.abspath(args.config))
+    yaml_path = os.path.abspath(args.config)
+    config_dir = os.path.dirname(yaml_path)
     context = SimulationContext.from_dict(config, config_dir=config_dir)
 
     # 2. Determine Computing Backend
@@ -133,7 +134,7 @@ def main():
     try:
         # get_factory only needs context
         factory = get_factory(context)
-        workflow = StandaloneHeatRunner(context, factory)
+        workflow = StandaloneHeatRunner(context, factory, config=config, yaml_path=yaml_path)
 
         # 4. Run Simulation
         workflow.run()
@@ -152,7 +153,7 @@ def main():
             context.backend = "cpu"
             try:
                 factory = get_factory(context)
-                workflow = StandaloneHeatRunner(context, factory)
+                workflow = StandaloneHeatRunner(context, factory, config=config, yaml_path=yaml_path)
                 workflow.run()
             except Exception as cpu_e:
                 logger.exception("Simulation failed on CPU fallback")

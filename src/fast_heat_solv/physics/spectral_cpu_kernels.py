@@ -338,7 +338,6 @@ def compute_source_term_from_temperature(T_curr, T_prev, T_S, T_L, rho, L, dt, o
     Compute Q = - rho * L * (1 / (TL - TS)) * (dT/dt) * Indicator(TS <= T <= TL)
     Used for latent heat calculation.
     """
-    factor = - rho * L / ( (T_L - T_S) * dt )
     nz, ny, nx = T_curr.shape
     for k in prange(nz):
         for j in range(ny):
@@ -348,18 +347,13 @@ def compute_source_term_from_temperature(T_curr, T_prev, T_S, T_L, rho, L, dt, o
                 if T >= T_S and T <= T_L:
                     T_p = T_prev[k, j, i]
                     
-                    # Fix T_prev to the boundaries [T_S, T_L] if it was outside.
-                    # This ensures we calculate Delta(f_liquid) = (T - T_p_clamped)/(T_L - T_S),
-                    # correctly separating latent heat from sensible heat.
-                    if T_p < T_S-(T_L - T_S): 
-                        T_p = T_S-(T_L - T_S)
-                    elif T_p > T_L+(T_L - T_S):
-                        T_p = T_L+(T_L - T_S)
-                    
+                    # Clamp T_prev to [T_S, T_L]
+                    if T_p < T_S:
+                        T_p = T_S
+                    elif T_p > T_L:
+                        T_p = T_L
+
                     dT = T - T_p
-                    # Note: Since both T and T_p are in [T_S, T_L], |dT| <= (T_L - T_S),
-                    # so the energy bound is naturally satisfied.
-                    
                     factor = -rho * L / ((T_L - T_S) * dt)
                     out[k, j, i] = factor * dT
                 else:

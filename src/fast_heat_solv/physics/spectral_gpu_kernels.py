@@ -427,9 +427,9 @@ def compute_source_term_from_temperature(T_curr, T_prev, T_S, T_L, rho, L, dt, o
         # Indicator function for mushy zone (inclusive)
         if T >= T_S and T <= T_L:
             T_p = T_prev[z, y, x]
-            # Clamp T_prev to [T_S-(T_L-T_S), T_L+(T_L-T_S)]
-            lower = T_S - (T_L - T_S)
-            upper = T_L + (T_L - T_S)
+            # Clamp T_prev to [T_S, T_L]
+            lower = T_S
+            upper = T_L
             if T_p < lower:
                 T_p = lower
             elif T_p > upper:

@@ -55,6 +55,8 @@ class NumParams:
     ny: int
     nz: int
     t_end: float = 0.0
+    n_steps: int = 0
+    dt_nominal: float = 0.0
     update_interval: float = 1e-3
     save_all: bool = False
 
@@ -285,15 +287,19 @@ class SimulationContext:
         sim_backend = sim_cfg.get('backend', 'cpu').lower()
         Lx, Ly, Lz = domain_cfg['size']
         nx, ny, nz = domain_cfg['mesh']
-        t_end = _get_value(sim_cfg.get('duration', 0.01))
-        dt = real_t(_get_value(sim_cfg['dt']))
-        
+        t_end = float(_get_value(sim_cfg.get('duration', 0.01)))
+        dt_nominal = float(real_t(_get_value(sim_cfg['dt'])))
+        n_steps = round(t_end / dt_nominal)
+        dt = t_end / n_steps  # corrected: n_steps * dt == t_end exactly
+
         num_params = NumParams(
-            dt=float(dt),
+            dt=dt,
             nx=int(nx),
             ny=int(ny),
             nz=int(nz),
-            t_end=float(t_end),
+            t_end=t_end,
+            n_steps=n_steps,
+            dt_nominal=dt_nominal,
             update_interval=float(sim_cfg.get('update_interval', 1e-3))
         )
 
@@ -336,32 +342,13 @@ class SimulationContext:
             if gcode_file is not None:
                 if not os.path.isabs(gcode_file):
                     if config_dir is not None:
-                        # Ensure config_dir is absolute
-                        abs_config_dir = os.path.abspath(config_dir)
-                        attempt1 = os.path.join(abs_config_dir, gcode_file)
-                        attempt2 = os.path.join(abs_config_dir, 'paths', gcode_file)
-                        if os.path.exists(attempt1):
-                            gcode_file = attempt1
-                        elif os.path.exists(attempt2):
-                            gcode_file = attempt2
-                        else:
-                            # fallback
-                            gcode_file = os.path.join(abs_config_dir, 'paths', gcode_file)
+                        # Standardize on config_dir / paths / gcode_file
+                        gcode_file = os.path.abspath(os.path.join(config_dir, 'paths', gcode_file))
                     else:
-                        cwd = os.getcwd()
-                        attempt1 = os.path.join(cwd, gcode_file)
-                        attempt2 = os.path.join(cwd, 'config', 'paths', gcode_file)
-                        attempt3 = os.path.join(cwd, 'simulations', 'config', 'paths', gcode_file)
-                        
-                        if os.path.exists(attempt1):
-                            gcode_file = attempt1
-                        elif os.path.exists(attempt2):
-                            gcode_file = attempt2
-                        elif os.path.exists(attempt3):
-                            gcode_file = attempt3
-                        else:
-                            # Final fallback assuming project root is one level above src
-                            gcode_file = os.path.join(cwd, 'simulations', 'config', 'paths', gcode_file)
+                        gcode_file = os.path.abspath(os.path.join(os.getcwd(), 'simulations', 'config', 'paths', gcode_file))
+                
+                # Write absolute path back to config so runner.py can access it
+                cfg['laser']['path']['file'] = gcode_file
                 laser_path = GCodeLaserPath(gcode_file, initial_position=initial_position)
                 
         io_cfg = cfg.get('io', {})
