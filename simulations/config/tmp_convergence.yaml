@@ -66,7 +66,9 @@ laser:
     file: linear_track.gcode
 
 io:
-  output_interval: null
+  output_interval:
+    value: null
+    unit: "dimensionless"
   outputs: []
   at_end:
     - full_volume
