@@ -1,10 +1,7 @@
 # Architecture & Design
 
-The project is structured around the **Abstract Factory** pattern, enabling easy extension to new
-backends (CPU, GPU, distributed) and numerical methods (Spectral, FEM, etc.).
-
 Each submodule owns its own abstract base class (`base.py`) co-located with its concrete
-implementations — there is no separate `interfaces/` package.
+implementations.
 
 ## Directory Structure
 
@@ -52,35 +49,25 @@ fastHeatSolv/
 
 - **Runner (`runner.py`)**: `StandaloneHeatRunner` — the simulation loop orchestrator.
   Owns the `while t < t_end` loop, delegates all physics to `HeatSolver` and all I/O to
-  `IOManager`. Has *no* knowledge of the numerical method or storage backend.
+  `IOManager`. 
 
 - **Factory base (`factories/base.py`)**: `SimulationFactory` ABC — declares `create_heat_solver()`
   and `create_io_manager()`. Concrete factories wire together solver + I/O for a specific backend.
 
 - **Solver base (`solvers/base.py`)**: `HeatSolver` ABC — declares `initialize()`, `step()`, and
-  `finalize()`. Concrete solvers contain all physics; they never perform I/O.
+  `finalize()`. Concrete solvers contain all physics.
 
 - **IO base (`io_utils/io_base.py`)**: `IOManager` ABC — declares the full I/O contract
   (`initialize`, `process_step`, `process_end`, `finalize`, `save_step`, …).
 
 - **Laser (`core/laser.py`)**: `LaserState` dataclass and `LaserPath` ABC.  Used by both solvers
-  (to query laser position/power) and `io_utils/gcode_path.py` (concrete path from G-code).
+  (to query laser position/power) and `io_utils/gcode_path.py`.
 
-- **Physics (`physics/`)**: Pure numerical kernels (Numba/CuPy). No I/O, no state — only
-  array-in / array-out functions called by the solvers.
-
-## Extending the Framework
-
-To add a new solver backend (e.g. Finite Difference):
-
-1. Create `src/fast_heat_solv/solvers/fd_cpu.py` implementing `HeatSolver` from `solvers/base.py`.
-2. Create `src/fast_heat_solv/factories/fd_factory.py` implementing `SimulationFactory` from
-   `factories/base.py`.
-3. Register the new backend in `simulations/main.py`.
+- **Physics (`physics/`)**: Pure numerical kernels (Numba/CuPy).
 
 ## Architecture Diagram
 
-```mermaid
+```{mermaid}
 flowchart TD
     %% --- Styling ---
     classDef client   fill:#ff7675,stroke:#d63031,stroke-width:2px,color:#000;
@@ -128,3 +115,4 @@ flowchart TD
     CPUSolv -->|"queries"| Laser
     GPUSolv -->|"queries"| Laser
 ```
+

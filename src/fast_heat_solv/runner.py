@@ -4,7 +4,13 @@ StandaloneHeatRunner – self-contained simulation runner.
 This class extracts the time-stepping loop, I/O management, and telemetry
 from ``SimulationWorkflow``. It is the recommended entry-point for running
 fastHeatSolv in **standalone** mode (i.e. driven by a YAML config file).
+
+Author: Théo Andrieux (@TheoADX)
+Copyright: (c) 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique. All rights reserved.
 """
+
+__author__ = "Théo Andrieux"
+__copyright__ = "Copyright 2026, LMS, École Polytechnique"
 
 import time
 import logging
@@ -51,7 +57,13 @@ class StandaloneHeatRunner:
     #  Telemetry helpers
     # ------------------------------------------------------------------
     def _init_telemetry(self) -> None:
-        """Initialise wall-clock tracking and optional memory probe."""
+        """
+        Initialises wall-clock tracking and optional memory probe.
+
+        Sets up the internal clock mechanisms required to track the processing 
+        time per step and optionally hooks into the `psutil` package to track
+        RAM consumption during the loop's execution.
+        """
         self._start_wall_time = time.time()
         self._last_eta_log_time = self._start_wall_time
         self._eta_log_interval = self.context.num.update_interval
@@ -70,7 +82,20 @@ class StandaloneHeatRunner:
         step_elapsed: float,
         metrics: Optional[Dict[str, Any]],
     ) -> None:
-        """Log ETA, memory usage and solver metrics at the configured interval."""
+        """
+        Logs ETA, memory usage, and solver metrics at the configured interval.
+
+        Parameters
+        ----------
+        t : float
+            Current simulation physical time in seconds.
+        step : int
+            Current time step iteration index.
+        step_elapsed : float
+            Wall-time duration of the previous simulation step in seconds.
+        metrics : dict of str to any, optional
+            A dictionary containing any internal solving metrics mapped by string ID.
+        """
         self._total_step_time += step_elapsed
         self._n_steps_timed += 1
 
@@ -119,7 +144,14 @@ class StandaloneHeatRunner:
     #  Main entry point
     # ------------------------------------------------------------------
     def run(self) -> None:
-        """Execute the main simulation loop (I/O + physics + telemetry)."""
+        """
+        Executes the main simulation loop.
+
+        It initializes the logging mechanism and file outputs, builds the initial 
+        state via the solver interface, and proceeds to perform the chronological
+        advancement loop until `t_end` is reached. Final states are serialized 
+        before cleanup.
+        """
         logger.info("Initializing standalone simulation runner...")
 
         # 1. Initialize IO System

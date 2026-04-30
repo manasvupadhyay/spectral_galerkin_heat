@@ -1,3 +1,9 @@
+"""
+GPU-based spectral method kernels for the heat equation (requires CuPy).
+
+Public functions in this module mirror CPU kernels and are called by SpectralSolverGPU.
+"""
+
 import numpy as np
 import cupy as cp
 import cupyx.scipy.ndimage as cupy_ndimage
@@ -5,7 +11,19 @@ import cupyx.scipy.fft as cupy_fft
 from numba import cuda
 import math
 from dataclasses import dataclass
-from fast_heat_solv.physics import spectral_helpers as spec_hp  # Assuming this contains only scalar logic or is ported elsewhere
+from fast_heat_solv.physics import spectral_helpers as spec_hp
+
+__all__ = [
+    "SpectralSolverState",
+    "SpectralGrid",
+    "FineMeshState",
+    "update_modes_etd1",
+    "add_source_term_modes",
+    "add_bottom_surface_source",
+    "compute_latent_heat_source",
+    "reconstruct_surface_temperature",
+    "reconstruct_bottom_temperature",
+]
 
 # ======================================
 # CUDA Kernels (Device Functions)
@@ -131,9 +149,9 @@ class SpectralGrid:
         self.z = ((cp.arange(nz) + 0.5) * dz).astype(cp.float32)
         
         # Normalization coefficients
-        self.Cm = cp.asarray(spec_hp.C_coef(nx, Lx), dtype=cp.float32)
-        self.Cn = cp.asarray(spec_hp.C_coef(ny, Ly), dtype=cp.float32)
-        self.Cp = cp.asarray(spec_hp.C_coef(nz, Lz), dtype=cp.float32)
+        self.Cm = cp.asarray(spec_hp._C_coef(nx, Lx), dtype=cp.float32)
+        self.Cn = cp.asarray(spec_hp._C_coef(ny, Ly), dtype=cp.float32)
+        self.Cp = cp.asarray(spec_hp._C_coef(nz, Lz), dtype=cp.float32)
        
         # Scaling factors
         self.dct_scale = cp.float32((dx * dy) * np.sqrt((nx * ny) / (Lx * Ly)))

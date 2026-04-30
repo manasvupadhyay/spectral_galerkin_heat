@@ -1,3 +1,13 @@
+"""
+Abstract interface for IO Managers.
+
+Author: Théo Andrieux (@TheoADX)
+Copyright: (c) 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique. All rights reserved.
+"""
+
+__author__ = "Théo Andrieux"
+__copyright__ = "Copyright 2026, LMS, École Polytechnique"
+
 from abc import ABC, abstractmethod
 import os
 from typing import Any, Dict, Optional, Union
@@ -7,11 +17,13 @@ logger = logging.getLogger(__name__)
 
 class IOManager(ABC):
     """
-    Abstract interface for Input/Output management in the simulation workflow.
-    Handles data persistence (saving results) and potentially retrieval (checkpointing).
+    Abstract interface for simulation I/O (data persistence and retrieval).
 
-    This enforces a standard contract regardless of whether we write to
-    local filesystem, HDF5, cloud storage, or databases.
+    Handles saving results and checkpointing across backends (filesystem, HDF5, cloud, etc).
+
+    Contract: ``initialize`` is called once before stepping (set up output dirs),
+    ``save_step`` at intervals (persist state), ``process_step`` after each step,
+    and ``finalize`` at end (flush/close resources).
     """
 
     @abstractmethod

@@ -1,48 +1,80 @@
-domain:
-  mesh:
-  - 10
-  - 256
-  - 500
-  size:
-  - 0.005
-  - 0.0025
-  - 0.00125
-io:
-  at_end:
-  - full_volume
-  cut_views_planes:
-  - xy
-  - yz
-  - xz
-  interval: null
-  outputs: []
-  profiles_locations:
-  - hotspot
-laser:
-  absorptivity: 0.3
-  path:
-    file: linear_track.gcode
-    type: gcode
-  power_nominal: 200.0
-  radius: 6.0e-05
-material:
-  Cp: 500.0
-  DeltaH_LV: 7.41e6
-  L_f: 267700.0
-  Pa: 101325.0
-  R_v: 150.774
-  T0: 293.0
-  T_boil: 3090.0
-  T_liquidus: 1800.0
-  T_solidus: 1700
-  h_conv: 3000.0
-  k: 15.0
-  name: 316L
-  rho: 7850.0
 simulation:
-  backend: cpu
-  dt: 2.5e-06
-  duration: 0.005
-  method: spectral
   name: spectral_test_run
+  method: spectral
+  backend: cpu
+  duration:
+    value: 0.005
+    unit: "s"
+  dt:
+    value: 2.5e-6
+    unit: "s"
   update_interval: 20
+
+domain:
+  size: [0.005, 0.0025, 0.00125]  # [Lx, Ly, Lz] in m
+  mesh: [10, 256, 500]             # [nx, ny, nz]
+
+material:
+  name: 316L
+  rho:
+    value: 7850.0
+    unit: "kg/m3"
+  k:
+    value: 15.0
+    unit: "W/(m.K)"
+  Cp:
+    value: 500.0
+    unit: "J/(kg.K)"
+  L_f:
+    value: 267700.0
+    unit: "J/kg"
+  T_solidus:
+    value: 1700
+    unit: "K"
+  T_liquidus:
+    value: 1800.0
+    unit: "K"
+  T0:
+    value: 293.0
+    unit: "K"
+  h_conv:
+    value: 3000.0
+    unit: "W/(m2.K)"
+  DeltaH_LV:
+    value: 7.41e6
+    unit: "J/kg"
+  R_v:
+    value: 150.774
+    unit: "J/(kg.K)"
+  Pa:
+    value: 101325.0
+    unit: "Pa"
+  T_boil:
+    value: 3090.0
+    unit: "K"
+
+laser:
+  radius:
+    value: 6.0e-5
+    unit: "m"
+  absorptivity: 0.3
+  power_nominal:
+    value: 200.0
+    unit: "W"
+  path:
+    type: gcode
+    file: linear_track.gcode
+
+io:
+  output_interval:
+    value: null
+    unit: "dimensionless"
+  outputs: []
+  at_end:
+    - full_volume
+  profiles_locations:
+    - hotspot
+  cut_views_planes:
+    - xy
+    - yz
+    - xz

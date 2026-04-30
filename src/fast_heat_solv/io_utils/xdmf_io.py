@@ -5,8 +5,15 @@ and write error fields for visualization in ParaView.
 
 Uses xml.etree.ElementTree for proper XML generation instead of
 hardcoded string templates.
+
+Author: Théo Andrieux (@TheoADX)
+Copyright: (c) 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique. All rights reserved.
 """
+
 from __future__ import annotations
+
+__author__ = "Théo Andrieux"
+__copyright__ = "Copyright 2026, LMS, École Polytechnique"
 
 import logging
 import os
@@ -99,8 +106,8 @@ class XdmfBuilder:
         ----------
         name : str
             Name of the grid (e.g., "Error", "Mesh")
-        dims : tuple of (nz, ny, nx)
-            Grid dimensions in z, y, x order
+        dims : tuple of int
+            Grid dimensions in (nz, ny, nx) order
         h5_ref : str
             HDF5 filename reference (basename only)
         coord_datasets : tuple of str

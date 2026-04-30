@@ -1,3 +1,13 @@
+"""
+Core parameters and SimulationContext definition.
+
+Author: Théo Andrieux (@TheoADX)
+Copyright: (c) 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique. All rights reserved.
+"""
+
+__author__ = "Théo Andrieux"
+__copyright__ = "Copyright 2026, LMS, École Polytechnique"
+
 from dataclasses import dataclass, field
 from typing import List, Optional, Any, Dict, TYPE_CHECKING
 import numpy as np
@@ -6,20 +16,102 @@ import os
 if TYPE_CHECKING:
     from fast_heat_solv.core.laser import LaserPath
 
+def _get_value(v):
+    """Accept a plain scalar or a {value: ..., unit: ...} mapping."""
+    if isinstance(v, dict):
+        return v['value']
+    return v
+
+
 @dataclass
 class NumParams:
-    """Numerical parameters for the simulation."""
+    """
+    Numerical parameters for the simulation.
+
+    These parameters control time-stepping accuracy and spatial discretization.
+    The spectral method's accuracy depends critically on adequate resolution.
+
+    Attributes
+    ----------
+    dt : float
+        Time step size in seconds. 
+    nx : int
+        Number of spectral modes in the x direction.
+    ny : int
+        Number of spectral modes in the y direction.
+    nz : int
+        Number of spectral modes in the z direction.
+    t_end : float, optional
+        Total simulation duration in seconds, by default 0.0.
+        The solver runs from t=0 to t=t_end with time step dt.
+    update_interval : float, optional
+        Wall-clock or simulation-time interval between logging/output updates in seconds,
+        by default 1e-3.
+    save_all : bool, optional
+        If True, save the full temperature field at every time step;  default False.
+    """
     dt: float
     nx: int
     ny: int
     nz: int
     t_end: float = 0.0
-    update_interval: float = 1e-3  # Time interval for logging updates
+    update_interval: float = 1e-3
     save_all: bool = False
 
 @dataclass
 class MaterialParams:
-    """Material properties."""
+    """
+    Material properties for the simulation.
+
+    These properties define the thermal and thermodynamic behavior of the workpiece.
+    All temperatures must be in Kelvin; all energies in joules per unit mass.
+
+    Attributes
+    ----------
+    name : str, optional
+        Material identifier (e.g., "316L", "Aluminum"). Used for logging and output,
+        by default "Material".
+    rho : float, optional
+        Density in kg/m³. Determines heat capacity and latent heat effects. Typical
+        range: 2700 (Al) to 8960 (Cu) kg/m³, by default 1.0.
+    k : float, optional
+        Thermal conductivity in W/(m·K). Controls heat diffusion rate and cooling speed.
+        Critical for predicting melt pool shape and solidification. Typical range:
+        15–429 W/(m·K), by default 1.0.
+    Cp : float, optional
+        Specific heat capacity in J/(kg·K). Energy required to raise material
+        temperature by 1 K. Typical range: 385–4180 J/(kg·K), by default 1.0.
+    L_f : float, optional
+        Latent heat of fusion in J/kg. Energy released/absorbed during solid↔liquid
+        phase transition (around melting point). Set to 0.0 for isothermal models,
+        by default 0.0.
+    T_solidus : float, optional
+        Solidus temperature in Kelvin. Below this, material is fully solid.
+        Must be < T_liquidus. For single-phase analysis, set both to the melting point,
+        by default 0.0.
+    T_liquidus : float, optional
+        Liquidus temperature in Kelvin. Above this, material is fully liquid.
+        by default 0.0.
+    Pa : float, optional
+        Ambient (atmospheric) pressure in Pa. Used for evaporation calculations.
+        Standard: 101325 Pa, by default 0.
+    R_v : float, optional
+        Specific gas constant of the vapor in J/(kg·K). For Ar or vapor phase.
+        by default 0.
+    T_boil : float, optional
+        Boiling temperature in Kelvin. Above this, material evaporates.
+        For 316L steel: ~3090 K, by default 0.
+    DeltaH_LV : float, optional
+        Latent heat of vaporization in J/kg. Energy released during liquid→vapor
+        transition. Typically 1–10 MJ/kg depending on material, by default 0.
+    T0 : float, optional
+        Initial/ambient temperature in Kelvin. All temperatures computed relative
+        to T0 as reference. Typical: 293 K (room temperature), by default 0.
+    h_conv : float, optional
+        Convective heat transfer coefficient in W/(m²·K) at the domain boundary.
+        Controls boundary cooling (e.g., bottom surface). Typical: 50–5000 W/(m²·K),
+        by default 0.0.
+    """
     name: str = "Material"
     rho: float = 1.0
     k: float = 1.0
@@ -31,18 +123,59 @@ class MaterialParams:
     R_v: float = 0
     T_boil: float = 0
     DeltaH_LV: float = 0
-    T0: float = 0 # Reference temperature
-    h_conv: float = 0.0  # Convective heat transfer coefficient (W/(m²·K))
+    T0: float = 0
+    h_conv: float = 0.0
     # Add more fields as needed from your YAML/config
 
     @property
     def diff(self) -> float:
-        """Thermal diffusivity."""
+        """
+        Thermal diffusivity in m²/s.
+
+        Computed as k / (rho * Cp), this dimensionless group governs the rate of
+        heat diffusion. Higher values → faster heat propagation. Controls the
+        characteristic time scale for thermal evolution independent of domain size.
+
+        Returns
+        -------
+        float
+            Thermal diffusivity in m²/s.
+        """
         return self.k / (self.rho * self.Cp)
 
 @dataclass
 class GeomParams:
-    """Geometric parameters and grid generation."""
+    """
+    Rectangular domain [0, Lx] × [0, Ly] × [0, Lz] with uniform spectral grid.
+    Derived fields (x, y, z, dx, dy, dz) computed in __post_init__.
+
+    Attributes
+    ----------
+    Lx : float
+        Domain size in x direction (meters).
+    Ly : float
+        Domain size in y direction (meters).
+    Lz : float
+        Domain size in z direction (meters).
+    nx : int
+        Number of grid points in x.
+    ny : int
+        Number of grid points in y.
+    nz : int
+        Number of grid points in z.
+    x : np.ndarray
+        1D x coordinates (computed, cell-centered).
+    y : np.ndarray
+        1D y coordinates (computed, cell-centered).
+    z : np.ndarray
+        1D z coordinates (computed, node-centered).
+    dx : float
+        Grid spacing in x = Lx / nx.
+    dy : float
+        Grid spacing in y = Ly / ny.
+    dz : float
+        Grid spacing in z = Lz / nz.
+    """
     Lx: float
     Ly: float
     Lz: float
@@ -70,21 +203,47 @@ class GeomParams:
 
 @dataclass
 class LaserParams:
-    """Laser source parameters."""
+    """
+    Laser source parameters.
+
+    Attributes
+    ----------
+    radius : float
+        Beam radius (meters). Typically 30–100 μm for additive manufacturing.
+    absorptivity : float
+        Absorptivity coefficient (0–1, dimensionless). Fraction of incident power
+        absorbed by material; rest is reflected.
+    power : float, optional
+        Nominal/maximum laser power (watts), by default 0.0. Actual power may vary
+        via :class:`LaserPath.get_state`.
+    """
     radius: float
     absorptivity: float
-    power: float = 0.0 # Base power if constant, or max power
+    power: float = 0.0
 
 @dataclass
 class SimulationContext:
     """
-    Aggregate context holding all simulation parameters.
-    io: flat dictionary from YAML config with keys:
-        - interval: float, output interval for time-stepped outputs
-        - outputs: list[str], outputs to save at each interval
-        - at_end: list[str], outputs to save at the end
-        - profiles_locations: list[list[float]], locations for profiles
-        - cut_views_planes: list[str], planes for cut views
+    Complete simulation configuration: numerics, material, domain, laser, and I/O.
+
+    Attributes
+    ----------
+    num : NumParams
+        Numerical parameters (time step, grid resolution, duration).
+    mat : MaterialParams
+        Material thermal and thermodynamic properties.
+    geom : GeomParams
+        Domain geometry and grid definition.
+    laser : LaserParams
+        Laser beam parameters (radius, absorptivity, nominal power).
+    laser_path : LaserPath
+        Laser trajectory and power evolution over time.
+    io : dict
+        I/O configuration (output intervals, visualization planes, etc.).
+    method : str, optional
+        Solver method ('spectral' or 'fem'), by default 'spectral'.
+    backend : str, optional
+        Compute backend ('cpu' or 'gpu'), by default 'cpu'.
     """
     num: 'NumParams'
     mat: 'MaterialParams'
@@ -100,6 +259,25 @@ class SimulationContext:
 
     @classmethod
     def from_dict(cls, cfg: Dict[str, Any], config_dir: Optional[str] = None) -> 'SimulationContext':
+        """
+        Parses a nested dictionary and instantiates a full `SimulationContext`.
+
+        Parameters
+        ----------
+        cfg : dict
+            Parsed dictionary typically loaded from a YAML configuration file.
+            Should contain keys like 'simulation', 'domain', 'material',
+            'laser', and 'io'.
+        config_dir : str, optional
+            Path to the directory containing the configuration file. Used to
+            resolve relative paths for external assets like G-code files,
+            by default None.
+
+        Returns
+        -------
+        SimulationContext
+            A populated simulation context ready to initialize solver factories.
+        """
         real_t = np.float32
         sim_cfg = cfg.get('simulation', {})
         domain_cfg = cfg.get('domain', {})
@@ -107,8 +285,8 @@ class SimulationContext:
         sim_backend = sim_cfg.get('backend', 'cpu').lower()
         Lx, Ly, Lz = domain_cfg['size']
         nx, ny, nz = domain_cfg['mesh']
-        t_end = sim_cfg.get('duration', 0.01)
-        dt = real_t(sim_cfg['dt'])
+        t_end = _get_value(sim_cfg.get('duration', 0.01))
+        dt = real_t(_get_value(sim_cfg['dt']))
         
         num_params = NumParams(
             dt=float(dt),
@@ -127,25 +305,25 @@ class SimulationContext:
         mat_cfg = cfg.get('material', {})
         mat_params = MaterialParams(
             name=mat_cfg.get('name', 'Material'),
-            rho=real_t(mat_cfg['rho']),
-            k=real_t(mat_cfg['k']),
-            Cp=real_t(mat_cfg['Cp']),
-            L_f=real_t(mat_cfg.get('L_f', 0.0)),
-            T_solidus=real_t(mat_cfg.get('T_solidus', 0.0)),
-            T_liquidus=real_t(mat_cfg.get('T_liquidus', 0.0)),
-            Pa=real_t(mat_cfg.get('Pa', 0.0)),
-            R_v=real_t(mat_cfg.get('R_v', 0.0)),
-            T_boil=real_t(mat_cfg.get('T_boil', 0.0)),
-            DeltaH_LV=real_t(mat_cfg.get('DeltaH_LV', 0.0)),
-            T0=real_t(mat_cfg.get('T0', 0.0)),
-            h_conv=real_t(mat_cfg.get('h_conv', 0.0))
+            rho=real_t(_get_value(mat_cfg['rho'])),
+            k=real_t(_get_value(mat_cfg['k'])),
+            Cp=real_t(_get_value(mat_cfg['Cp'])),
+            L_f=real_t(_get_value(mat_cfg.get('L_f', 0.0))),
+            T_solidus=real_t(_get_value(mat_cfg.get('T_solidus', 0.0))),
+            T_liquidus=real_t(_get_value(mat_cfg.get('T_liquidus', 0.0))),
+            Pa=real_t(_get_value(mat_cfg.get('Pa', 0.0))),
+            R_v=real_t(_get_value(mat_cfg.get('R_v', 0.0))),
+            T_boil=real_t(_get_value(mat_cfg.get('T_boil', 0.0))),
+            DeltaH_LV=real_t(_get_value(mat_cfg.get('DeltaH_LV', 0.0))),
+            T0=real_t(_get_value(mat_cfg.get('T0', 0.0))),
+            h_conv=real_t(_get_value(mat_cfg.get('h_conv', 0.0)))
         )
 
         laser_cfg = cfg.get('laser', {})
         laser_params = LaserParams(
-            radius=real_t(laser_cfg['radius']),
-            absorptivity=real_t(laser_cfg['absorptivity']),
-            power=real_t(laser_cfg.get('power_nominal'))
+            radius=real_t(_get_value(laser_cfg['radius'])),
+            absorptivity=real_t(_get_value(laser_cfg['absorptivity'])),
+            power=real_t(_get_value(laser_cfg.get('power_nominal')))
         )
         
         # Laser Path

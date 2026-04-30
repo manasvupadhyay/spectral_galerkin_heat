@@ -1,3 +1,13 @@
+"""
+Main entry point for running fastHeatSolv simulations.
+
+Author: Théo Andrieux (@TheoADX)
+Copyright: (c) 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique. All rights reserved.
+"""
+
+__author__ = "Théo Andrieux"
+__copyright__ = "Copyright 2026, LMS, École Polytechnique"
+
 import argparse
 import yaml
 import logging

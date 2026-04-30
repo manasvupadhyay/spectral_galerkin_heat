@@ -107,8 +107,6 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <!-- Detailed microstructure logic removed -->
-        <!-- Micro detail edge removed -->
         <mxCell id="edge_main_factory" edge="1" parent="1" source="main" style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="abs_factory">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
@@ -128,7 +126,6 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <!-- Workflow->micro edge removed (micro disabled) -->
       </root>
     </mxGraphModel>
   </diagram>

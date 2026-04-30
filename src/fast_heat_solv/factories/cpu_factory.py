@@ -10,9 +10,11 @@ from ..solvers.spectral_cpu import SpectralSolverCPU
 class CPUSimulationFactory(SimulationFactory):
     """
     Concrete Factory for CPU-based simulations.
+
     Creates:
-      - SpectralSolverCPU: The numerical physics engine.
-      - LocalFSIOManager: Filesystem-based output handler.
+
+    - SpectralSolverCPU: The numerical physics engine.
+    - LocalFSIOManager: Filesystem-based output handler.
     """
 
     def create_heat_solver(self) -> HeatSolver:

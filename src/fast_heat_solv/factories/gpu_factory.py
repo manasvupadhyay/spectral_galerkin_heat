@@ -10,7 +10,9 @@ from ..solvers.spectral_gpu import SpectralSolverGPU
 class GPUSimulationFactory(SimulationFactory):
     """
     Concrete Factory for GPU-based simulations.
+    
     Creates:
+    
       - SpectralSolverGPU: The numerical physics engine.
       - LocalFSIOManager: Filesystem-based output handler.
     """
