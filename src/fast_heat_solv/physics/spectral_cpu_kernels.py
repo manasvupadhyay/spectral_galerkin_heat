@@ -166,6 +166,7 @@ class FineMeshState:
         
         self.refinement = 4
         Lx_box, Ly_box, Lz_box = 0.9e-3, 0.9e-3, 0.04e-3
+
         
         self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
         
@@ -187,9 +188,9 @@ class FineMeshState:
         self.Bz_fine_full = (grid.Cp[:, None] * np.cos(np.pi * p[:, None] * z_fine_global[None, :] / Lz)).astype(np.float32)
         
         # Box dimensions
-        self.nx_box = int(np.ceil(Lx_box / self.dx_fine))
-        self.ny_box = int(np.ceil(Ly_box / self.dy_fine))
-        self.nz_box = self.nz_fine_total
+        self.nx_box = min(int(np.ceil(Lx_box / self.dx_fine)), self.nx_fine_total)
+        self.ny_box = min(int(np.ceil(Ly_box / self.dy_fine)), self.ny_fine_total)
+        self.nz_box = min(int(np.ceil(Lz_box / self.dz_fine)), self.nz_fine_total)
         
         # Allocation for active window
         self.Bx_fine = np.zeros((geom.nx, self.nx_box), dtype=np.float32)
@@ -432,51 +433,70 @@ def _reconstruct_temperature_box(a, SsState):
     
     return T_box, (fm.box_x, fm.box_y, fm.box_z)
 
-def compute_latent_heat_source(Q_buffer, phys, laser_state, num, SsState, alpha=0.2):
-    """
-    Compute volumetric latent heat source Q (W/m^3).
-    HIGH-LEVEL ORCHESTRATOR (Runs in Python, calls Kernels).
-    """
-    if SsState.fine_mesh is None:
-        return
+def initialize_latent_heat_if_needed(SsState):
+    """Initialize fine-mesh T_prev from current trial modes on the first time step.
 
+    Must be called after ``buffers.a_temp`` has been set to a reasonable
+    estimate (e.g. the decayed modes).
+    """
     fm = SsState.fine_mesh
-
-    # 1. Reconstruct Temperature on Fine Mesh
+    if fm is None or fm.T_prev is not None:
+        return
     T_box, _ = _reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
+    fm.T_prev = T_box.copy()
+    if fm.Q_prev is None:
+        fm.Q_prev = np.zeros_like(SsState.buffers.Q_latent_buffer)
 
-    # 2. Initialize/Retrieve State buffers
-    if fm.T_prev is None:
-        fm.T_prev = np.zeros_like(T_box)
-        fm.T_prev[:] = T_box[:]
-        fm.Q_prev = np.zeros_like(Q_buffer)
+
+def shift_latent_heat_history(fm, laser_state, num):
+    """Shift T_prev and Q_prev to align with the current laser position.
+
+    Call once per time step, before the fixed-point iteration begins.
+    """
+    if fm is None or fm.T_prev is None:
+        return
+    shift_x = laser_state.v[0] * num.dt
+    shift_y = laser_state.v[1] * num.dt
+    shift_pixels = (0, -shift_y / fm.dy_fine, -shift_x / fm.dx_fine)
+    fm.T_prev = scipy_shift(fm.T_prev, shift_pixels, order=1, mode='nearest')
+    if fm.Q_prev is not None:
+        fm.Q_prev = scipy_shift(fm.Q_prev, shift_pixels, order=1, mode='constant', cval=0.0)
+
+
+def compute_latent_heat_source(Q_buffer, phys, num, SsState):
+    """Compute volumetric latent heat source Q (W/m^3) on the fine mesh.
+
+    Uses the current trial modes (``buffers.a_temp``) and the stored
+    ``T_prev``.  Does not update ``T_prev``; call
+    :func:`update_latent_heat_history` after the iteration has converged.
+    """
+    fm = SsState.fine_mesh
+    if fm is None or fm.T_prev is None:
         Q_buffer.fill(0.0)
         return
 
-    # 3. Shift Previous Fields to Current Frame
-    shift_x = laser_state.v[0] * num.dt
-    shift_y = laser_state.v[1] * num.dt
+    T_box, _ = _reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
 
-    shift_pixels = (0, -shift_y / fm.dy_fine, -shift_x / fm.dx_fine)
- 
-    # Order=1 (Linear) usually sufficient for smooth fields like T
-    T_prev_aligned = scipy_shift(fm.T_prev, shift_pixels, order=1, mode='nearest')
-    Q_prev_aligned = scipy_shift(fm.Q_prev, shift_pixels, order=1, mode='constant', cval=0.0)
-    
-    # 4. Compute Source Term (Calls Numba Kernel)
-    compute_source_term_from_temperature(T_box, T_prev_aligned,
+    compute_source_term_from_temperature(
+        T_box, fm.T_prev,
         phys.T_solidus, phys.T_liquidus,
         phys.rho, phys.L_f, num.dt,
         Q_buffer
     )
 
-    # 5. Apply Relaxation
-    if alpha < 1.0:
-        Q_buffer[:] = alpha * Q_buffer + (1.0 - alpha) * Q_prev_aligned
 
-    # 6. Update History
+def update_latent_heat_history(SsState):
+    """Store the converged fine-mesh temperature as T_prev for the next step.
+
+    Call once per time step, after the fixed-point iteration has converged
+    and ``buffers.a_temp`` holds the final spectral modes.
+    """
+    fm = SsState.fine_mesh
+    if fm is None:
+        return
+    T_box, _ = _reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
     fm.T_prev[:] = T_box[:]
-    fm.Q_prev[:] = Q_buffer[:]
+
 
 def DCT_II(q):
     """Apply Discrete Cosine Transform Type II (Ortho)."""

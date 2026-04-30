@@ -38,6 +38,9 @@ class SpectralSolverGPU(HeatSolver):
         """
         self.context: Optional[SimulationContext] = context
         self.state: Optional[kernels.SpectralSolverState] = None
+        self.mixing_omega: float = 0.1
+        self.convergence_tol: float = 1e-4
+        self.max_picard_iter: int = 30
 
     def initialize(self, context: SimulationContext) -> Any:
         """
@@ -100,8 +103,8 @@ class SpectralSolverGPU(HeatSolver):
         SsState = self.state
         grid = SsState.grid
         buffers = SsState.buffers
+        fm = SsState.fine_mesh
 
-        # Fetch laser state at current time
         laser_state: LaserState = laser_path.get_state(t, dt)
         power = laser_state.power
         is_on = laser_state.is_on
@@ -109,81 +112,149 @@ class SpectralSolverGPU(HeatSolver):
         absorptivity = laser_params.absorptivity
         laser_coef = absorptivity * 2.0 * power / (np.pi * laser_params.radius ** 2) if is_on else 0.0
 
-        # 1. Compute source terms (Laser + Evaporation)
+        # ================================================================
+        # 1. Compute laser flux (constant – does not depend on T)
+        # ================================================================
         q_las = kernels.compute_gaussian_laser_flux(
-            grid.x, grid.y,
-            laser_state.x, laser_state.y,
+            grid.x, grid.y, laser_state.x, laser_state.y,
             laser_params.radius, laser_coef
         )
-        q_evap = kernels.shift_flux(buffers.q_evap_old, (v_x * num.dt, v_y * num.dt), geom)
-        q_dct = kernels.DCT_II(q_las - q_evap)
-
-        # 2. Linear step (ETD1)
-        # In-place decay: a = a * K
-        cp.multiply(SsState.a, SsState.K, out=SsState.a)
-
-        S_n = grid.dct_scale * q_dct
-        cp.multiply(grid.dct_scale, q_dct, out=buffers.B_buffer)
-
-        # First guess for a_temp (base state without latent heat)
-        kernels.update_modes_etd1(SsState.a, SsState.KK, grid.Cp32_broadcast, buffers.B_buffer, buffers.a_temp)
-        S_current = S_n.copy()
-
-        # 3. Latent Heat Correction
-        if SsState.fine_mesh:
-            SsState.fine_mesh.update(laser_state)
-
-            buffers.Q_latent_buffer.fill(0.0)
-            # Compute latent heat source on fine mesh from current a_temp estimate
-            kernels.compute_latent_heat_source(buffers.Q_latent_buffer, mat, laser_state, num, SsState)
-            # Add latent heat source to decayed a (before surface sources)
-            # a_temp will be recomputed in the evaporation loop from the updated a
-            kernels.add_source_term_modes(SsState.a, SsState.KK, kernels.project_box_to_modes(buffers.Q_latent_buffer, SsState))
-
-        # 4. Nonlinear iteration for evaporation
-        T_temp = kernels.reconstruct_surface_temperature(buffers.a_temp, SsState)
-        for k in range(30):
-            T_old = T_temp
-            # Compute evaporation flux based on current surface temperature guess
-            kernels.compute_evaporation_flux(T_temp, buffers.q_evap_buffer, mat.Pa, mat.T_boil,
-                mat.DeltaH_LV, mat.R_v, mat.T_liquidus)
-            cp.subtract(q_las, buffers.q_evap_buffer, out=buffers.q_diff, casting='same_kind')
-            S_target = grid.dct_scale * kernels.DCT_II(buffers.q_diff)
-            S_current = 0.1 * S_target + 0.9 * S_current
-            cp.multiply(1.0, S_current, out=buffers.B_buffer, casting='same_kind')
-
-            kernels.update_modes_etd1(SsState.a, SsState.KK, grid.Cp32_broadcast, buffers.B_buffer, buffers.a_temp)
-            T_temp = kernels.reconstruct_surface_temperature(buffers.a_temp, SsState)
-            if cp.max(cp.abs(T_temp - T_old)) < 2e+1:
-                break
-
-        # Avoid reallocating when possible — copy into preallocated buffer
-        buffers.q_evap_old[:] = buffers.q_evap_buffer
         P_laser = cp.sum(q_las) * geom.dx * geom.dy
 
-        # 5. Bottom convective heat loss (one-shot, no iteration needed)
+        # ================================================================
+        # 2. Apply exponential propagator:  θ̃ = E · θ
+        # ================================================================
+        cp.multiply(SsState.a, SsState.K, out=SsState.a)
+
+        # ================================================================
+        # 3. Prepare latent-heat history (once per step)
+        # ================================================================
+        if fm:
+            fm.update(laser_state)
+            buffers.a_temp[:] = SsState.a
+            kernels.initialize_latent_heat_if_needed(SsState)
+            kernels.shift_latent_heat_history(fm, laser_state, num)
+
+        # ================================================================
+        # 4. Initial guesses for forcing components
+        # ================================================================
+        q_evap_shifted = kernels.shift_flux(buffers.q_evap_old, (v_x * dt, v_y * dt), geom)
+        S_top = grid.dct_scale * kernels.DCT_II(q_las - q_evap_shifted)
+
+        Q_latent = None
+        if fm:
+            Q_latent = cp.zeros_like(buffers.Q_latent_buffer)
+            if fm.Q_prev is not None:
+                Q_latent[:] = fm.Q_prev
+
         h_conv = getattr(mat, 'h_conv', 0.0)
+        T0 = cp.float32(getattr(mat, 'T0', 293.0))
+
+        kernels.update_modes_etd1(SsState.a, SsState.KK, grid.Cp32_broadcast, S_top, buffers.a_temp)
+        if fm and fm.T_prev is not None and Q_latent is not None:
+            kernels.add_source_term_modes(
+                buffers.a_temp, SsState.KK,
+                kernels.project_box_to_modes(Q_latent, SsState))
         if h_conv > 0:
             T_bottom = kernels.reconstruct_bottom_temperature(buffers.a_temp, SsState)
-            T0 = cp.float32(getattr(mat, 'T0', 293.0))
-            # Negative sign: convection removes heat from z=0 boundary
             q_conv = cp.float32(-h_conv) * (T_bottom - T0)
-            q_conv_dct = kernels.DCT_II(q_conv)
-            B_bottom = grid.dct_scale * q_conv_dct
+            S_bot_init = grid.dct_scale * kernels.DCT_II(q_conv)
             kernels.add_bottom_surface_source(
                 buffers.a_temp, SsState.KK,
-                grid.Cp32_broadcast_bottom, B_bottom
-            )
+                grid.Cp32_broadcast_bottom, S_bot_init)
 
-        # Optionally, return metrics for logging/diagnostics
+        # ================================================================
+        # Pre-allocate arrays to avoid per-iteration allocations
+        # ================================================================
+        a_old = cp.empty_like(buffers.a_temp)
+        a_raw = cp.empty_like(buffers.a_temp)
+        residual_curr = cp.empty_like(buffers.a_temp)
+        n_elements = cp.float32(buffers.a_temp.size)
+
+        # ================================================================
+        # Hoist linear/constant forcing terms
+        # ================================================================
+        S_las = grid.dct_scale * kernels.DCT_II(q_las)
+
+        S_bot_raw = None
+        if h_conv > 0:
+            T_bottom = kernels.reconstruct_bottom_temperature(buffers.a_temp, SsState)
+            q_conv = cp.float32(-h_conv) * (T_bottom - T0)
+            S_bot_raw = grid.dct_scale * kernels.DCT_II(q_conv)
+
+        # ================================================================
+        # 5. Fixed-point iteration
+        # ================================================================
+        for iter_k in range(self.max_picard_iter):
+            cp.copyto(a_old, buffers.a_temp)
+
+            T_surface = kernels.reconstruct_surface_temperature(a_old, SsState)
+            kernels.compute_evaporation_flux(
+                T_surface, buffers.q_evap_buffer,
+                mat.Pa, mat.T_boil, mat.DeltaH_LV, mat.R_v, mat.T_liquidus)
+            S_evap = grid.dct_scale * kernels.DCT_II(buffers.q_evap_buffer)
+            S_top_raw = S_las - S_evap
+
+            Q_latent_raw = None
+            if fm and fm.T_prev is not None:
+                cp.copyto(buffers.a_temp, a_old)
+                buffers.Q_latent_buffer.fill(0.0)
+                kernels.compute_latent_heat_source(buffers.Q_latent_buffer, mat, num, SsState)
+                Q_latent_raw = buffers.Q_latent_buffer
+
+            kernels.update_modes_etd1(SsState.a, SsState.KK, grid.Cp32_broadcast, S_top_raw, buffers.a_temp)
+            if Q_latent_raw is not None:
+                kernels.add_source_term_modes(
+                    buffers.a_temp, SsState.KK,
+                    kernels.project_box_to_modes(Q_latent_raw, SsState))
+            if S_bot_raw is not None:
+                kernels.add_bottom_surface_source(
+                    buffers.a_temp, SsState.KK,
+                    grid.Cp32_broadcast_bottom, S_bot_raw)
+
+            cp.copyto(a_raw, buffers.a_temp)
+            cp.subtract(a_raw, a_old, out=residual_curr)
+
+            omega = cp.float32(self.mixing_omega)
+            # if iter_k == 0:
+            #     cp.copyto(buffers.a_temp, a_raw)
+            # else:
+            #     cp.multiply(a_raw, omega, out=buffers.a_temp)
+            #     buffers.a_temp += (cp.float32(1.0) - omega) * a_old
+            np.multiply(a_raw, omega, out=buffers.a_temp)
+            buffers.a_temp += (np.float32(1.0) - omega) * a_old
+
+            rms_diff = float(cp.sqrt(cp.vdot(residual_curr, residual_curr) / n_elements))
+            rms_old = float(cp.sqrt(cp.vdot(a_old, a_old) / n_elements))
+            true_rel_err = rms_diff / max(rms_old, 1e-9)
+
+            if true_rel_err < float(self.convergence_tol):
+                break
+
+        T_temp = kernels.reconstruct_surface_temperature(buffers.a_temp, SsState)
+        Q_latent = Q_latent_raw
+
+        # ================================================================
+        # 6. Commit converged state
+        # ================================================================
+        buffers.q_evap_old[:] = buffers.q_evap_buffer
+        SsState.a = buffers.a_temp.copy()
+
+        # ================================================================
+        # 7. Update latent-heat history with converged temperature
+        # ================================================================
+        if fm:
+            kernels.update_latent_heat_history(SsState)
+            if fm.Q_prev is None:
+                fm.Q_prev = cp.zeros_like(buffers.Q_latent_buffer)
+            if Q_latent is not None:
+                fm.Q_prev[:] = Q_latent[:]
+
         metrics = {
             'T_surface_max': cp.max(T_temp),
             'P_laser': P_laser,
-            'n_evap_iter': k + 1
+            'n_evap_iter': iter_k + 1
         }
-
-        # Update state for next step
-        SsState.a = buffers.a_temp.copy()
         return SsState, metrics
 
     def set_state(self, temperature_field: np.ndarray) -> None:
