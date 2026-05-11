@@ -112,7 +112,7 @@ class LocalFSIOManager(IOManager):
                 
                 grid.prepare_full_reconstruction(self.context.geom)
                 field = reconstruct_temperature_DCT(state.a, state).transpose(2,1,0)  # Ensure (z,y,x) ordering
-                grid_coords = (getattr(grid, 'x_rec', None), getattr(grid, 'y_rec', None), getattr(grid, 'z_rec', None))
+                grid_coords = tuple(grid.coords_rec) if grid.coords_rec is not None else (None, None, None)
                 
                 filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
                 if hasattr(field, "get"):
@@ -216,7 +216,7 @@ class LocalFSIOManager(IOManager):
                 if not os.path.exists(xdmf_path):
                     state.grid.prepare_full_reconstruction(self.context.geom)
                     field = reconstruct_temperature_DCT(state.a, state).transpose(2,1,0)
-                    grid_coords = (getattr(state.grid, 'x_rec', None), getattr(state.grid, 'y_rec', None), getattr(state.grid, 'z_rec', None))
+                    grid_coords = tuple(state.grid.coords_rec) if state.grid.coords_rec is not None else (None, None, None)
                     
                     if hasattr(field, "get"):
                         field = field.get()

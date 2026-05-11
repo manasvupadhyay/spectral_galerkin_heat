@@ -95,13 +95,9 @@ def reconstruct_temperature_volume(a, SsState):
     
     grid = SsState.grid
 
-    Bx = grid.Bx_recon  # (modes_x, nx_points)
-    By = grid.By_recon  # (modes_y, ny_points)
-    Bz = grid.Bz_recon  # (modes_z, nz_points)
-    # Validate reconstruction bases
-
-    if Bx is None or By is None or Bz is None:
-        raise RuntimeError("Reconstruction bases not initialized on SsState. Call prepare_full_reconstruction()/full_reconstruction() first.")
+    if grid.B_recon is None:
+        raise RuntimeError("Reconstruction bases not initialized on SsState. Call prepare_full_reconstruction() first.")
+    Bx, By, Bz = grid.B_recon  # (modes_axis, n_points+1) for each axis
 
     T_step1 = np.tensordot(a, Bx, axes=(2, 0))  # (N_z, N_y, N_x)
     T_step2 = np.tensordot(T_step1, By, axes=(1, 0))  # (nz, nx, ny)
@@ -132,7 +128,7 @@ def reconstruct_temperature_DCT(a, SsState):
     a : ndarray, shape (N_z, N_y, N_x)
         Spectral coefficients (CuPy arrays are moved to CPU automatically).
     SsState : fast_heat_solv.physics.spectral_cpu_kernels.SpectralSolverState
-        Must have ``grid.Cm``, ``grid.Cn``, ``grid.Cp`` normalization vectors.
+        Must have ``grid.C`` normalization tuple (C[0]=x, C[1]=y, C[2]=z).
 
     Returns
     -------
@@ -149,12 +145,8 @@ def reconstruct_temperature_DCT(a, SsState):
     # Combined weight[i] = C[i] * (0.5 if i>0 else 1.0)
     # Precomputed as 1-D float32 vectors (6 elements total).
     # Handle both numpy and cupy arrays (GPU solver uses cupy)
-    Cm = grid.Cm.get() if hasattr(grid.Cm, 'get') else grid.Cm
-    Cn = grid.Cn.get() if hasattr(grid.Cn, 'get') else grid.Cn
-    Cp = grid.Cp.get() if hasattr(grid.Cp, 'get') else grid.Cp
-    wx = np.array(Cm, dtype=np.float32); wx[1:] *= 0.5
-    wy = np.array(Cn, dtype=np.float32); wy[1:] *= 0.5
-    wz = np.array(Cp, dtype=np.float32); wz[1:] *= 0.5
+    wx, wy, wz = (np.array(c.get() if hasattr(c, 'get') else c, dtype=np.float32) for c in grid.C)
+    wx[1:] *= 0.5; wy[1:] *= 0.5; wz[1:] *= 0.5
 
     # ── Scale on contiguous memory, then copy once into padded ───────
     # Working on a contiguous copy of `a` is faster than writing
@@ -219,14 +211,12 @@ def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
     # Support both old monolithic state and new decoupled state
     grid = SsState.grid if hasattr(SsState, 'grid') else SsState
 
-    Cm = _to_numpy(getattr(grid, 'Cm', None))
-    Cn = _to_numpy(getattr(grid, 'Cn', None))
-    Cp = _to_numpy(getattr(grid, 'Cp', None))
+    C = [_to_numpy(c) for c in grid.C]
     a_np = _to_numpy(a).astype(np.float32)
 
-    Bx = (Cm[:, None] * _cosine_basis_along_axis(num.nx, geom.Lx, x_vals)).astype(np.float32)
-    By = (Cn[:, None] * _cosine_basis_along_axis(num.ny, geom.Ly, y_vals)).astype(np.float32)
-    Bz = (Cp[:, None] * _cosine_basis_along_axis(num.nz, geom.Lz, z_vals)).astype(np.float32)
+    Bx = (C[0][:, None] * _cosine_basis_along_axis(num.nx, geom.Lx, x_vals)).astype(np.float32)
+    By = (C[1][:, None] * _cosine_basis_along_axis(num.ny, geom.Ly, y_vals)).astype(np.float32)
+    Bz = (C[2][:, None] * _cosine_basis_along_axis(num.nz, geom.Lz, z_vals)).astype(np.float32)
     temps = np.einsum('pnm,pi,ni,mi->i', a_np, Bz, By, Bx, optimize=True)
 
     return temps.astype(np.float32)
@@ -296,32 +286,21 @@ def save_temp_profiles(
     x_center = float(np.clip(x_center, 0.0, geom.Lx))
     y_center = float(np.clip(y_center, 0.0, geom.Ly))
 
-    # 2. Generate Dense Sampling Coordinates
-    coords_x = np.linspace(0.0, geom.Lx, num_points, dtype=np.float64)
-    coords_y = np.linspace(0.0, geom.Ly, num_points, dtype=np.float64)
-    coords_z = np.linspace(0.0, geom.Lz, num_points, dtype=np.float64)
-
-    # 3. Create Point Clouds for Batched Evaluation
-    # Line along X through (y_c, z_top)
-    points_x = np.column_stack((coords_x, np.full_like(coords_x, y_center), np.full_like(coords_x, z_top)))
-    # Line along Y through (x_c, z_top)
-    points_y = np.column_stack((np.full_like(coords_y, x_center), coords_y, np.full_like(coords_y, z_top)))
-    # Line along Z through (x_c, y_c)
-    points_z = np.column_stack((np.full_like(coords_z, x_center), np.full_like(coords_z, y_center), coords_z))
-
-    # 4. Evaluate using Spectral Kernel
-    # (reconstruct_temperature_volume_at_points should be available in kernels import or helper)
-    # Using the one currently in helpers until refactor is 100% complete
-    T_x = reconstruct_temperature_volume_at_points(a, num, geom, SsState, points_x)
-    T_y = reconstruct_temperature_volume_at_points(a, num, geom, SsState, points_y)
-    T_z = reconstruct_temperature_volume_at_points(a, num, geom, SsState, points_z)
-
-    # 5. Return computed profiles as a dictionary
-    return {
-        'x': (coords_x, T_x),
-        'y': (coords_y, T_y),
-        'z': (coords_z, T_z)
-    }
+    # 2-4. Generate coords, build point clouds, and evaluate temperature for each axis
+    # Each entry: (key, domain_length, (fixed_x_or_None, fixed_y_or_None, fixed_z_or_None))
+    axes_cfg = [
+        ('x', geom.Lx, (None, y_center, z_top)),
+        ('y', geom.Ly, (x_center, None, z_top)),
+        ('z', geom.Lz, (x_center, y_center, None)),
+    ]
+    profiles = {}
+    for key, L_axis, fixed in axes_cfg:
+        coords = np.linspace(0.0, L_axis, num_points, dtype=np.float64)
+        pts = np.empty((num_points, 3), dtype=np.float64)
+        for col, v in enumerate(fixed):
+            pts[:, col] = coords if v is None else v
+        profiles[key] = (coords, reconstruct_temperature_volume_at_points(a, num, geom, SsState, pts))
+    return profiles
     
     
 
