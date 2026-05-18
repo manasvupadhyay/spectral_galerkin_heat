@@ -1,7 +1,7 @@
 # fastHeatSolv
 
 **A semi-analytical, modular solution for the heat equation with support for CPU/GPU backends and G-code-driven laser paths.**
-![License](https://img.shields.io/badge/license-CC%20BY--NC--ND-blue.svg)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 [**Read the full Sphinx Documentation**](*link to be added*) (or build locally via `make -C docs html`)
 
@@ -104,4 +104,11 @@ python -m pip install -e ".[gpu]"  # With GPU support
 If you use this code in your research, please cite:
 
 *(Citation to be added)*
+
+## License
+
+This project is licensed under the Apache License, Version 2.0. 
+See the [LICENSE](LICENSE) file for the full text.
+
+Copyright © 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique.
 

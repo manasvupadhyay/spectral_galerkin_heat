@@ -1,3 +1,12 @@
+"""
+G-code parser for laser path extraction.
+
+This module implements a lightweight G-code interpreter that extracts linear
+segments, timing, and laser power commands and exposes them via the
+`GCodeLaserPath` implementation of `LaserPath`.
+"""
+
+
 from fast_heat_solv.core.laser import LaserPath, LaserState
 import numpy as np
 

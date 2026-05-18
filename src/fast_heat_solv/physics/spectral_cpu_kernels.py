@@ -1,11 +1,27 @@
-"""
-CPU-based spectral method kernels for the heat equation.
+"""CPU-based spectral method kernels for the heat equation.
 
 Public functions in this module are called by SpectralSolverCPU:
 - ``update_modes_etd1``: Time integration step
 - ``compute_latent_heat_source``: Latent heat and evaporation effects
 - ``reconstruct_surface_temperature``: Extract solution on top surface
 """
+
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique
+#
+# Author: Théo Andrieux
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 
 import numpy as np
 from numba import njit, prange
@@ -165,7 +181,7 @@ class FineMeshState:
         Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
         
         self.refinement = 4
-        Lx_box, Ly_box, Lz_box = 0.9e-3, 0.9e-3, 0.04e-3
+        Lx_box, Ly_box, Lz_box = 0.4e-3, 0.4e-3, 0.04e-3
 
         
         self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
