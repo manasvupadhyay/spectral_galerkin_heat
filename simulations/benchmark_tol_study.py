@@ -1,5 +1,4 @@
-"""
-Tolerance study: effect of Picard convergence tolerance on the temperature
+"""Tolerance study: effect of Picard convergence tolerance on the temperature
 field and iteration count.
 
 Sweeps N tolerance levels from tol_max down to tol_min (default 1e-2 → 1e-6),

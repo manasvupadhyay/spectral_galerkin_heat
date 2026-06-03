@@ -1,7 +1,7 @@
 # fastHeatSolv
 
 **A semi-analytical, modular solution for the heat equation with support for CPU/GPU backends and G-code-driven laser paths.**
-![License](https://img.shields.io/badge/license-CC%20BY--NC--ND-blue.svg)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 [**Read the full Sphinx Documentation**](*link to be added*) (or build locally via `make -C docs html`)
 
@@ -52,7 +52,8 @@ Here is a brief demonstration (see `simulations/example_orchestrator.py` for the
 
 ```python
 from fast_heat_solv.core.parameters import SimulationContext
-from fast_heat_solv.solvers.spectral_cpu import SpectralSolverCPU
+from fast_heat_solv.solvers.spectral import SpectralSolver
+from fast_heat_solv.backends import NumpyBackend
 
 config = {
     "simulation": { "method": "spectral", "backend": "cpu", "dt": 6e-6, "duration": 6e-5 },
@@ -67,7 +68,7 @@ config = {
 context = SimulationContext.from_dict(config)
 
 # 2. Instantiate and initialize the solver
-solver = SpectralSolverCPU()
+solver = SpectralSolver(NumpyBackend())   # use get_backend("cupy") for GPU
 state = solver.initialize(context)
 
 # 3. Time loop
@@ -104,4 +105,11 @@ python -m pip install -e ".[gpu]"  # With GPU support
 If you use this code in your research, please cite:
 
 *(Citation to be added)*
+
+## License
+
+This project is licensed under the Apache License, Version 2.0. 
+See the [LICENSE](LICENSE) file for the full text.
+
+Copyright © 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique.
 

@@ -1,11 +1,27 @@
-"""
-CPU-based spectral method kernels for the heat equation.
+"""CPU-based spectral method kernels for the heat equation.
 
-Public functions in this module are called by SpectralSolverCPU:
+Public functions in this module are called by SpectralSolver (NumpyBackend):
 - ``update_modes_etd1``: Time integration step
 - ``compute_latent_heat_source``: Latent heat and evaporation effects
 - ``reconstruct_surface_temperature``: Extract solution on top surface
 """
+
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique
+#
+# Author: Théo Andrieux
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 
 import numpy as np
 from numba import njit, prange
@@ -119,7 +135,7 @@ class FineMeshState:
         Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
 
         self.refinement = 4
-        Lx_box, Ly_box, Lz_box = 0.9e-3, 0.9e-3, 0.04e-3
+        Lx_box, Ly_box, Lz_box = 0.4e-3, 0.4e-3, 0.04e-3
 
         self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
         d_fine = [self.dx_fine, self.dy_fine, self.dz_fine]
@@ -237,7 +253,7 @@ def _precompute_K_KK(phys, num, geom):
 # ======================================
 
 
-@njit(parallel=True, fastmath=True)
+@njit(parallel=True, fastmath=True, cache=True)
 def update_modes_etd1(aK, KK, Cp_broadcast, B_scaled, a_temp_out):
     """
     Update spectral coefficients for ETD1 scheme.
@@ -247,7 +263,7 @@ def update_modes_etd1(aK, KK, Cp_broadcast, B_scaled, a_temp_out):
     for p in prange(nz):
         a_temp_out[p, :, :] = aK[p, :, :] + KK[p, :, :] * Cp_broadcast[p, 0, 0] * B_scaled
 
-@njit(parallel=True, fastmath=True)
+@njit(parallel=True, fastmath=True, cache=True)
 def add_source_term_modes(a_temp, KK, Q_modes):
     """
     Accumulate volumetric source term into temperature modes.
@@ -259,7 +275,7 @@ def add_source_term_modes(a_temp, KK, Q_modes):
             for j in range(a_temp.shape[2]):
                 a_temp[p, i, j] += KK[p, i, j] * Q_modes[p, i, j]
 
-@njit(parallel=True, fastmath=True)
+@njit(parallel=True, fastmath=True, cache=True)
 def add_bottom_surface_source(a_temp, KK, Cp_broadcast_bottom, B_scaled):
     """
     Accumulate a surface source at z=0 into temperature modes.
@@ -269,7 +285,7 @@ def add_bottom_surface_source(a_temp, KK, Cp_broadcast_bottom, B_scaled):
     for p in prange(nz):
         a_temp[p, :, :] += KK[p, :, :] * Cp_broadcast_bottom[p, 0, 0] * B_scaled[:, :]
 
-@njit(parallel=True, fastmath=True)
+@njit(parallel=True, fastmath=True, cache=True)
 def compute_source_term_from_temperature(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
     """
     Compute Q = - rho * L * (1 / (TL - TS)) * (dT/dt) * Indicator(TS <= T <= TL)
@@ -298,11 +314,14 @@ def compute_source_term_from_temperature(T_curr, T_prev, T_S, T_L, rho, L, dt, o
 
 
 
-@njit(parallel=True, fastmath=True)
-def compute_evaporation_flux(T_surface, q_out, P0, R, T_boil, DeltaH_LV, R_v, T_liquidus):
+@njit(parallel=True, fastmath=True, cache=True)
+def compute_evaporation_flux(T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liquidus):
     """
     Compute evaporative heat flux based on surface temperature using Arrhenius law.
     q_out is updated in-place.
+
+    Signature matches ``spectral_gpu_kernels.compute_evaporation_flux`` so the
+    unified solver can call it through either backend.
     """
     ny, nx = T_surface.shape
     factor1 = 0.82 * DeltaH_LV * P0 / np.sqrt(2 * np.pi * R_v)

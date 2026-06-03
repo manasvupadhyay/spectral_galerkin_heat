@@ -1,3 +1,19 @@
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique
+#
+# Author: Théo Andrieux
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import numpy as np
 import os
 import scipy.fft
@@ -12,13 +28,13 @@ import fast_heat_solv.physics.spectral_cpu_kernels as kernels
 
 
 def _get_array_module(arr):
-    if cp is not None and hasattr(arr, 'device'): # Check if it's a cupy array
-        return cp
+    if _cp is not None and hasattr(arr, 'device'): # Check if it's a cupy array
+        return _cp
     return np
 
 def _get_kernels(arr):
     xp = _get_array_module(arr)
-    if xp == cp:
+    if xp is _cp:
          import fast_heat_solv.physics.spectral_gpu_kernels as gpu_kernels
          return gpu_kernels
     return kernels
