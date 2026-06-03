@@ -77,11 +77,12 @@ dev = [
 where = ["src"]
 
 [tool.pytest.ini_options]
-#Path to the tests folder
 testpaths = ["tests"]
-#Recommended for new projects: https://docs.pytest.org/en/stable/explanation/goodpractices.html
-addopts = ["--import-mode=importlib"]
-
+addopts = ["--import-mode=importlib", "-m", "not integration"]
+markers = [
+    "integration: full simulation pipeline tests (slow — run with pytest -m integration)",
+]
+#have to be decided if skipping integreation default
 
 [build-system]
 requires = ["setuptools>=61.0"]

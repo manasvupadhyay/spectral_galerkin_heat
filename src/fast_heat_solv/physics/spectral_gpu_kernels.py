@@ -1,6 +1,7 @@
 """GPU-based spectral method kernels for the heat equation (requires CuPy).
 
-Public functions in this module mirror CPU kernels and are called by SpectralSolverGPU.
+Public functions in this module mirror CPU kernels and are called by
+SpectralSolver (CupyBackend).
 """
 
 # Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique

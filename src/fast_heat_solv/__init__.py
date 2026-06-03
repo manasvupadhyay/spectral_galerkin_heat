@@ -25,8 +25,10 @@ phase change and evaporation.
 
 - **Core interfaces**: :class:`~fast_heat_solv.core.parameters.SimulationContext`,
   :class:`~fast_heat_solv.core.laser.LaserPath`, :class:`~fast_heat_solv.core.laser.LaserState`
+- **Backends**: :class:`~fast_heat_solv.backends.MathBackend`,
+  :func:`~fast_heat_solv.backends.get_backend`
 - **Solvers**: :class:`~fast_heat_solv.solvers.HeatSolver`,
-  :class:`~fast_heat_solv.solvers.SpectralSolverCPU`, :class:`~fast_heat_solv.solvers.SpectralSolverGPU`
+  :class:`~fast_heat_solv.solvers.spectral.SpectralSolver`
 - **I/O**: :class:`~fast_heat_solv.io_utils.IOManager`,
   :func:`~fast_heat_solv.io_utils.load_xdmf`, :func:`~fast_heat_solv.io_utils.write_structured_fields`
 - **Runner**: :class:`~fast_heat_solv.runner.StandaloneHeatRunner`
@@ -43,7 +45,6 @@ from .core import (
     GeomParams,
     LaserParams,
 )
-from .solvers import HeatSolver, SpectralSolverCPU, SpectralSolverGPU
 from .io_utils import (
     IOManager,
     LocalFSIOManager,
@@ -51,7 +52,31 @@ from .io_utils import (
     write_structured_fields,
     write_unstructured_fields,
 )
-from .runner import StandaloneHeatRunner
+from .backends import (
+    MathBackend,
+    NumpyBackend,
+    get_backend,
+)
+
+# Solver and runner imports are deferred — they pull in numba/pyfftw which
+# are expensive to compile. Use __getattr__ so `from fast_heat_solv import
+# SpectralSolver` still works but only loads the solvers on first access.
+_LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    "HeatSolver":           (".solvers.base",    "HeatSolver"),
+    "SpectralSolver":       (".solvers.spectral", "SpectralSolver"),
+    "StandaloneHeatRunner": (".runner",          "StandaloneHeatRunner"),
+}
+
+
+def __getattr__(name: str):
+    if name in _LAZY_IMPORTS:
+        import importlib
+        module_path, attr = _LAZY_IMPORTS[name]
+        mod = importlib.import_module(module_path, package=__name__)
+        obj = getattr(mod, attr)
+        globals()[name] = obj
+        return obj
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     # Core
@@ -62,10 +87,13 @@ __all__ = [
     "MaterialParams",
     "GeomParams",
     "LaserParams",
+    # Backends
+    "MathBackend",
+    "NumpyBackend",
+    "get_backend",
     # Solvers
     "HeatSolver",
-    "SpectralSolverCPU",
-    "SpectralSolverGPU",
+    "SpectralSolver",
     # I/O
     "IOManager",
     "LocalFSIOManager",

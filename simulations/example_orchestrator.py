@@ -68,10 +68,11 @@ context = SimulationContext.from_dict(config)
 # ---------------------------------------------------------------------------
 # 3. Instantiate the solver (bypass the factory if you want, or use it)
 # ---------------------------------------------------------------------------
-from fast_heat_solv.solvers.spectral_cpu import SpectralSolverCPU
+from fast_heat_solv.solvers.spectral import SpectralSolver
+from fast_heat_solv.backends import NumpyBackend
 
-solver = SpectralSolverCPU()           # no context yet
-state = solver.initialize(context)     # context injected here
+solver = SpectralSolver(NumpyBackend())  # use get_backend("cupy") for GPU
+state = solver.initialize(context)       # context injected here
 
 # ---------------------------------------------------------------------------
 # 4. Custom time loop – pure physics, no I/O

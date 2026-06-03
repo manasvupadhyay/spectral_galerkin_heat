@@ -1,0 +1,70 @@
+"""Math backends — dispatch array operations and kernels to CPU or GPU.
+
+A :class:`MathBackend` bundles an array module (NumPy or CuPy) with its
+matching physics-kernel module. Inject one into
+:class:`~fast_heat_solv.solvers.spectral.SpectralSolver` to run on CPU or GPU
+from the same solver code.
+
+Examples
+--------
+>>> from fast_heat_solv.backends import get_backend
+>>> backend = get_backend("numpy")
+>>> backend.name
+'numpy'
+"""
+
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique
+#
+# Author: Théo Andrieux
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+__author__ = "Théo Andrieux"
+__copyright__ = "Copyright 2026, LMS, École Polytechnique"
+
+from .base import MathBackend
+from .numpy_backend import NumpyBackend
+
+
+def get_backend(name: str = "numpy") -> MathBackend:
+    """Return a :class:`MathBackend` by name.
+
+    Parameters
+    ----------
+    name : str, optional
+        ``"numpy"`` for the CPU backend or ``"cupy"`` for the GPU backend.
+        Defaults to ``"numpy"``.
+
+    Returns
+    -------
+    MathBackend
+        The requested backend instance.
+
+    Raises
+    ------
+    ValueError
+        If *name* is neither ``"numpy"`` nor ``"cupy"``.
+    ImportError
+        If ``"cupy"`` is requested but CuPy is not installed.
+    """
+    if name == "numpy":
+        return NumpyBackend()
+    if name == "cupy":
+        # Imported lazily: CuPy is an optional dependency.
+        from .cupy_backend import CupyBackend
+        return CupyBackend()
+    raise ValueError(f"Unknown backend: {name!r}. Choose 'numpy' or 'cupy'.")
+
+
+__all__ = ["MathBackend", "NumpyBackend", "get_backend"]

@@ -28,13 +28,13 @@ import fast_heat_solv.physics.spectral_cpu_kernels as kernels
 
 
 def _get_array_module(arr):
-    if cp is not None and hasattr(arr, 'device'): # Check if it's a cupy array
-        return cp
+    if _cp is not None and hasattr(arr, 'device'): # Check if it's a cupy array
+        return _cp
     return np
 
 def _get_kernels(arr):
     xp = _get_array_module(arr)
-    if xp == cp:
+    if xp is _cp:
          import fast_heat_solv.physics.spectral_gpu_kernels as gpu_kernels
          return gpu_kernels
     return kernels
