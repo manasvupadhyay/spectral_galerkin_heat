@@ -16,7 +16,7 @@ running on both CPU and GPU backends.
 
    *Simulation of a laser path with fastHeatSolv.*
 
-.. admonition:: Scanned this from a poster?
+.. admonition:: How to get started?
    :class: tip
 
    Start with the :doc:`theory` (how the method works) and the :doc:`validation`

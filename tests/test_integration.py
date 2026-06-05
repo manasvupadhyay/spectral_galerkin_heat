@@ -295,3 +295,79 @@ def test_gpu_simulation_e2e(tmp_path, monkeypatch):
     assert h5_files, "No HDF5 field file written for GPU run"
 
     _assert_field_sane(h5_files[-1], _T0)
+
+
+def _run_pipeline_final_field(factory_cls, cfg, run_dir, monkeypatch):
+    """Run one full simulation under *run_dir* and return its final field array.
+
+    The IO manager always writes to ``./out/`` relative to the current working
+    directory, so each backend is given its own ``run_dir`` to keep outputs
+    separate.  Returns the ``temperature`` dataset of the last
+    ``field_step*.h5`` written.
+    """
+    from fast_heat_solv.runner import StandaloneHeatRunner
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(run_dir)
+
+    context = _build_context(cfg)
+    runner = StandaloneHeatRunner(context, factory_cls(context))
+    runner.run()
+
+    run_dirs = list((run_dir / "out").glob("*"))
+    assert len(run_dirs) == 1, (
+        f"Expected exactly 1 run directory under {run_dir}, got {run_dirs}"
+    )
+    h5_files = sorted((run_dirs[0] / "fields").glob("field_step*.h5"))
+    assert h5_files, f"No HDF5 field file written under {run_dirs[0]}"
+    with h5py.File(h5_files[-1], "r") as f:
+        return f["temperature"][:]
+
+
+@pytest.mark.integration
+def test_cpu_gpu_equivalence_e2e(tmp_path, monkeypatch):
+    """CPU and GPU backends must produce the same final temperature field.
+
+    Runs the identical simulation through ``CPUSimulationFactory`` and
+    ``GPUSimulationFactory`` in separate working directories, then compares the
+    final saved ``temperature`` volumes.  The tolerance is loose enough to
+    absorb CPU/GPU implementation shift but small enough to
+    catch a genuine divergence between the two kernel implementations.
+
+    Skipped when CuPy / CUDA is unavailable (same guard as
+    :func:`test_gpu_simulation_e2e`).
+    """
+    try:
+        import cupy
+        cupy.cuda.Device(0).compute_capability
+    except Exception:
+        pytest.skip("CuPy not available or no CUDA device found")
+
+    from fast_heat_solv.factories.cpu_factory import CPUSimulationFactory
+    from fast_heat_solv.factories.gpu_factory import GPUSimulationFactory
+
+    cpu_cfg = copy.deepcopy(_CONFIG)
+    cpu_cfg["simulation"]["backend"] = "cpu"
+    gpu_cfg = copy.deepcopy(_CONFIG)
+    gpu_cfg["simulation"]["backend"] = "gpu"
+
+    T_cpu = _run_pipeline_final_field(
+        CPUSimulationFactory, cpu_cfg, tmp_path / "cpu", monkeypatch
+    )
+    T_gpu = _run_pipeline_final_field(
+        GPUSimulationFactory, gpu_cfg, tmp_path / "gpu", monkeypatch
+    )
+
+    assert T_cpu.shape == T_gpu.shape, (
+        f"Field shape mismatch: CPU {T_cpu.shape} vs GPU {T_gpu.shape}"
+    )
+    # rtol absorbs FFT/reduction-order differences between the backends;
+    # atol guards near-T0 cells where relative error is meaningless.
+    np.testing.assert_allclose(T_gpu, T_cpu, rtol=1e-5, atol=1e-3)
+
+    # Absolute-difference cap, expected T_max > 3000 K
+    max_abs_diff = float(np.max(np.abs(T_gpu - T_cpu)))
+    assert max_abs_diff < 0.01, (
+        f"CPU/GPU temperature fields differ by {max_abs_diff:.3e} K, "
+        f"exceeding the 0.01 K cap"
+    )
