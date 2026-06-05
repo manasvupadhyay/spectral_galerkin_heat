@@ -1,12 +1,17 @@
 # Installation
 
-The primary way to install and manage the environment is using [uv](https://github.com/astral-sh/uv).
+```{admonition} The code is not yet public
+:class: important
+
+A public release is coming soon — see {doc}`status`. The steps below apply once you have access.
+```
+
+fastHeatSolv uses [uv](https://github.com/astral-sh/uv) to manage its environment.
 
 ## Prerequisites
 
-- **Python**: 3.10 or higher.
+- **Python**: 3.12 or higher.
 - **uv**: A fast Python package installer and resolver.
-- **Git**: To clone the repository.
 
 *For GPU support (optional):*
 - **CUDA Toolkit**: Compatible with CuPy.
@@ -14,20 +19,24 @@ The primary way to install and manage the environment is using [uv](https://gith
 
 ## Installing the Project
 
+<!-- TODO: restore the clone step once the repository is public.
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/TheoADX/fastHeatSolv.git
-   cd fastHeatSolv
+   git clone https://github.com/Andrieux-LMS/spectral-galerkin-AM.git
+   cd spectral-galerkin-AM
    ```
+-->
+
+1. **Enter the project directory.**
 
 2. **Sync the environment (CPU):**
    ```bash
    uv sync
    ```
-   *This creates an isolated virtual environment and installs all required dependencies defined in `pyproject.toml`.*
+   *This creates an isolated virtual environment and installs the dependencies defined in `pyproject.toml`.*
 
 3. **(Optional) Sync for GPU:**
-   If you have a compatible NVIDIA GPU and want to use `gpu` acceleration:
+   For a compatible NVIDIA GPU:
    ```bash
    uv sync --extra gpu
    ```

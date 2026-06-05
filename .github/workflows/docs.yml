@@ -1,0 +1,54 @@
+name: Build & deploy docs
+
+# Builds the Sphinx site from this (private) repo and publishes the rendered
+# HTML to the public `hsg-docs` repo, which serves it via GitHub Pages.
+# Source stays private; only the built HTML is made public.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'src/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch: {}
+
+# Avoid overlapping deploys clobbering each other.
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: true
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up uv (with cache)
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install docs toolchain
+        # The full docs stack (mermaid, autoapi, rtd-theme) lives in the
+        # uv `docs` dependency-group — matches the local `uv run make` build.
+        run: uv sync --no-dev --group docs
+
+      - name: Build HTML
+        run: uv run make -C docs html
+
+      - name: Deploy to public Pages repo
+        # Only on the real branch, never on PRs or forks.
+        if: github.ref == 'refs/heads/main'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          deploy_key: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          external_repository: TheoADX/hsg-docs
+          publish_branch: gh-pages
+          publish_dir: ./docs/_build/html
+          # peaceiris writes .nojekyll automatically so Sphinx's _static/
+          # and _images/ dirs are served (Jekyll would otherwise skip them).
+          commit_message: 'docs: ${{ github.sha }}'

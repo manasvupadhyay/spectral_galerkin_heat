@@ -26,6 +26,7 @@ extensions = [
     'myst_parser',
     'sphinxcontrib.mermaid',
     'autoapi.extension',
+    'sphinx_design',
 ]
 
 autoapi_dirs = ['../src/fast_heat_solv']
@@ -38,8 +39,18 @@ autoapi_options = [
 autoapi_ignore = ['*__pycache__*']
 autoapi_root = 'api'
 
+# MyST: enable LaTeX-style math ($...$ and $$...$$) and amsmath environments
+myst_enable_extensions = [
+    'dollarmath',
+    'amsmath',
+    'colon_fence',
+]
+
+# Silence autoapi's cyclic-import notices (io_utils <-> compute_L2_error).
+suppress_warnings = ['autoapi']
+
 templates_path = ['_templates']
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'documentation_plan.md']
 
 # Type hint rendering
 autodoc_typehints = 'description'
