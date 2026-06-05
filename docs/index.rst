@@ -1,26 +1,45 @@
 fastHeatSolv Documentation
 ==========================
 
-**A semi-analytical, modular solution for the heat equation with support for CPU/GPU backends and G-code-driven laser paths.**
+**A fast spectral-Galerkin solver for the non-linear heat equation in metal additive manufacturing.**
 
-fastHeatSolv is a modular framework designed for simulating heat transfer in additive manufacturing. It uses semi-analytical spectral methods to achieve high performance on both CPU and GPU hardware, and fully supports complex laser trajectories parsed directly from G-code.
+fastHeatSolv resolves the transient thermal field of a scanning laser — including phase change,
+evaporative cooling, and convection — on cuboid domains, driving the laser directly from G-code.
+By integrating the linear diffusion exactly in a spectral eigenbasis and confining the
+non-linear work to the boundary and the melt pool, it reaches finite-element fidelity while
+running on both CPU and GPU backends.
 
-.. figure:: _images/lines_12.png
+.. figure:: _images/fig_lines_2.png
    :alt: Simulation of a laser path with fastHeatSolv
    :width: 500px
    :align: center
 
    *Simulation of a laser path with fastHeatSolv.*
 
+.. admonition:: Scanned this from a poster?
+   :class: tip
+
+   Start with the :doc:`theory` (how the method works) and the :doc:`validation`
+   (how it compares against analytical, finite-element, and published references). The code is
+   not yet public — see :doc:`status` for access.
+
 .. toctree::
    :maxdepth: 2
    :caption: User Guide:
 
-   installation
    theory
+   validation
+   installation
    configuration
    outputs
    examples
+
+.. toctree::
+   :maxdepth: 2
+   :caption: About:
+
+   status
+   citing
 
 .. toctree::
    :maxdepth: 2
