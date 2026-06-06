@@ -20,14 +20,13 @@ SpectralSolver (CupyBackend).
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import numpy as np
 import cupy as cp
 import cupyx.scipy.ndimage as cupy_ndimage
 import cupyx.scipy.fft as cupy_fft
 from numba import cuda
 import math
-from dataclasses import dataclass
-from fast_heat_solv.physics import spectral_helpers as spec_hp
+
+from fast_heat_solv.physics import spectral_state as _state
 
 __all__ = [
     "SpectralSolverState",
@@ -116,208 +115,22 @@ def _compute_evaporation_flux_kernel(T_surface, q_out, P0, T_boil, DeltaH_LV, R_
 # ======================================
 # Spectral Method GPU State Definition
 # ======================================
+#
+# The state classes (SpectralGrid / FineMeshState / SolverBuffers /
+# SpectralSolverState) and the propagator precompute are backend-agnostic and
+# live in ``spectral_state``; this module only binds the CuPy array module.
+
+SpectralGrid = _state.SpectralGrid
+FineMeshState = _state.FineMeshState
+SolverBuffers = _state.SolverBuffers
 
 
-@dataclass
-class SpectralGrid:
-    """Immutable grid definitions and reconstruction bases."""
-    # Global coordinates (Cell-Centered)
-    x: cp.ndarray = None
-    y: cp.ndarray = None
-    z: cp.ndarray = None
-
-    # Reconstruction constants
-    recon_scale: float = 0.0
-    Cp32_broadcast: cp.ndarray = None
-    Cp32_broadcast_bottom: cp.ndarray = None
-    dct_scale: float = 0.0
-    
-    # Normalization coefficients (indexed by axis: 0=x, 1=y, 2=z)
-    C: tuple = None
-
-    # Lazy-loaded full reconstruction bases and node-centered coords (indexed by axis)
-    B_recon: list = None
-    coords_rec: list = None
-    
-    def __init__(self, geom):
-        # Global mesh coordinates (Cell-Centered). Coordinate arrays stay
-        # per-axis; Vec3 groups only the scalar triples (n, d, size) since a
-        # dataclass cannot enter the numba kernels downstream.
-        self.x, self.y, self.z = [((cp.arange(n) + 0.5) * d).astype(cp.float32)
-                                   for n, d in zip(geom.n, geom.d)]
-
-        # Normalization coefficients (C[0]=x, C[1]=y, C[2]=z)
-        self.C = tuple(cp.asarray(spec_hp._C_coef(n, L), dtype=cp.float32)
-                       for n, L in zip(geom.n, geom.size))
-
-        # Scaling factors
-        dx, dy = geom.dx, geom.dy
-        nx, ny = geom.nx, geom.ny
-        Lx, Ly = geom.Lx, geom.Ly
-        self.dct_scale = cp.float32((dx * dy) * np.sqrt((nx * ny) / (Lx * Ly)))
-        self.recon_scale = cp.float32(np.sqrt(nx * ny) / np.sqrt(Lx * Ly))
-
-        # Compute top-surface weighting for projection
-        sign = cp.power(-1.0, cp.arange(geom.nz, dtype=cp.float32)).astype(cp.float32)
-        self.Cp32_broadcast = (self.C[2].astype(cp.float32) * sign)[:, None, None]
-
-        # Bottom-surface weighting: cos(p*pi*0/Lz) = 1, so no sign alternation
-        self.Cp32_broadcast_bottom = self.C[2].astype(cp.float32)[:, None, None]
-
-    def prepare_full_reconstruction(self, geom):
-        """Compute node-centered grids and full-domain reconstruction bases on demand.
-        Kept on CPU since only used for final output and avoids GPU memory usage if not needed."""
-        if self.B_recon is not None:
-            return
-
-        nx, ny, nz = geom.nx, geom.ny, geom.nz
-        Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
-        dx, dy, dz = geom.dx, geom.dy, geom.dz
-
-        # CPU-side numpy arrays (reconstruction only used for output)
-        self.coords_rec = [((np.arange(n + 1)) * d).astype(np.float32)
-                           for n, d in zip((nx, ny, nz), (dx, dy, dz))]
-        C_cpu = [cp.asnumpy(self.C[a]) for a in range(3)]
-        self.B_recon = [(C_cpu[a][:, None] * np.cos(np.pi * np.arange(n)[:, None] * self.coords_rec[a][None, :] / L)).astype(np.float32)
-                        for a, (n, L) in enumerate(zip((nx, ny, nz), (Lx, Ly, Lz)))]
-
-@dataclass
-class FineMeshState:
-    """Handles the moving fine mesh for latent heat/nonlinearities."""
-    refinement: int = 4
-    nx_box: int = 0
-    ny_box: int = 0
-    nz_box: int = 0
-    n_fine_totals: list = None  # [nx_total, ny_total, nz_total]
-
-    coords_fine: list = None    # [x_fine, y_fine, z_fine]
-    dx_fine: float = 0.0
-    dy_fine: float = 0.0
-    dz_fine: float = 0.0
-    dV_fine: float = 0.0
-
-    B_fine_full: list = None    # cosine bases indexed by axis; z uses domain-shifted coords
-    B_fine: list = None         # active window bases; z does not slide
-
-    T_prev: cp.ndarray = None
-    Q_prev: cp.ndarray = None
-
-    def __init__(self, geom, grid: SpectralGrid):
-        import logging
-        logger = logging.getLogger(__name__)
-
-        dx, dy, dz = geom.dx, geom.dy, geom.dz
-        Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
-
-        self.refinement = 4
-        # TODO: these fine-mesh box extents are hard-coded; they should become
-        # configurable parameters (or be sized dynamically from the domain /
-        # laser footprint) rather than baked-in constants.
-        Lx_box, Ly_box, Lz_box = 0.9e-3, 0.9e-3, 0.04e-3
-
-        self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
-        d_fine = [self.dx_fine, self.dy_fine, self.dz_fine]
-
-        self.n_fine_totals = [int(np.ceil(L / d)) for L, d in zip([Lx, Ly, Lz_box], d_fine)]
-        self.coords_fine = [((cp.arange(n) + 0.5) * d).astype(cp.float32)
-                            for n, d in zip(self.n_fine_totals, d_fine)]
-
-        z_fine_global = (Lz - Lz_box) + self.coords_fine[2]
-
-        logger.info("Precomputing fine cosine bases...")
-        mode_counts = [geom.nx, geom.ny, geom.nz]
-        L_domain = [Lx, Ly, Lz]
-        fine_coords = [self.coords_fine[0], self.coords_fine[1], z_fine_global]
-        self.B_fine_full = [
-            (grid.C[a][:, None] * cp.cos(np.pi * cp.arange(mode_counts[a])[:, None] * fine_coords[a][None, :] / L_domain[a])).astype(cp.float32)
-            for a in range(3)
-        ]
-
-        self.nx_box = min(int(np.ceil(Lx_box / self.dx_fine)), self.n_fine_totals[0])
-        self.ny_box = min(int(np.ceil(Ly_box / self.dy_fine)), self.n_fine_totals[1])
-        self.nz_box = min(int(np.ceil(Lz_box / self.dz_fine)), self.n_fine_totals[2])
-
-        self.B_fine = [
-            cp.zeros((geom.nx, self.nx_box), dtype=cp.float32),
-            cp.zeros((geom.ny, self.ny_box), dtype=cp.float32),
-            self.B_fine_full[2][:, :self.nz_box],  # z: static full-depth slice
-        ]
-        self.dV_fine = self.dx_fine * self.dy_fine * self.dz_fine
-
-    def update(self, laser_state):
-        """Update fine mesh basis subsets for x and y axes."""
-        for a, (pos, d, n_box) in enumerate([
-            (laser_state.x, self.dx_fine, self.nx_box),
-            (laser_state.y, self.dy_fine, self.ny_box),
-        ]):
-            i_start, i_end, _ = spec_hp._calculate_subgrid_indices(pos, d, self.n_fine_totals[a], n_box)
-            self.B_fine[a][:, :] = self.B_fine_full[a][:, i_start:i_end]
-        # z does not slide
-
-
-@dataclass
-class SolverBuffers:
-    """Reusable working arrays."""
-    a_temp: cp.ndarray = None      # (nz, ny, nx)
-    q_evap_old: cp.ndarray = None  # (ny, nx)
-    q_evap_buffer: cp.ndarray = None
-    Q_latent_buffer: cp.ndarray = None
-
-    def __init__(self, num, fine_mesh: FineMeshState):
-        nx , ny, nz = num.nx, num.ny, num.nz
-        self.a_temp = cp.empty((nz, ny, nx), dtype=cp.float32)
-        self.q_evap_old = cp.zeros((ny, nx), dtype=cp.float32)
-        self.q_evap_buffer = cp.zeros((ny, nx), dtype=cp.float32)
-        if fine_mesh:
-             self.Q_latent_buffer = cp.zeros((fine_mesh.nz_box, fine_mesh.ny_box, fine_mesh.nx_box), dtype=cp.float32)
-
-@dataclass
-class SpectralSolverState:
-    """
-    Coordinator class for the spectral method state.
-    """
-    # 1. Components
-    grid: SpectralGrid = None
-    buffers: SolverBuffers = None
-    fine_mesh: FineMeshState = None
-    
-    # 2. Primary State
-    a: cp.ndarray = None       # Current temperature modes (nz, ny, nx)
-    
-    # 3. Spectral Propagators
-    K: cp.ndarray = None
-    KK: cp.ndarray = None
+class SpectralSolverState(_state.SpectralSolverState):
+    """GPU spectral state: :class:`spectral_state.SpectralSolverState` bound to CuPy."""
 
     def __init__(self, phys, geom, num):
-        # Initialize sub-components
-        self.grid = SpectralGrid(geom)
-        self.fine_mesh = FineMeshState(geom, self.grid)
-        self.buffers = SolverBuffers(num, self.fine_mesh)
-        
-        # Precompute propagators
-        self.K, self.KK = _precompute_K_KK(phys, num, geom)
+        super().__init__(phys, geom, num, xp=cp)
 
-
-def _precompute_K_KK(phys, num, geom):
-    """
-    Compute spectral Propagators (K, KK) based on grid and time step.
-    K = exp(-alpha * k^2 * dt) for ETD1 (Exact integration of linear part)
-    KK = phi_1 / (rho * Cp), where phi_1(z) = (exp(z) - 1) / z, z = -alpha * k^2 * dt
-    """
-    # Per-axis wavenumbers in array-index order [z, y, x]
-    k = [np.pi * cp.arange(n) / L for n, L in zip(geom.n.zyx(), geom.size.zyx())]
-    k_grids = cp.meshgrid(*k, indexing='ij')  # shape (nz, ny, nx) each
-    denom = phys.k / (phys.rho * phys.Cp) * sum(kg**2 for kg in k_grids)
-    K = cp.exp(-denom * num.dt).astype(cp.float32)
-    mask_zero = (denom == 0)
-    # Avoid div by zero
-    denom[mask_zero] = 1.0
-
-    phi_1 = (K - 1.0) / (-denom)
-    phi_1[mask_zero] = num.dt
-
-    KK = (phi_1 / (phys.rho * phys.Cp)).astype(cp.float32)
-    return K, KK
 
 # ======================================
 # Wrapper Functions
