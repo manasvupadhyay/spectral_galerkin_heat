@@ -125,9 +125,6 @@ class SpectralGrid:
     x: cp.ndarray = None
     y: cp.ndarray = None
     z: cp.ndarray = None
-    
-    # Derived 2D grids (X, Y are redundant but kept if heavily used, though we should prefer 1D)
-    # Removing X, Y as per plan to reduce memory if they are just meshgrids of x, y
 
     # Reconstruction constants
     recon_scale: float = 0.0
@@ -143,24 +140,25 @@ class SpectralGrid:
     coords_rec: list = None
     
     def __init__(self, geom):
-        # Global mesh coordinates (Cell-Centered)
-        dx, dy, dz = geom.dx, geom.dy, geom.dz
-        nx, ny, nz = geom.nx, geom.ny, geom.nz
-        Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
-        
+        # Global mesh coordinates (Cell-Centered). Coordinate arrays stay
+        # per-axis; Vec3 groups only the scalar triples (n, d, size) since a
+        # dataclass cannot enter the numba kernels downstream.
         self.x, self.y, self.z = [((cp.arange(n) + 0.5) * d).astype(cp.float32)
-                                   for n, d in zip((nx, ny, nz), (dx, dy, dz))]
-        
+                                   for n, d in zip(geom.n, geom.d)]
+
         # Normalization coefficients (C[0]=x, C[1]=y, C[2]=z)
         self.C = tuple(cp.asarray(spec_hp._C_coef(n, L), dtype=cp.float32)
-                       for n, L in zip((nx, ny, nz), (Lx, Ly, Lz)))
+                       for n, L in zip(geom.n, geom.size))
 
         # Scaling factors
+        dx, dy = geom.dx, geom.dy
+        nx, ny = geom.nx, geom.ny
+        Lx, Ly = geom.Lx, geom.Ly
         self.dct_scale = cp.float32((dx * dy) * np.sqrt((nx * ny) / (Lx * Ly)))
         self.recon_scale = cp.float32(np.sqrt(nx * ny) / np.sqrt(Lx * Ly))
 
         # Compute top-surface weighting for projection
-        sign = cp.power(-1.0, cp.arange(nz, dtype=cp.float32)).astype(cp.float32)
+        sign = cp.power(-1.0, cp.arange(geom.nz, dtype=cp.float32)).astype(cp.float32)
         self.Cp32_broadcast = (self.C[2].astype(cp.float32) * sign)[:, None, None]
 
         # Bottom-surface weighting: cos(p*pi*0/Lz) = 1, so no sign alternation
@@ -260,14 +258,10 @@ class SolverBuffers:
     a_temp: cp.ndarray = None      # (nz, ny, nx)
     q_evap_old: cp.ndarray = None  # (ny, nx)
     q_evap_buffer: cp.ndarray = None
-    q_diff: cp.ndarray = None
-    B_buffer: cp.ndarray = None
     Q_latent_buffer: cp.ndarray = None
 
     def __init__(self, num, fine_mesh: FineMeshState):
         nx , ny, nz = num.nx, num.ny, num.nz
-        self.q_diff = cp.empty((ny, nx), dtype=cp.float32)
-        self.B_buffer = cp.empty((ny, nx), dtype=cp.float32)
         self.a_temp = cp.empty((nz, ny, nx), dtype=cp.float32)
         self.q_evap_old = cp.zeros((ny, nx), dtype=cp.float32)
         self.q_evap_buffer = cp.zeros((ny, nx), dtype=cp.float32)
@@ -307,7 +301,8 @@ def _precompute_K_KK(phys, num, geom):
     K = exp(-alpha * k^2 * dt) for ETD1 (Exact integration of linear part)
     KK = phi_1 / (rho * Cp), where phi_1(z) = (exp(z) - 1) / z, z = -alpha * k^2 * dt
     """
-    k = [np.pi * cp.arange(n) / L for n, L in zip((num.nz, num.ny, num.nx), (geom.Lz, geom.Ly, geom.Lx))]
+    # Per-axis wavenumbers in array-index order [z, y, x]
+    k = [np.pi * cp.arange(n) / L for n, L in zip(geom.n.zyx(), geom.size.zyx())]
     k_grids = cp.meshgrid(*k, indexing='ij')  # shape (nz, ny, nx) each
     denom = phys.k / (phys.rho * phys.Cp) * sum(kg**2 for kg in k_grids)
     K = cp.exp(-denom * num.dt).astype(cp.float32)

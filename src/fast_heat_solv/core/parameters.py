@@ -25,6 +25,8 @@ from typing import List, Optional, Any, Dict, TYPE_CHECKING
 import numpy as np
 import os
 
+from fast_heat_solv.core.vector import Vec3
+
 if TYPE_CHECKING:
     from fast_heat_solv.core.laser import LaserPath
 
@@ -189,6 +191,12 @@ class GeomParams:
         Grid spacing in y = Ly / ny.
     dz : float
         Grid spacing in z = Lz / nz.
+    size : Vec3
+        Domain extent ``(Lx, Ly, Lz)`` grouped as one triple.
+    n : Vec3
+        Mesh counts ``(nx, ny, nz)`` grouped as one triple.
+    d : Vec3
+        Grid spacing ``(dx, dy, dz)`` grouped as one triple (``size / n``).
     """
     Lx: float
     Ly: float
@@ -196,7 +204,7 @@ class GeomParams:
     nx: int
     ny: int
     nz: int
-    
+
     # Grid arrays (initialized in __post_init__ or property)
     x: np.ndarray = field(init=False, default=None)
     y: np.ndarray = field(init=False, default=None)
@@ -205,11 +213,18 @@ class GeomParams:
     dy: float = field(init=False)
     dz: float = field(init=False)
 
+    # Grouped triples (see Vec3); flat fields above are kept for back-compat.
+    size: Vec3 = field(init=False)
+    n: Vec3 = field(init=False)
+    d: Vec3 = field(init=False)
+
     def __post_init__(self):
-        self.dx = self.Lx / self.nx
-        self.dy = self.Ly / self.ny
-        self.dz = self.Lz / self.nz
-        
+        self.size = Vec3(self.Lx, self.Ly, self.Lz)
+        self.n = Vec3(self.nx, self.ny, self.nz)
+        self.d = self.size / self.n
+
+        self.dx, self.dy, self.dz = self.d
+
         self.x = np.linspace(0.0, self.Lx, self.nx, endpoint=False).astype(np.float32)
         self.y = np.linspace(0.0, self.Ly, self.ny, endpoint=False).astype(np.float32)
         # Check if z endpoint should be included or not. Usually for spectral in Z we might want specific BCs.

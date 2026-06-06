@@ -211,7 +211,7 @@ class SpectralSolver(HeatSolver):
         # Bottom convection
         h_conv = getattr(mat, 'h_conv', 0.0)
         T0 = xp.float32(getattr(mat, 'T0', 293.0))
-        S_bot = xp.zeros_like(buffers.q_diff) if h_conv > 0 else None
+        S_bot = xp.zeros((num.ny, num.nx), dtype=xp.float32) if h_conv > 0 else None
 
         # Build initial a_temp = θ̃ + Q_mnp · F  with all forcing guesses
         kernels.update_modes_etd1(

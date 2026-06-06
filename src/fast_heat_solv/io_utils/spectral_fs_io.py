@@ -38,14 +38,14 @@ class LocalFSIOManager(IOManager):
         Also parses IO scheduling config (output_interval, outputs, at_end, etc.).
         """
         self.context = context  # Store context for later use
-        # 1. Extract config
-        io_config = getattr(context, 'io', None)
-        self.output_root = getattr(io_config, 'output_root', 'out')
-        run_tag = getattr(io_config, 'run_tag', 'sim')
-        self.save_full_fields = getattr(io_config, 'save_full_fields', False)
+        # 1. Extract config. context.io is a plain dict, so read with .get();
+        # getattr() would silently always return the default (latent bug).
+        io_cfg = context.io if getattr(context, 'io', None) is not None else {}
+        self.output_root = io_cfg.get('output_root', 'out')
+        run_tag = io_cfg.get('run_tag', 'sim')
+        self.save_full_fields = io_cfg.get('save_full_fields', False)
 
         # --- IO scheduling state ----
-        io_cfg = context.io if hasattr(context, 'io') else {}
         self._interval = io_cfg.get('output_interval')
         self._outputs = io_cfg.get('outputs') or []
         self._at_end = io_cfg.get('at_end') or []
@@ -98,6 +98,8 @@ class LocalFSIOManager(IOManager):
         Save the current simulation state to HDF5/XDMF, with time and step in filenames and XMF metadata.
         Handles output types as defined in the YAML config (full_volume, profiles, cut_views, modes).
         """
+        # TODO: this branches on output_type and has grown long. Pull each branch
+        # out into its own save_* method and dispatch on output_type instead.
         output_type = kwargs.get('output_type', 'full_volume')
         profiles_locations = kwargs.get('profiles_locations', [])
         cut_views_planes = kwargs.get('cut_views_planes', [])
