@@ -187,7 +187,7 @@ class SpectralSolver(HeatSolver):
             fm.update(laser_state)
             buffers.a_temp[:] = SsState.a
             kernels.initialize_latent_heat_if_needed(SsState)
-            kernels.shift_latent_heat_history(fm, laser_state, num)
+            kernels.shift_latent_heat_history(SsState, laser_state, num)
 
         if self.track_picard_history:
             self.picard_history = []

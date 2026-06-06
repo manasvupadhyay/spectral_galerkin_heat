@@ -61,6 +61,12 @@ class SpectralSolverState(_state.SpectralSolverState):
 
     def __init__(self, phys, geom, num):
         super().__init__(phys, geom, num, xp=np)
+        # NumPy/Numba primitives for the shared free functions in spectral_ops.
+        self.hooks = _state.BackendHooks(
+            idct=IDCT_II,
+            ndshift=_ndshift,
+            source_term=compute_source_term_from_temperature,
+        )
 
 
 # ======================================
@@ -163,51 +169,24 @@ def compute_gaussian_laser_flux(x, y, laser_x, laser_y, laser_r, laser_coef):
     return (laser_coef * np.exp(-2.0 * r_sq / laser_r ** 2))
 
 
-# Backend-agnostic einsum/copy free functions live in ``spectral_ops`` and read
-# the array module from ``SsState.xp``. Re-exported here so callers can keep using
-# ``spectral_cpu_kernels.<fn>``; ``_reconstruct_temperature_box`` is used below by
-# ``compute_latent_heat_source``.
+# Backend-agnostic free functions live in ``spectral_ops``: the pure einsum/copy
+# ones read the array module from ``SsState.xp``; the hook-using ones reach the
+# FFT / ndimage / source-term primitives below through ``SsState.hooks``. They
+# are re-exported here so callers keep using ``spectral_cpu_kernels.<fn>``;
+# ``_reconstruct_temperature_box`` is used internally above.
 project_box_to_modes = _ops.project_box_to_modes
 _reconstruct_temperature_box = _ops.reconstruct_temperature_box
 initialize_latent_heat_if_needed = _ops.initialize_latent_heat_if_needed
 update_latent_heat_history = _ops.update_latent_heat_history
+reconstruct_surface_temperature = _ops.reconstruct_surface_temperature
+reconstruct_bottom_temperature = _ops.reconstruct_bottom_temperature
+compute_latent_heat_source = _ops.compute_latent_heat_source
+shift_latent_heat_history = _ops.shift_latent_heat_history
 
 
-def shift_latent_heat_history(fm, laser_state, num):
-    """Shift T_prev and Q_prev to align with the current laser position.
-
-    Call once per time step, before the fixed-point iteration begins.
-    """
-    if fm is None or fm.T_prev is None:
-        return
-    shift_x = laser_state.v[0] * num.dt
-    shift_y = laser_state.v[1] * num.dt
-    shift_pixels = (0, -shift_y / fm.dy_fine, -shift_x / fm.dx_fine)
-    fm.T_prev = scipy_shift(fm.T_prev, shift_pixels, order=1, mode='nearest')
-    if fm.Q_prev is not None:
-        fm.Q_prev = scipy_shift(fm.Q_prev, shift_pixels, order=1, mode='constant', cval=0.0)
-
-
-def compute_latent_heat_source(Q_buffer, phys, num, SsState):
-    """Compute volumetric latent heat source Q (W/m^3) on the fine mesh.
-
-    Uses the current trial modes (``buffers.a_temp``) and the stored
-    ``T_prev``.  Does not update ``T_prev``; call
-    :func:`update_latent_heat_history` after the iteration has converged.
-    """
-    fm = SsState.fine_mesh
-    if fm is None or fm.T_prev is None:
-        Q_buffer.fill(0.0)
-        return
-
-    T_box = _reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
-
-    compute_source_term_from_temperature(
-        T_box, fm.T_prev,
-        phys.T_solidus, phys.T_liquidus,
-        phys.rho, phys.L_f, num.dt,
-        Q_buffer
-    )
+def _ndshift(field, shift_pixels, order, mode, cval):
+    """ndimage shift primitive (CPU): scipy.ndimage, returns a new array."""
+    return scipy_shift(field, shift_pixels, order=order, mode=mode, cval=cval)
 
 
 def DCT_II(q):
@@ -222,29 +201,9 @@ def IDCT_II(a):
 
 # Gain of few percent compared to scipy.fft.dctn(...) directly
 
-def reconstruct_surface_temperature(a, SsState):
-    """Reconstruct 2D temperature field at z=0."""
-    # Sum over Z modes weighted by Cp evaluated at the top surface.
-    # Use a preallocated 2D buffer when available to avoid allocating a full
-    # temporary (nz, ny, nx) array. `np.einsum` with `out=` performs the
-    # contraction
-    A = np.einsum('p,pij->ij', SsState.grid.Cp32_broadcast[:, 0, 0], a, optimize=True)
-    # Use DCT-II for surface temperature (mathematical definition)
-    dct_result = IDCT_II(A)
-    return (SsState.grid.recon_scale * dct_result)
-
-def reconstruct_bottom_temperature(a, SsState):
-    """Reconstruct 2D temperature field at z=0 (bottom surface).
-    
-    At z=0, cos(p*pi*0/Lz) = 1, so the weighting is just Cp (no sign alternation).
-    """
-    A = np.einsum('p,pij->ij', SsState.grid.Cp32_broadcast_bottom[:, 0, 0], a, optimize=True)
-    dct_result = IDCT_II(A)
-    return (SsState.grid.recon_scale * dct_result)
 
 def shift_flux(field: np.ndarray, shift: tuple, geom) -> np.ndarray:
     """Translate a surface flux field by ``shift=(dx, dy)`` meters."""
     dx, dy = shift
     shift_pixels = (dy / geom.dy, dx / geom.dx)
-    
-    return scipy_shift(field, shift_pixels, order=1, mode='constant', cval=0.0)
+    return _ndshift(field, shift_pixels, order=1, mode='constant', cval=0.0)

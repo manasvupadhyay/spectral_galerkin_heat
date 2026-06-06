@@ -131,6 +131,12 @@ class SpectralSolverState(_state.SpectralSolverState):
 
     def __init__(self, phys, geom, num):
         super().__init__(phys, geom, num, xp=cp)
+        # CuPy/CUDA primitives for the shared free functions in spectral_ops.
+        self.hooks = _state.BackendHooks(
+            idct=IDCT_II,
+            ndshift=_ndshift,
+            source_term=_source_term,
+        )
 
 
 # ======================================
@@ -212,54 +218,33 @@ def compute_gaussian_laser_flux(X, Y, laser_x, laser_y, laser_r, laser_coef):
 
 
 
-# Backend-agnostic einsum/copy free functions live in ``spectral_ops`` and read
-# the array module from ``SsState.xp``. Re-exported here so callers can keep using
-# ``spectral_gpu_kernels.<fn>``; ``_reconstruct_temperature_box`` is used below by
-# ``compute_latent_heat_source``.
+# Backend-agnostic free functions live in ``spectral_ops``: the pure einsum/copy
+# ones read the array module from ``SsState.xp``; the hook-using ones reach the
+# FFT / ndimage / source-term primitives below through ``SsState.hooks``. They
+# are re-exported here so callers keep using ``spectral_gpu_kernels.<fn>``;
+# ``_reconstruct_temperature_box`` is used internally by ``_source_term`` callers.
 project_box_to_modes = _ops.project_box_to_modes
 _reconstruct_temperature_box = _ops.reconstruct_temperature_box
 initialize_latent_heat_if_needed = _ops.initialize_latent_heat_if_needed
 update_latent_heat_history = _ops.update_latent_heat_history
+reconstruct_surface_temperature = _ops.reconstruct_surface_temperature
+reconstruct_bottom_temperature = _ops.reconstruct_bottom_temperature
+compute_latent_heat_source = _ops.compute_latent_heat_source
+shift_latent_heat_history = _ops.shift_latent_heat_history
 
 
-def shift_latent_heat_history(fm, laser_state, num):
-    """Shift T_prev and Q_prev to align with the current laser position.
-
-    Call once per time step, before the fixed-point iteration begins.
-    """
-    if fm is None or fm.T_prev is None:
-        return
-    shift_x = laser_state.v[0] * num.dt
-    shift_y = laser_state.v[1] * num.dt
-    shift_pixels = (0, -shift_y / fm.dy_fine, -shift_x / fm.dx_fine)
-    T_prev_shifted = cp.empty_like(fm.T_prev)
-    cupy_ndimage.shift(fm.T_prev, shift_pixels, output=T_prev_shifted, order=1, mode='nearest')
-    fm.T_prev = T_prev_shifted
-    if fm.Q_prev is not None:
-        Q_prev_shifted = cp.empty_like(fm.Q_prev)
-        cupy_ndimage.shift(fm.Q_prev, shift_pixels, output=Q_prev_shifted, order=1, mode='constant', cval=0.0)
-        fm.Q_prev = Q_prev_shifted
+def _ndshift(field, shift_pixels, order, mode, cval):
+    """ndimage shift primitive (GPU): cupyx.scipy.ndimage into a fresh buffer."""
+    out = cp.empty_like(field)
+    cupy_ndimage.shift(field, shift_pixels, order=order, mode=mode, cval=cval, output=out)
+    return out
 
 
-def compute_latent_heat_source(Q_buffer, phys, num, SsState):
-    """Compute volumetric latent heat source Q (W/m^3) on the fine mesh.
-
-    Uses the current trial modes (buffers.a_temp) and the stored T_prev.
-    Does not update T_prev; call update_latent_heat_history after convergence.
-    """
-    fm = SsState.fine_mesh
-    if fm is None or fm.T_prev is None:
-        Q_buffer.fill(0.0)
-        return
-
-    T_box = _reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
-
-    blockspergrid, threadsperblock = _launch_config(T_box.shape)
+def _source_term(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
+    """Latent-heat source primitive (GPU): launch the CUDA source-term kernel."""
+    blockspergrid, threadsperblock = _launch_config(T_curr.shape)
     compute_source_term_from_temperature[blockspergrid, threadsperblock](
-        T_box, fm.T_prev,
-        phys.T_solidus, phys.T_liquidus,
-        phys.rho, phys.L_f, num.dt,
-        Q_buffer
+        T_curr, T_prev, T_S, T_L, rho, L, dt, out
     )
 
 
@@ -274,34 +259,9 @@ def IDCT_II(a):
     """Apply Discrete Cosine Transform Type III (Inverse Ortho) on GPU."""
     return cupy_fft.dctn(a, type=3, norm='ortho', axes=None).astype(cp.float32)
 
-def reconstruct_surface_temperature(a, SsState):
-    """Reconstruct 2D temperature field at z=0 (GPU)."""
-   # Sum over Z modes (weighted by Cp coefficients at z=0, which is just Cp/sqrt(1/L)?? No)
-    # In helpers.py: A = (SsState.Cp32[:, None, None] * a).sum(axis=0)
-    # This assumes cos(p*pi*z/Lz) at z=0 is 1.0. 
-    # The reconstruction formula is T = sum(a * Bx * By * Bz).
-    # Bz[p] at z=0 is Cp[p] * cos(p*pi*z/Lz) -> z top surface
-    A = ( SsState.grid.Cp32_broadcast * a).sum(axis=0)
-    
-    # Use DCT-III (IDCT) for surface temperature
-    dct_result = IDCT_II(A)
-    return (SsState.grid.recon_scale * dct_result).astype(cp.float32)
-
-def reconstruct_bottom_temperature(a, SsState):
-    """Reconstruct 2D temperature field at z=0 (bottom surface, GPU).
-    
-    At z=0, cos(p*pi*0/Lz) = 1, so the weighting is just Cp (no sign alternation).
-    """
-    A = (SsState.grid.Cp32_broadcast_bottom * a).sum(axis=0)
-    dct_result = IDCT_II(A)
-    return (SsState.grid.recon_scale * dct_result).astype(cp.float32)
-
-
 
 def shift_flux(field: cp.ndarray, shift: tuple, geom) -> cp.ndarray:
     """Translate a surface flux field by ``shift=(dx, dy)`` meters on GPU."""
     dx, dy = shift
     shift_pixels = (dy / geom.dy, dx / geom.dx)
-    out = cp.empty_like(field)
-    cupy_ndimage.shift(field, shift_pixels, order=1, mode='constant', cval=0.0, output=out)
-    return out
+    return _ndshift(field, shift_pixels, order=1, mode='constant', cval=0.0)

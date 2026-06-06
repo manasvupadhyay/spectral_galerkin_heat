@@ -38,7 +38,7 @@ __copyright__ = "Copyright 2026, LMS, École Polytechnique"
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -48,6 +48,7 @@ __all__ = [
     "SpectralGrid",
     "FineMeshState",
     "SolverBuffers",
+    "BackendHooks",
     "SpectralSolverState",
     "precompute_K_KK",
 ]
@@ -217,13 +218,41 @@ class SolverBuffers:
             self.Q_latent_buffer = xp.zeros((fine_mesh.nz_box, fine_mesh.ny_box, fine_mesh.nx_box), dtype=xp.float32)
 
 
+@dataclass(frozen=True)
+class BackendHooks:
+    """The handful of irreducible backend primitives the shared free functions
+    in :mod:`spectral_ops` need but cannot express with ``xp`` alone.
+
+    Each kernel module builds one and attaches it to its
+    :class:`SpectralSolverState` subclass, so a function like
+    ``reconstruct_surface_temperature(a, SsState)`` reaches the right FFT /
+    ndimage / source-term implementation through ``SsState.hooks``.
+
+    Attributes
+    ----------
+    idct : callable
+        Inverse (type-III, ortho) DCT — ``IDCT_II`` in the kernel modules.
+    ndshift : callable
+        ``(field, shift_pixels, order, mode, cval) -> shifted_field`` —
+        scipy.ndimage on CPU, cupyx.scipy.ndimage on GPU.
+    source_term : callable
+        Latent-heat source kernel with signature
+        ``(T_curr, T_prev, T_S, T_L, rho, L, dt, out)`` — a plain numba ``@njit``
+        call on CPU, a ``@cuda.jit`` launch on GPU.
+    """
+    idct: Callable
+    ndshift: Callable
+    source_term: Callable
+
+
 @dataclass
 class SpectralSolverState:
     """Coordinator class for the spectral method state.
 
     Backend-parametrized: pass ``xp=numpy`` or ``xp=cupy``. The kernel modules
-    expose thin subclasses that bind their own ``xp`` so callers can keep using
-    the ``SpectralSolverState(phys, geom, num)`` signature.
+    expose thin subclasses that bind their own ``xp`` (and attach
+    :class:`BackendHooks`) so callers can keep using the
+    ``SpectralSolverState(phys, geom, num)`` signature.
     """
     # 1. Components
     grid: SpectralGrid = None
@@ -240,6 +269,10 @@ class SpectralSolverState:
     # 4. Bound array module (numpy or cupy) — lets backend-agnostic free
     # functions in ``spectral_ops`` recover ``xp`` from the state object.
     xp: Any = None
+
+    # 5. Backend primitive hooks (FFT / ndimage shift / source-term launch),
+    # attached by the per-backend subclass; see ``BackendHooks``.
+    hooks: "BackendHooks" = None
 
     def __init__(self, phys, geom, num, xp):
         self.xp = xp

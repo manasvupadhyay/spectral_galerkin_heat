@@ -37,6 +37,10 @@ __all__ = [
     "reconstruct_temperature_box",
     "initialize_latent_heat_if_needed",
     "update_latent_heat_history",
+    "reconstruct_surface_temperature",
+    "reconstruct_bottom_temperature",
+    "compute_latent_heat_source",
+    "shift_latent_heat_history",
 ]
 
 
@@ -85,3 +89,72 @@ def update_latent_heat_history(SsState):
         return
     T_box = reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
     fm.T_prev[:] = T_box[:]
+
+
+# ---------------------------------------------------------------------------
+# Hook-using free functions: pure logic + array ops, with the one irreducible
+# backend primitive (FFT / ndimage shift / source-term launch) reached through
+# ``SsState.hooks`` (see ``spectral_state.BackendHooks``).
+# ---------------------------------------------------------------------------
+
+def reconstruct_surface_temperature(a, SsState):
+    """Reconstruct the 2D temperature field at the top surface (z = Lz).
+
+    Sums the z-modes weighted by the top-surface Cp coefficients, then applies
+    the inverse DCT (via the backend ``idct`` hook).
+    """
+    xp = SsState.xp
+    grid = SsState.grid
+    A = xp.einsum('p,pij->ij', grid.Cp32_broadcast[:, 0, 0], a, optimize=True)
+    return (grid.recon_scale * SsState.hooks.idct(A)).astype(xp.float32)
+
+
+def reconstruct_bottom_temperature(a, SsState):
+    """Reconstruct the 2D temperature field at the bottom surface (z = 0).
+
+    At z=0, ``cos(p*pi*0/Lz) = 1`` so the weighting is plain Cp (no sign
+    alternation).
+    """
+    xp = SsState.xp
+    grid = SsState.grid
+    A = xp.einsum('p,pij->ij', grid.Cp32_broadcast_bottom[:, 0, 0], a, optimize=True)
+    return (grid.recon_scale * SsState.hooks.idct(A)).astype(xp.float32)
+
+
+def compute_latent_heat_source(Q_buffer, phys, num, SsState):
+    """Compute volumetric latent heat source Q (W/m^3) on the fine mesh.
+
+    Uses the current trial modes (``buffers.a_temp``) and the stored
+    ``T_prev``.  Does not update ``T_prev``; call
+    :func:`update_latent_heat_history` after the iteration has converged.
+    """
+    fm = SsState.fine_mesh
+    if fm is None or fm.T_prev is None:
+        Q_buffer.fill(0.0)
+        return
+
+    T_box = reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
+
+    SsState.hooks.source_term(
+        T_box, fm.T_prev,
+        phys.T_solidus, phys.T_liquidus,
+        phys.rho, phys.L_f, num.dt,
+        Q_buffer,
+    )
+
+
+def shift_latent_heat_history(SsState, laser_state, num):
+    """Shift T_prev and Q_prev to align with the current laser position.
+
+    Call once per time step, before the fixed-point iteration begins.
+    """
+    fm = SsState.fine_mesh
+    if fm is None or fm.T_prev is None:
+        return
+    shift_x = laser_state.v[0] * num.dt
+    shift_y = laser_state.v[1] * num.dt
+    shift_pixels = (0, -shift_y / fm.dy_fine, -shift_x / fm.dx_fine)
+    ndshift = SsState.hooks.ndshift
+    fm.T_prev = ndshift(fm.T_prev, shift_pixels, order=1, mode='nearest', cval=0.0)
+    if fm.Q_prev is not None:
+        fm.Q_prev = ndshift(fm.Q_prev, shift_pixels, order=1, mode='constant', cval=0.0)
