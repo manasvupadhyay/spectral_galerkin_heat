@@ -15,29 +15,9 @@
 # limitations under the License.
 
 import numpy as np
-import os
 import scipy.fft
 
-try:
-    import cupy as _cp
-except ImportError:
-    _cp = None
-
-# Default to CPU kernels for module-level access, but dispatch properly in functions
-import fast_heat_solv.physics.spectral_cpu_kernels as kernels
-
-
-def _get_array_module(arr):
-    if _cp is not None and hasattr(arr, 'device'): # Check if it's a cupy array
-        return _cp
-    return np
-
-def _get_kernels(arr):
-    xp = _get_array_module(arr)
-    if xp is _cp:
-         import fast_heat_solv.physics.spectral_gpu_kernels as gpu_kernels
-         return gpu_kernels
-    return kernels
+from fast_heat_solv.physics import spectral_ops as _ops
 
 
 def _C_coef(N, L, xp=np):
@@ -305,12 +285,11 @@ def save_temp_profiles(
 
 
     if center == "hotspot":
-        # Scan low-res surface to find approximate max
-        # This requires reconstructing a 2D slice first
-        # For efficiency, we reconstruct T_surf from kernels
-        loc_kernels = _get_kernels(a)
-        T_surf = loc_kernels.reconstruct_surface_temperature(a, SsState)
-        
+        # Scan low-res surface to find approximate max. ``reconstruct_surface_temperature``
+        # is backend-agnostic (it takes the array module + FFT hook from SsState),
+        # so no runtime CPU/GPU dispatch is needed here.
+        T_surf = _ops.reconstruct_surface_temperature(a, SsState)
+
         # Ensure T_surf is on CPU for coordinate extraction
         if hasattr(T_surf, 'get'):
             T_surf = T_surf.get()
