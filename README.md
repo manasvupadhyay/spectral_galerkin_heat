@@ -3,7 +3,7 @@
 **A semi-analytical, modular solution for the heat equation with support for CPU/GPU backends and G-code-driven laser paths.**
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-[**Read the full Sphinx Documentation**](*link to be added*) (or build locally via `make -C docs html`)
+[**Read the full Sphinx Documentation**](https://theoadx.github.io/hsg-docs/) (or build locally via `make -C docs html`)
 
 ---
 
