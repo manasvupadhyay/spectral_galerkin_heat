@@ -210,6 +210,9 @@ class FineMeshState:
         Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
 
         self.refinement = 4
+        # TODO: these fine-mesh box extents are hard-coded; they should become
+        # configurable parameters (or be sized dynamically from the domain /
+        # laser footprint) rather than baked-in constants.
         Lx_box, Ly_box, Lz_box = 0.9e-3, 0.9e-3, 0.04e-3
 
         self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
@@ -247,7 +250,7 @@ class FineMeshState:
             (laser_state.x, self.dx_fine, self.nx_box),
             (laser_state.y, self.dy_fine, self.ny_box),
         ]):
-            i_start, i_end, _ = _calculate_subgrid_indices(pos, d, self.n_fine_totals[a], n_box)
+            i_start, i_end, _ = spec_hp._calculate_subgrid_indices(pos, d, self.n_fine_totals[a], n_box)
             self.B_fine[a][:, :] = self.B_fine_full[a][:, i_start:i_end]
         # z does not slide
 
@@ -511,37 +514,6 @@ def reconstruct_bottom_temperature(a, SsState):
     return (SsState.grid.recon_scale * dct_result).astype(cp.float32)
 
 
-
-def _calculate_subgrid_indices(pos, dx, n_total_fine, n_box):
-    """
-    Calculate start/end indices to center a box of size n_box around a physical position.
-    
-    Args:
-        pos (float): Physical position (laser center).
-        dx (float): Grid spacing.
-        n_total_fine (int): Total number of points in fine grid.
-        n_box (int): Number of points in the active box.
-        
-    Returns:
-        tuple: (ix_start, ix_end, ix_relative_center)
-    """
-    # Find nearest global index for the center position
-    idx_global = int(round(max(0.0, min(pos / dx, n_total_fine - 1))))
-    
-    target_center_offset = n_box // 2
-    idx_start = idx_global - target_center_offset
-    
-    max_start = max(0, n_total_fine - n_box)
-    idx_start = max(0, min(idx_start, max_start))
-    idx_end = idx_start + n_box
-    
-    idx_relative = idx_global - idx_start
-    idx_relative = max(0, min(idx_relative, n_box - 1))
-    
-    return idx_start, idx_end, idx_relative
-
-
-# keep in helpers
 
 def shift_flux(field: cp.ndarray, shift: tuple, geom) -> cp.ndarray:
     """Translate a surface flux field by ``shift=(dx, dy)`` meters on GPU."""

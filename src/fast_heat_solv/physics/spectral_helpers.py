@@ -62,6 +62,45 @@ def _C_coef(N, L, xp=np):
     C[0] = xp.sqrt(1.0 / L)
     return C
 
+
+def _calculate_subgrid_indices(pos, dx, n_total_fine, n_box):
+    """Center a box of ``n_box`` cells around a physical position.
+
+    Backend-agnostic: operates on plain Python scalars, so it is shared by both
+    the CPU and GPU kernel modules.
+
+    Parameters
+    ----------
+    pos : float
+        Physical position (laser center).
+    dx : float
+        Grid spacing.
+    n_total_fine : int
+        Total number of points in the fine grid.
+    n_box : int
+        Number of points in the active box.
+
+    Returns
+    -------
+    tuple of int
+        ``(idx_start, idx_end, idx_relative)`` — box start/end indices and the
+        position's index relative to the box start.
+    """
+    # Nearest global index for the center position, clamped to the fine grid.
+    idx_global = int(round(max(0.0, min(pos / dx, n_total_fine - 1))))
+
+    # Desired start index to center the box, clamped to [0, max_start].
+    idx_start = idx_global - n_box // 2
+    max_start = max(0, n_total_fine - n_box)
+    idx_start = max(0, min(idx_start, max_start))
+    idx_end = idx_start + n_box
+
+    # Position index relative to the box start, clamped to the box.
+    idx_relative = idx_global - idx_start
+    idx_relative = max(0, min(idx_relative, n_box - 1))
+
+    return idx_start, idx_end, idx_relative
+
 def _cosine_basis_along_axis(n_modes, length, coords):
     """
     Compute cosine basis values cos(k*pi*x/L) for given coordinates.
