@@ -236,7 +236,7 @@ class LocalFSIOManager(IOManager):
                     # Determine center based on laser position
                     laser_state = laser_path.get_state(time, 0.0)
                     height=0.0002
-                    center = (float(laser_state.x), float(laser_state.y), self.context.geom.Lz-height/2)
+                    center = (float(laser_state.x), float(laser_state.y), self.context.geom.size.z-height/2)
                     generate_plots(
                         xdmf_path=xdmf_path,
                         output_dir=cut_views_dir,

@@ -71,7 +71,7 @@ class LaserPathFromX0(LaserPath):
         self.context = context
         self.speed = np.float32(speed)
         self.x0 = np.float32(x0)
-        self.y0 = np.float32(context.geom.Ly * 0.5)
+        self.y0 = np.float32(context.geom.size.y * 0.5)
 
     def get_state(self, time: float, dt: float) -> LaserState:
         laser = self.context.laser

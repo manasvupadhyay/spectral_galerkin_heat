@@ -82,7 +82,7 @@ dt = context.num.dt
 t_end = context.num.t_end
 
 print(f"Running heat solver in library mode: t_end={t_end:.2e} s, dt={dt:.2e} s")
-print(f"Mesh: {context.geom.nx} x {context.geom.ny} x {context.geom.nz}")
+print(f"Mesh: {context.geom.n.x} x {context.geom.n.y} x {context.geom.n.z}")
 print("-" * 60)
 
 step = 0

@@ -121,8 +121,8 @@ def _build_context(cfg: dict) -> SimulationContext:
     """Parse config and attach a FixedLaser at domain centre."""
     ctx = SimulationContext.from_dict(copy.deepcopy(cfg))
     ctx.laser_path = FixedLaser(
-        x=ctx.geom.Lx / 2,
-        y=ctx.geom.Ly / 2,
+        x=ctx.geom.size.x / 2,
+        y=ctx.geom.size.y / 2,
         power=cfg["laser"]["power_nominal"],
     )
     return ctx

@@ -113,7 +113,7 @@ class SpectralSolver(HeatSolver):
         # Use T0 if present, else default to 293.0
         T0 = getattr(mat, 'T0', 293.0)
         self.state.a[0, 0, 0] = xp.float32(
-            T0 * math.sqrt(geom.Lx * geom.Ly * geom.Lz)
+            T0 * math.sqrt(geom.size.x * geom.size.y * geom.size.z)
         )
 
         return self.state
@@ -173,7 +173,7 @@ class SpectralSolver(HeatSolver):
             grid.x, grid.y, laser_state.x, laser_state.y,
             laser_params.radius, laser_coef,
         )
-        P_laser = xp.sum(q_las) * geom.dx * geom.dy
+        P_laser = xp.sum(q_las) * geom.d.x * geom.d.y
 
         # ================================================================
         # 2. Apply exponential propagator:  θ̃ = E · θ
@@ -370,7 +370,7 @@ class SpectralSolver(HeatSolver):
         # Forward DCT-II (ortho) converts the spatial field to ortho-normalised
         # coefficients. The solver's internal modes use a scaling of
         # sqrt(dx*dy*dz) relative to the standard ortho DCT coefficients.
-        scale = xp.float32(math.sqrt(float(geom.dx * geom.dy * geom.dz)))
+        scale = xp.float32(math.sqrt(float(geom.d.x * geom.d.y * geom.d.z)))
         self.state.a = kernels.DCT_II(T) * scale
 
     def finalize(self) -> None:

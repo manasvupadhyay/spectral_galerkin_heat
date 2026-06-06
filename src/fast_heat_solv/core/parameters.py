@@ -21,7 +21,7 @@ __author__ = "Théo Andrieux"
 __copyright__ = "Copyright 2026, LMS, École Polytechnique"
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Any, Dict, TYPE_CHECKING
+from typing import Optional, Any, Dict, TYPE_CHECKING
 import numpy as np
 import os
 
@@ -161,74 +161,27 @@ class MaterialParams:
 
 @dataclass
 class GeomParams:
-    """
-    Rectangular domain [0, Lx] × [0, Ly] × [0, Lz] with uniform spectral grid.
-    Derived fields (x, y, z, dx, dy, dz) computed in __post_init__.
+    """Rectangular domain ``[0, Lx] × [0, Ly] × [0, Lz]`` with a uniform spectral grid.
+
+    The geometry is stored as grouped ``(x, y, z)`` triples (:class:`Vec3`)
+    rather than loose scalars, so e.g. the spacing is ``geom.d.x`` /
+    ``geom.d`` (the whole triple) instead of ``geom.dx``.
 
     Attributes
     ----------
-    Lx : float
-        Domain size in x direction (meters).
-    Ly : float
-        Domain size in y direction (meters).
-    Lz : float
-        Domain size in z direction (meters).
-    nx : int
-        Number of grid points in x.
-    ny : int
-        Number of grid points in y.
-    nz : int
-        Number of grid points in z.
-    x : np.ndarray
-        1D x coordinates (computed, cell-centered).
-    y : np.ndarray
-        1D y coordinates (computed, cell-centered).
-    z : np.ndarray
-        1D z coordinates (computed, node-centered).
-    dx : float
-        Grid spacing in x = Lx / nx.
-    dy : float
-        Grid spacing in y = Ly / ny.
-    dz : float
-        Grid spacing in z = Lz / nz.
     size : Vec3
-        Domain extent ``(Lx, Ly, Lz)`` grouped as one triple.
+        Domain extent ``(Lx, Ly, Lz)`` in metres.
     n : Vec3
-        Mesh counts ``(nx, ny, nz)`` grouped as one triple.
+        Mesh counts ``(nx, ny, nz)``.
     d : Vec3
-        Grid spacing ``(dx, dy, dz)`` grouped as one triple (``size / n``).
+        Grid spacing ``(dx, dy, dz) = size / n`` (computed in ``__post_init__``).
     """
-    Lx: float
-    Ly: float
-    Lz: float
-    nx: int
-    ny: int
-    nz: int
-
-    # Grid arrays (initialized in __post_init__ or property)
-    x: np.ndarray = field(init=False, default=None)
-    y: np.ndarray = field(init=False, default=None)
-    z: np.ndarray = field(init=False, default=None)
-    dx: float = field(init=False)
-    dy: float = field(init=False)
-    dz: float = field(init=False)
-
-    # Grouped triples (see Vec3); flat fields above are kept for back-compat.
-    size: Vec3 = field(init=False)
-    n: Vec3 = field(init=False)
+    size: Vec3
+    n: Vec3
     d: Vec3 = field(init=False)
 
     def __post_init__(self):
-        self.size = Vec3(self.Lx, self.Ly, self.Lz)
-        self.n = Vec3(self.nx, self.ny, self.nz)
         self.d = self.size / self.n
-
-        self.dx, self.dy, self.dz = self.d
-
-        self.x = np.linspace(0.0, self.Lx, self.nx, endpoint=False).astype(np.float32)
-        self.y = np.linspace(0.0, self.Ly, self.ny, endpoint=False).astype(np.float32)
-        # Check if z endpoint should be included or not. Usually for spectral in Z we might want specific BCs.
-        self.z = np.linspace(0.0, self.Lz, self.nz).astype(np.float32)
 
 @dataclass
 class LaserParams:
@@ -331,8 +284,8 @@ class SimulationContext:
         )
 
         geom_params = GeomParams(
-            Lx=float(Lx), Ly=float(Ly), Lz=float(Lz),
-            nx=int(nx), ny=int(ny), nz=int(nz)
+            size=Vec3(float(Lx), float(Ly), float(Lz)),
+            n=Vec3(int(nx), int(ny), int(nz)),
         )
 
         mat_cfg = cfg.get('material', {})

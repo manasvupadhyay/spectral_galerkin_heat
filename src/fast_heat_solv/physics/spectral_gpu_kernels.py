@@ -263,5 +263,5 @@ def IDCT_II(a):
 def shift_flux(field: cp.ndarray, shift: tuple, geom) -> cp.ndarray:
     """Translate a surface flux field by ``shift=(dx, dy)`` meters on GPU."""
     dx, dy = shift
-    shift_pixels = (dy / geom.dy, dx / geom.dx)
+    shift_pixels = (dy / geom.d.y, dx / geom.d.x)
     return _ndshift(field, shift_pixels, order=1, mode='constant', cval=0.0)

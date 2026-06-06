@@ -96,14 +96,14 @@ class SpectralGrid:
                        for n, L in zip(geom.n, geom.size))
 
         # Scaling factors (scalar math stays on the host via np.sqrt).
-        dx, dy = geom.dx, geom.dy
-        nx, ny = geom.nx, geom.ny
-        Lx, Ly = geom.Lx, geom.Ly
+        dx, dy = geom.d.x, geom.d.y
+        nx, ny = geom.n.x, geom.n.y
+        Lx, Ly = geom.size.x, geom.size.y
         self.dct_scale = xp.float32((dx * dy) * np.sqrt((nx * ny) / (Lx * Ly)))
         self.recon_scale = xp.float32(np.sqrt(nx * ny) / np.sqrt(Lx * Ly))
 
         # Compute top-surface weighting for projection
-        sign = xp.power(-1.0, xp.arange(geom.nz, dtype=xp.float32)).astype(xp.float32)
+        sign = xp.power(-1.0, xp.arange(geom.n.z, dtype=xp.float32)).astype(xp.float32)
         self.Cp32_broadcast = (self.C[2].astype(xp.float32) * sign)[:, None, None]
 
         # Bottom-surface weighting: cos(p*pi*0/Lz) = 1, so no sign alternation
@@ -119,9 +119,9 @@ class SpectralGrid:
         if self.B_recon is not None:
             return
 
-        nx, ny, nz = geom.nx, geom.ny, geom.nz
-        Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
-        dx, dy, dz = geom.dx, geom.dy, geom.dz
+        nx, ny, nz = geom.n
+        Lx, Ly, Lz = geom.size
+        dx, dy, dz = geom.d
 
         self.coords_rec = [((np.arange(n + 1)) * d).astype(np.float32)
                            for n, d in zip((nx, ny, nz), (dx, dy, dz))]
@@ -152,8 +152,8 @@ class FineMeshState:
     Q_prev: Any = None
 
     def __init__(self, geom, grid: SpectralGrid, xp):
-        dx, dy, dz = geom.dx, geom.dy, geom.dz
-        Lx, Ly, Lz = geom.Lx, geom.Ly, geom.Lz
+        dx, dy, dz = geom.d
+        Lx, Ly, Lz = geom.size
 
         self.refinement = 4
         # TODO: these fine-mesh box extents are hard-coded; they should become
@@ -171,7 +171,7 @@ class FineMeshState:
         z_fine_global = (Lz - Lz_box) + self.coords_fine[2]
 
         logger.info("Precomputing fine cosine bases...")
-        mode_counts = [geom.nx, geom.ny, geom.nz]
+        mode_counts = list(geom.n)
         L_domain = [Lx, Ly, Lz]
         fine_coords = [self.coords_fine[0], self.coords_fine[1], z_fine_global]
         self.B_fine_full = [
@@ -184,8 +184,8 @@ class FineMeshState:
         self.nz_box = min(int(np.ceil(Lz_box / self.dz_fine)), self.n_fine_totals[2])
 
         self.B_fine = [
-            xp.zeros((geom.nx, self.nx_box), dtype=xp.float32),
-            xp.zeros((geom.ny, self.ny_box), dtype=xp.float32),
+            xp.zeros((geom.n.x, self.nx_box), dtype=xp.float32),
+            xp.zeros((geom.n.y, self.ny_box), dtype=xp.float32),
             self.B_fine_full[2][:, :self.nz_box],  # z: static full-depth slice
         ]
         self.dV_fine = self.dx_fine * self.dy_fine * self.dz_fine

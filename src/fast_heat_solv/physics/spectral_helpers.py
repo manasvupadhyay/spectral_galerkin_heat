@@ -231,9 +231,9 @@ def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
     if coords.ndim != 2 or coords.shape[1] != 3:
         raise ValueError("coords must be of shape (N, 3)")
 
-    x_vals = np.clip(coords[:, 0], 0.0, geom.Lx)
-    y_vals = np.clip(coords[:, 1], 0.0, geom.Ly)
-    z_vals = np.clip(coords[:, 2], 0.0, geom.Lz)
+    x_vals = np.clip(coords[:, 0], 0.0, geom.size.x)
+    y_vals = np.clip(coords[:, 1], 0.0, geom.size.y)
+    z_vals = np.clip(coords[:, 2], 0.0, geom.size.z)
 
     # Ensure modal coefficient arrays and spectral coefficients are NumPy arrays
     # This avoids mixed NumPy/CuPy arithmetic when CPU-based helpers are used.
@@ -249,9 +249,9 @@ def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
     C = [_to_numpy(c) for c in grid.C]
     a_np = _to_numpy(a).astype(np.float32)
 
-    Bx = (C[0][:, None] * _cosine_basis_along_axis(num.nx, geom.Lx, x_vals)).astype(np.float32)
-    By = (C[1][:, None] * _cosine_basis_along_axis(num.ny, geom.Ly, y_vals)).astype(np.float32)
-    Bz = (C[2][:, None] * _cosine_basis_along_axis(num.nz, geom.Lz, z_vals)).astype(np.float32)
+    Bx = (C[0][:, None] * _cosine_basis_along_axis(num.nx, geom.size.x, x_vals)).astype(np.float32)
+    By = (C[1][:, None] * _cosine_basis_along_axis(num.ny, geom.size.y, y_vals)).astype(np.float32)
+    Bz = (C[2][:, None] * _cosine_basis_along_axis(num.nz, geom.size.z, z_vals)).astype(np.float32)
     temps = np.einsum('pnm,pi,ni,mi->i', a_np, Bz, By, Bx, optimize=True)
 
     return temps.astype(np.float32)
@@ -281,7 +281,7 @@ def save_temp_profiles(
 
     # 1. Determine Sample Center (Intersection Point)
     # Use the TOP surface (z = Lz) as reference
-    z_top = float(geom.Lz)
+    z_top = float(geom.size.z)
 
 
     if center == "hotspot":
@@ -317,15 +317,15 @@ def save_temp_profiles(
         raise ValueError(f"Unknown center method: {center}")
 
     # Clamp to domain
-    x_center = float(np.clip(x_center, 0.0, geom.Lx))
-    y_center = float(np.clip(y_center, 0.0, geom.Ly))
+    x_center = float(np.clip(x_center, 0.0, geom.size.x))
+    y_center = float(np.clip(y_center, 0.0, geom.size.y))
 
     # 2-4. Generate coords, build point clouds, and evaluate temperature for each axis
     # Each entry: (key, domain_length, (fixed_x_or_None, fixed_y_or_None, fixed_z_or_None))
     axes_cfg = [
-        ('x', geom.Lx, (None, y_center, z_top)),
-        ('y', geom.Ly, (x_center, None, z_top)),
-        ('z', geom.Lz, (x_center, y_center, None)),
+        ('x', geom.size.x, (None, y_center, z_top)),
+        ('y', geom.size.y, (x_center, None, z_top)),
+        ('z', geom.size.z, (x_center, y_center, None)),
     ]
     profiles = {}
     for key, L_axis, fixed in axes_cfg:

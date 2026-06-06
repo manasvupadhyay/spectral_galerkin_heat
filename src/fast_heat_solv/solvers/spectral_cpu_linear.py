@@ -88,7 +88,7 @@ class SpectralSolverCPULinear(HeatSolver):
         self.state.a = np.zeros((num.nz, num.ny, num.nx), dtype=np.float32)
         # Use T0 if present, else default to 293.0
         T0 = getattr(mat, 'T0', 293.0)
-        self.state.a[0,0,0] = T0 * np.sqrt(geom.Lx * geom.Ly * geom.Lz)
+        self.state.a[0,0,0] = T0 * np.sqrt(geom.size.x * geom.size.y * geom.size.z)
 
         return self.state
 
@@ -146,7 +146,7 @@ class SpectralSolverCPULinear(HeatSolver):
         # Reconstruct surface temperature just for metrics
         T_temp = kernels.reconstruct_surface_temperature(buffers.a_temp, SsState)
         
-        P_laser = np.sum(q_las) * geom.dx * geom.dy
+        P_laser = np.sum(q_las) * geom.d.x * geom.d.y
 
         # Metrics for logging/diagnostics
         metrics = {
@@ -177,7 +177,7 @@ class SpectralSolverCPULinear(HeatSolver):
             raise RuntimeError("Solver must be initialized before calling set_state().")
         geom = self.context.geom
         T = np.asarray(temperature_field, dtype=np.float32)
-        scale = np.sqrt(np.float32(geom.dx * geom.dy * geom.dz))
+        scale = np.sqrt(np.float32(geom.d.x * geom.d.y * geom.d.z))
         self.state.a = kernels.DCT_II(T) * scale
 
     def finalize(self) -> None:
