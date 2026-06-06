@@ -59,8 +59,8 @@ SolverBuffers = _state.SolverBuffers
 class SpectralSolverState(_state.SpectralSolverState):
     """CPU spectral state: :class:`spectral_state.SpectralSolverState` bound to NumPy."""
 
-    def __init__(self, phys, geom, num):
-        super().__init__(phys, geom, num, xp=np)
+    def __init__(self, phys, geom, num, fine):
+        super().__init__(phys, geom, num, fine, xp=np)
         # NumPy/Numba primitives for the shared free functions in spectral_ops.
         self.hooks = _state.BackendHooks(
             idct=IDCT_II,

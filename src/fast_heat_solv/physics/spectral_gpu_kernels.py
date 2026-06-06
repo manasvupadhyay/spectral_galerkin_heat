@@ -129,8 +129,8 @@ SolverBuffers = _state.SolverBuffers
 class SpectralSolverState(_state.SpectralSolverState):
     """GPU spectral state: :class:`spectral_state.SpectralSolverState` bound to CuPy."""
 
-    def __init__(self, phys, geom, num):
-        super().__init__(phys, geom, num, xp=cp)
+    def __init__(self, phys, geom, num, fine):
+        super().__init__(phys, geom, num, fine, xp=cp)
         # CuPy/CUDA primitives for the shared free functions in spectral_ops.
         self.hooks = _state.BackendHooks(
             idct=IDCT_II,

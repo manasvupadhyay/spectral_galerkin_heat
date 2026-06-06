@@ -204,6 +204,26 @@ class LaserParams:
     power: float = 0.0
 
 @dataclass
+class FineMeshParams:
+    """Moving fine-mesh ROI parameters for latent-heat / nonlinear terms.
+
+    The solver reconstructs temperature on a refined box that tracks the laser,
+    to resolve the sharp mushy-zone gradients the coarse spectral grid cannot.
+
+    Attributes
+    ----------
+    refinement : int
+        Per-axis cell-refinement factor of the fine mesh relative to the global
+        spectral grid (fine spacing ``= geom.d / refinement``), by default 4.
+    box_size : Vec3
+        Extent of the fine ROI box in metres ``(Lx_box, Ly_box, Lz_box)``: the
+        x/y extents span the laser footprint, the z extent is the near-surface
+        depth. By default ``Vec3(0.9e-3, 0.9e-3, 0.04e-3)``.
+    """
+    refinement: int = 4
+    box_size: Vec3 = Vec3(0.9e-3, 0.9e-3, 0.04e-3)
+
+@dataclass
 class SimulationContext:
     """
     Complete simulation configuration: numerics, material, domain, laser, and I/O.
@@ -226,18 +246,22 @@ class SimulationContext:
         Solver method ('spectral' or 'fem'), by default 'spectral'.
     backend : str, optional
         Compute backend ('cpu' or 'gpu'), by default 'cpu'.
+    fine : FineMeshParams, optional
+        Moving fine-mesh ROI parameters (refinement, box extents). Defaults to
+        :class:`FineMeshParams` defaults.
     """
     num: 'NumParams'
     mat: 'MaterialParams'
     geom: 'GeomParams'
     laser: 'LaserParams'
     laser_path: 'LaserPath' # Use forward reference
-    
+
     # Existing fields
     io: Dict[str, Any]  # Flat dict with new keys
     # Execution configuration
     method: str = "spectral"  # "spectral" or "fem"
     backend: str = "cpu"      # "cpu" or "gpu"
+    fine: 'FineMeshParams' = field(default_factory=FineMeshParams)
 
     @classmethod
     def from_dict(cls, cfg: Dict[str, Any], config_dir: Optional[str] = None) -> 'SimulationContext':
@@ -288,6 +312,15 @@ class SimulationContext:
             n=Vec3(int(nx), int(ny), int(nz)),
         )
 
+        # Fine-mesh ROI (optional; defaults reproduce the previous hardcoded box).
+        fine_cfg = cfg.get('fine_mesh', {})
+        default_box = (0.9e-3, 0.9e-3, 0.04e-3)
+        box = fine_cfg.get('box_size', default_box)
+        fine_params = FineMeshParams(
+            refinement=int(fine_cfg.get('refinement', 4)),
+            box_size=Vec3(float(box[0]), float(box[1]), float(box[2])),
+        )
+
         mat_cfg = cfg.get('material', {})
         mat_params = MaterialParams(
             name=mat_cfg.get('name', 'Material'),
@@ -332,4 +365,4 @@ class SimulationContext:
                 laser_path = GCodeLaserPath(gcode_file, initial_position=initial_position)
                 
         io_cfg = cfg.get('io', {})
-        return cls(num=num_params, mat=mat_params, geom=geom_params, laser=laser_params, laser_path=laser_path, io=io_cfg, method=sim_method, backend=sim_backend)
+        return cls(num=num_params, mat=mat_params, geom=geom_params, laser=laser_params, laser_path=laser_path, io=io_cfg, method=sim_method, backend=sim_backend, fine=fine_params)

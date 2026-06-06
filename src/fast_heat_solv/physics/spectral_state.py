@@ -7,8 +7,8 @@ They used to exist as near-identical copies in ``spectral_cpu_kernels`` and
 are unified here and parametrized by the array module ``xp``.
 
 Each kernel module exposes a thin :class:`SpectralSolverState` subclass that
-binds its own ``xp`` (NumPy or CuPy), so the public construction signature
-``SpectralSolverState(phys, geom, num)`` is unchanged.
+binds its own ``xp`` (NumPy or CuPy), so callers construct it as
+``SpectralSolverState(phys, geom, num, fine)`` regardless of backend.
 
 Like :class:`~fast_heat_solv.core.vector.Vec3`, this lives at the Python
 state-construction layer only: a dataclass cannot enter the numba
@@ -151,15 +151,14 @@ class FineMeshState:
     T_prev: Any = None
     Q_prev: Any = None
 
-    def __init__(self, geom, grid: SpectralGrid, xp):
+    def __init__(self, geom, grid: SpectralGrid, fine, xp):
         dx, dy, dz = geom.d
         Lx, Ly, Lz = geom.size
 
-        self.refinement = 4
-        # TODO: these fine-mesh box extents are hard-coded; they should become
-        # configurable parameters (or be sized dynamically from the domain /
-        # laser footprint) rather than baked-in constants.
-        Lx_box, Ly_box, Lz_box = 0.9e-3, 0.9e-3, 0.04e-3
+        # Fine-mesh refinement factor and ROI box extents come from FineMeshParams
+        # (configurable via the ``fine_mesh`` config section).
+        self.refinement = fine.refinement
+        Lx_box, Ly_box, Lz_box = fine.box_size
 
         self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
         d_fine = [self.dx_fine, self.dy_fine, self.dz_fine]
@@ -251,8 +250,8 @@ class SpectralSolverState:
 
     Backend-parametrized: pass ``xp=numpy`` or ``xp=cupy``. The kernel modules
     expose thin subclasses that bind their own ``xp`` (and attach
-    :class:`BackendHooks`) so callers can keep using the
-    ``SpectralSolverState(phys, geom, num)`` signature.
+    :class:`BackendHooks`) so callers use the
+    ``SpectralSolverState(phys, geom, num, fine)`` signature.
     """
     # 1. Components
     grid: SpectralGrid = None
@@ -274,11 +273,11 @@ class SpectralSolverState:
     # attached by the per-backend subclass; see ``BackendHooks``.
     hooks: "BackendHooks" = None
 
-    def __init__(self, phys, geom, num, xp):
+    def __init__(self, phys, geom, num, fine, xp):
         self.xp = xp
         # Initialize sub-components
         self.grid = SpectralGrid(geom, xp)
-        self.fine_mesh = FineMeshState(geom, self.grid, xp)
+        self.fine_mesh = FineMeshState(geom, self.grid, fine, xp)
         self.buffers = SolverBuffers(num, self.fine_mesh, xp)
 
         # Precompute propagators

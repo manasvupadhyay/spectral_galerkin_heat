@@ -106,7 +106,7 @@ class SpectralSolver(HeatSolver):
         mat = self.context.mat
 
         # Initialize spectral solver state
-        self.state = kernels.SpectralSolverState(mat, geom, num)
+        self.state = kernels.SpectralSolverState(mat, geom, num, self.context.fine)
 
         # Initial condition: mean T in mode (0,0,0)
         self.state.a = xp.zeros((num.nz, num.ny, num.nx), dtype=xp.float32)
