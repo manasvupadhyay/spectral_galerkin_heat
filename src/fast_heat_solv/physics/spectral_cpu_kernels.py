@@ -29,6 +29,7 @@ from scipy.ndimage import shift as scipy_shift
 import pyfftw
 
 from fast_heat_solv.physics import spectral_state as _state
+from fast_heat_solv.physics import spectral_ops as _ops
 
 __all__ = [
     "SpectralSolverState",
@@ -162,35 +163,14 @@ def compute_gaussian_laser_flux(x, y, laser_x, laser_y, laser_r, laser_coef):
     return (laser_coef * np.exp(-2.0 * r_sq / laser_r ** 2))
 
 
-def project_box_to_modes(field_box, SsState):
-    """Project fine box field to global spectral modes."""
-    if SsState.fine_mesh is None:
-        raise RuntimeError("Fine mesh not initialized.")
-    fm = SsState.fine_mesh
-    modes = np.einsum('zyx,Zz,Yy,Xx->ZYX', field_box, fm.B_fine[2], fm.B_fine[1], fm.B_fine[0], optimize=True)
-    return modes * fm.dV_fine
-
-
-def _reconstruct_temperature_box(a, SsState):
-    """Reconstructs temperature in a small ROI around the laser."""
-    if SsState.fine_mesh is None:
-        raise RuntimeError("Fine mesh not initialized.")
-    fm = SsState.fine_mesh
-    return np.einsum('ZYX,Zz,Yy,Xx->zyx', a, fm.B_fine[2], fm.B_fine[1], fm.B_fine[0], optimize=True)
-
-def initialize_latent_heat_if_needed(SsState):
-    """Initialize fine-mesh T_prev from current trial modes on the first time step.
-
-    Must be called after ``buffers.a_temp`` has been set to a reasonable
-    estimate (e.g. the decayed modes).
-    """
-    fm = SsState.fine_mesh
-    if fm is None or fm.T_prev is not None:
-        return
-    T_box = _reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
-    fm.T_prev = T_box.copy()
-    if fm.Q_prev is None:
-        fm.Q_prev = np.zeros_like(SsState.buffers.Q_latent_buffer)
+# Backend-agnostic einsum/copy free functions live in ``spectral_ops`` and read
+# the array module from ``SsState.xp``. Re-exported here so callers can keep using
+# ``spectral_cpu_kernels.<fn>``; ``_reconstruct_temperature_box`` is used below by
+# ``compute_latent_heat_source``.
+project_box_to_modes = _ops.project_box_to_modes
+_reconstruct_temperature_box = _ops.reconstruct_temperature_box
+initialize_latent_heat_if_needed = _ops.initialize_latent_heat_if_needed
+update_latent_heat_history = _ops.update_latent_heat_history
 
 
 def shift_latent_heat_history(fm, laser_state, num):
@@ -228,19 +208,6 @@ def compute_latent_heat_source(Q_buffer, phys, num, SsState):
         phys.rho, phys.L_f, num.dt,
         Q_buffer
     )
-
-
-def update_latent_heat_history(SsState):
-    """Store the converged fine-mesh temperature as T_prev for the next step.
-
-    Call once per time step, after the fixed-point iteration has converged
-    and ``buffers.a_temp`` holds the final spectral modes.
-    """
-    fm = SsState.fine_mesh
-    if fm is None:
-        return
-    T_box = _reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
-    fm.T_prev[:] = T_box[:]
 
 
 def DCT_II(q):

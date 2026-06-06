@@ -237,7 +237,12 @@ class SpectralSolverState:
     K: Any = None
     KK: Any = None
 
+    # 4. Bound array module (numpy or cupy) — lets backend-agnostic free
+    # functions in ``spectral_ops`` recover ``xp`` from the state object.
+    xp: Any = None
+
     def __init__(self, phys, geom, num, xp):
+        self.xp = xp
         # Initialize sub-components
         self.grid = SpectralGrid(geom, xp)
         self.fine_mesh = FineMeshState(geom, self.grid, xp)
