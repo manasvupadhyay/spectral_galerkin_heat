@@ -229,7 +229,7 @@ def test_cpu_simulation_e2e(tmp_path, monkeypatch):
     - Final temperature field: no NaN, no Inf, max > T0 (laser heated material).
     """
     # Defer heavy imports so collection stays fast for the default suite.
-    from fast_heat_solv.factories.cpu_factory import CPUSimulationFactory
+    from fast_heat_solv.solvers import build_solver
     from fast_heat_solv.runner import StandaloneHeatRunner
 
     # The IO manager resolves output_root to a relative './out/'; chdir keeps
@@ -239,7 +239,7 @@ def test_cpu_simulation_e2e(tmp_path, monkeypatch):
     context = _build_context(_CONFIG)
     runner = StandaloneHeatRunner(
         context,
-        CPUSimulationFactory(context),
+        build_solver(context),
         # config / yaml_path omitted: skips the ASCII log header that would
         # require a YAML file on disk and a git-rev lookup.
     )
@@ -266,7 +266,7 @@ def test_cpu_simulation_e2e(tmp_path, monkeypatch):
 def test_gpu_simulation_e2e(tmp_path, monkeypatch):
     """GPU pipeline smoke test — skipped when CuPy / CUDA is unavailable.
 
-    Mirrors the CPU test exactly but uses GPUSimulationFactory.
+    Mirrors the CPU test exactly but selects the GPU backend.
     """
     try:
         import cupy
@@ -274,7 +274,7 @@ def test_gpu_simulation_e2e(tmp_path, monkeypatch):
     except Exception:
         pytest.skip("CuPy not available or no CUDA device found")
 
-    from fast_heat_solv.factories.gpu_factory import GPUSimulationFactory
+    from fast_heat_solv.solvers import build_solver
     from fast_heat_solv.runner import StandaloneHeatRunner
 
     monkeypatch.chdir(tmp_path)
@@ -283,7 +283,7 @@ def test_gpu_simulation_e2e(tmp_path, monkeypatch):
     gpu_cfg["simulation"]["backend"] = "gpu"
 
     context = _build_context(gpu_cfg)
-    runner = StandaloneHeatRunner(context, GPUSimulationFactory(context))
+    runner = StandaloneHeatRunner(context, build_solver(context))
     with _log_picard_iterations(runner) as picard_counts:
         runner.run()
 
@@ -297,21 +297,23 @@ def test_gpu_simulation_e2e(tmp_path, monkeypatch):
     _assert_field_sane(h5_files[-1], _T0)
 
 
-def _run_pipeline_final_field(factory_cls, cfg, run_dir, monkeypatch):
+def _run_pipeline_final_field(cfg, run_dir, monkeypatch):
     """Run one full simulation under *run_dir* and return its final field array.
 
     The IO manager always writes to ``./out/`` relative to the current working
     directory, so each backend is given its own ``run_dir`` to keep outputs
-    separate.  Returns the ``temperature`` dataset of the last
+    separate.  The solver is selected from ``cfg``'s backend via
+    :func:`build_solver`.  Returns the ``temperature`` dataset of the last
     ``field_step*.h5`` written.
     """
+    from fast_heat_solv.solvers import build_solver
     from fast_heat_solv.runner import StandaloneHeatRunner
 
     run_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.chdir(run_dir)
 
     context = _build_context(cfg)
-    runner = StandaloneHeatRunner(context, factory_cls(context))
+    runner = StandaloneHeatRunner(context, build_solver(context))
     runner.run()
 
     run_dirs = list((run_dir / "out").glob("*"))
@@ -328,9 +330,9 @@ def _run_pipeline_final_field(factory_cls, cfg, run_dir, monkeypatch):
 def test_cpu_gpu_equivalence_e2e(tmp_path, monkeypatch):
     """CPU and GPU backends must produce the same final temperature field.
 
-    Runs the identical simulation through ``CPUSimulationFactory`` and
-    ``GPUSimulationFactory`` in separate working directories, then compares the
-    final saved ``temperature`` volumes.  The tolerance is loose enough to
+    Runs the identical simulation on the CPU and GPU backends (selected via
+    ``build_solver`` from each config) in separate working directories, then
+    compares the final saved ``temperature`` volumes.  The tolerance is loose enough to
     absorb CPU/GPU implementation shift but small enough to
     catch a genuine divergence between the two kernel implementations.
 
@@ -343,20 +345,13 @@ def test_cpu_gpu_equivalence_e2e(tmp_path, monkeypatch):
     except Exception:
         pytest.skip("CuPy not available or no CUDA device found")
 
-    from fast_heat_solv.factories.cpu_factory import CPUSimulationFactory
-    from fast_heat_solv.factories.gpu_factory import GPUSimulationFactory
-
     cpu_cfg = copy.deepcopy(_CONFIG)
     cpu_cfg["simulation"]["backend"] = "cpu"
     gpu_cfg = copy.deepcopy(_CONFIG)
     gpu_cfg["simulation"]["backend"] = "gpu"
 
-    T_cpu = _run_pipeline_final_field(
-        CPUSimulationFactory, cpu_cfg, tmp_path / "cpu", monkeypatch
-    )
-    T_gpu = _run_pipeline_final_field(
-        GPUSimulationFactory, gpu_cfg, tmp_path / "gpu", monkeypatch
-    )
+    T_cpu = _run_pipeline_final_field(cpu_cfg, tmp_path / "cpu", monkeypatch)
+    T_gpu = _run_pipeline_final_field(gpu_cfg, tmp_path / "gpu", monkeypatch)
 
     assert T_cpu.shape == T_gpu.shape, (
         f"Field shape mismatch: CPU {T_cpu.shape} vs GPU {T_gpu.shape}"

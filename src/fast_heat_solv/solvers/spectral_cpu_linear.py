@@ -86,8 +86,7 @@ class SpectralSolverCPULinear(HeatSolver):
 
         # Initial condition: mean T in mode (0,0,0)
         self.state.a = np.zeros((num.nz, num.ny, num.nx), dtype=np.float32)
-        # Use T0 if present, else default to 293.0
-        T0 = getattr(mat, 'T0', 293.0)
+        T0 = mat.T0
         self.state.a[0,0,0] = T0 * np.sqrt(geom.size.x * geom.size.y * geom.size.z)
 
         return self.state
@@ -116,7 +115,6 @@ class SpectralSolverCPULinear(HeatSolver):
         # Unpack context attributes
         context = self.context
         geom = context.geom
-        mat = context.mat
         laser_params = context.laser
         laser_path: LaserPath = context.laser_path
         

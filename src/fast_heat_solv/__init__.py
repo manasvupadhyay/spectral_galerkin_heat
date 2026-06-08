@@ -29,7 +29,7 @@ phase change and evaporation.
   :func:`~fast_heat_solv.backends.get_backend`
 - **Solvers**: :class:`~fast_heat_solv.solvers.HeatSolver`,
   :class:`~fast_heat_solv.solvers.spectral.SpectralSolver`
-- **I/O**: :class:`~fast_heat_solv.io_utils.IOManager`,
+- **I/O**: :class:`~fast_heat_solv.io_utils.LocalFSIOManager`,
   :func:`~fast_heat_solv.io_utils.load_xdmf`, :func:`~fast_heat_solv.io_utils.write_structured_fields`
 - **Runner**: :class:`~fast_heat_solv.runner.StandaloneHeatRunner`
 """
@@ -46,7 +46,6 @@ from .core import (
     LaserParams,
 )
 from .io_utils import (
-    IOManager,
     LocalFSIOManager,
     load_xdmf,
     write_structured_fields,
@@ -95,7 +94,6 @@ __all__ = [
     "HeatSolver",
     "SpectralSolver",
     # I/O
-    "IOManager",
     "LocalFSIOManager",
     "load_xdmf",
     "write_structured_fields",

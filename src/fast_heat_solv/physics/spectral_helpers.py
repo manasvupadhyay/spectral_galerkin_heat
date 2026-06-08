@@ -18,6 +18,7 @@ import numpy as np
 import scipy.fft
 
 from fast_heat_solv.physics import spectral_ops as _ops
+from fast_heat_solv.backends.base import to_host
 
 
 def _C_coef(N, L, xp=np):
@@ -125,9 +126,8 @@ def reconstruct_temperature_volume(a, SsState):
         Full volumetric temperature field array.
     """
 
-    if hasattr(a, 'get'):
-        a = a.get()  # Move to CPU if it's a CuPy array
-    
+    a = to_host(a)
+
     grid = SsState.grid
 
     if grid.B_recon is None:
@@ -170,8 +170,7 @@ def reconstruct_temperature_DCT(a, SsState):
     T : ndarray, shape (N_x+1, N_y+1, N_z+1), dtype float32
         Node-centred temperature field.
     """
-    if hasattr(a, 'get'):
-        a = a.get()
+    a = to_host(a)
 
     grid = SsState.grid
     nz, ny, nx = a.shape
@@ -179,9 +178,10 @@ def reconstruct_temperature_DCT(a, SsState):
     # ── Fused 1-D weight vectors: normalization × DCT-I halving ──────
     # Combined weight[i] = C[i] * (0.5 if i>0 else 1.0)
     # Precomputed as 1-D float32 vectors (6 elements total).
-    # Handle both numpy and cupy arrays (GPU solver uses cupy)
-    wx, wy, wz = (np.array(c.get() if hasattr(c, 'get') else c, dtype=np.float32) for c in grid.C)
-    wx[1:] *= 0.5; wy[1:] *= 0.5; wz[1:] *= 0.5
+    wx, wy, wz = (np.array(to_host(c), dtype=np.float32) for c in grid.C)
+    wx[1:] *= 0.5
+    wy[1:] *= 0.5
+    wz[1:] *= 0.5
 
     # ── Scale on contiguous memory, then copy once into padded ───────
     # Working on a contiguous copy of `a` is faster than writing
@@ -235,19 +235,12 @@ def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
     y_vals = np.clip(coords[:, 1], 0.0, geom.size.y)
     z_vals = np.clip(coords[:, 2], 0.0, geom.size.z)
 
-    # Ensure modal coefficient arrays and spectral coefficients are NumPy arrays
-    # This avoids mixed NumPy/CuPy arithmetic when CPU-based helpers are used.
-    def _to_numpy(x):
-        # If x is a CuPy array with .get(), move to host; otherwise use np.asarray
-        if hasattr(x, 'get') and callable(x.get):
-            return np.asarray(x.get())
-        return np.asarray(x)
-    
-    # Support both old monolithic state and new decoupled state
-    grid = SsState.grid if hasattr(SsState, 'grid') else SsState
+    # Bring modal/spectral coefficients to host to avoid mixed NumPy/CuPy
+    # arithmetic in these CPU-based helpers.
+    grid = SsState.grid
 
-    C = [_to_numpy(c) for c in grid.C]
-    a_np = _to_numpy(a).astype(np.float32)
+    C = [to_host(c) for c in grid.C]
+    a_np = to_host(a).astype(np.float32)
 
     Bx = (C[0][:, None] * _cosine_basis_along_axis(num.nx, geom.size.x, x_vals)).astype(np.float32)
     By = (C[1][:, None] * _cosine_basis_along_axis(num.ny, geom.size.y, y_vals)).astype(np.float32)
@@ -291,19 +284,18 @@ def save_temp_profiles(
         T_surf = _ops.reconstruct_surface_temperature(a, SsState)
 
         # Ensure T_surf is on CPU for coordinate extraction
-        if hasattr(T_surf, 'get'):
-            T_surf = T_surf.get()
-            
+        T_surf = to_host(T_surf)
+
         iy_idx, ix_idx = np.unravel_index(np.argmax(T_surf), T_surf.shape)
         
-        # Handle decoupled state or monolithic state
-        grid = SsState.grid if hasattr(SsState, 'grid') else SsState
-        x_center = grid.x[ix_idx] 
+        grid = SsState.grid
+        x_center = grid.x[ix_idx]
         y_center = grid.y[iy_idx]
         
-        # Helper to safely scalarize
+        # Bring a NumPy/CuPy 0-d scalar to a host Python float.
         def _scalar(val):
-            if hasattr(val, 'item'): return val.item()
+            if hasattr(val, 'item'):
+                return val.item()
             return val
             
         x_center = _scalar(x_center)

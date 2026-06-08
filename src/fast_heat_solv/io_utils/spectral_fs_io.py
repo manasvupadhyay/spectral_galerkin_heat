@@ -4,16 +4,20 @@ import h5py
 import numpy as np
 from datetime import datetime
 from typing import Any, Dict, Optional, Union
-from fast_heat_solv.io_utils.io_base import IOManager
+
+from fast_heat_solv.backends.base import to_host
 
 logger = logging.getLogger(__name__)
 
 
 
-class LocalFSIOManager(IOManager):
-    """
-    Concrete implementation of IOManager using the local filesystem.
-    Organizes output in: output_root/run_id/{subdir}
+class LocalFSIOManager:
+    """Simulation I/O against the local filesystem.
+
+    Organizes output in ``output_root/run_id/{subdir}``. Lifecycle:
+    :meth:`initialize` once before stepping, :meth:`process_step` after each
+    step (writes at the configured interval), :meth:`process_end` for ``at_end``
+    outputs, and :meth:`finalize` to flush/close.
     """
 
     def __init__(self):
@@ -37,10 +41,10 @@ class LocalFSIOManager(IOManager):
         Setup directory structure: root/run_id/{subdirs}
         Also parses IO scheduling config (output_interval, outputs, at_end, etc.).
         """
-        self.context = context  # Store context for later use
-        # 1. Extract config. context.io is a plain dict, so read with .get();
-        # getattr() would silently always return the default (latent bug).
-        io_cfg = context.io if getattr(context, 'io', None) is not None else {}
+        self.context = context
+        # context.io is always a dict (SimulationContext sets it); the `or {}`
+        # only guards a directly-constructed context that passes io=None.
+        io_cfg = context.io or {}
         self.output_root = io_cfg.get('output_root', 'out')
         run_tag = io_cfg.get('run_tag', 'sim')
         self.save_full_fields = io_cfg.get('save_full_fields', False)
@@ -95,165 +99,175 @@ class LocalFSIOManager(IOManager):
 
     def save_step(self, time: float, step: int, state: Any, laser_path: Any, **kwargs) -> None:
         """
-        Save the current simulation state to HDF5/XDMF, with time and step in filenames and XMF metadata.
-        Handles output types as defined in the YAML config (full_volume, profiles, cut_views, modes).
+        Save the current simulation state for the requested ``output_type``.
+
+        Dispatches to a per-output helper (``full_volume``, ``modes``,
+        ``profiles`` or ``cut_views``, as defined in the YAML config). Time and
+        step are recorded in filenames / XMF metadata.
         """
-        # TODO: this branches on output_type and has grown long. Pull each branch
-        # out into its own save_* method and dispatch on output_type instead.
         output_type = kwargs.get('output_type', 'full_volume')
-        profiles_locations = kwargs.get('profiles_locations', [])
-        cut_views_planes = kwargs.get('cut_views_planes', [])
-
         try:
-            # Helper for reconstruction (lazy loaded)
-            from fast_heat_solv.physics.spectral_helpers import reconstruct_temperature_DCT
-
-            if output_type == 'full_volume':
-                # Use grid from state (refactoring support)
-                grid = state.grid if hasattr(state, 'grid') else state
-                
-                grid.prepare_full_reconstruction(self.context.geom)
-                field = reconstruct_temperature_DCT(state.a, state).transpose(2,1,0)  # Ensure (z,y,x) ordering
-                grid_coords = tuple(grid.coords_rec) if grid.coords_rec is not None else (None, None, None)
-                
-                filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
-                if hasattr(field, "get"):
-                    field = field.get()
-                step_info = _save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
-                self._saved_xmf_steps.append(step_info)
-                self._write_timeseries_xmf()
-                logger.info(f"Saved field for step {step} to {filename_base}.h5/.xmf")
-
-            elif output_type == 'modes':
-                # Save spectral modes (coefficients) to a single HDF5 file (append mode)
-                modes_file = self.get_output_path("modes.h5", subdir='fields')
-                
-                # Ensure data is on CPU
-                modes_data = state.a
-                if hasattr(modes_data, 'get'):
-                    modes_data = modes_data.get()
-                
-                # Open file in append mode (or create)
-                with h5py.File(modes_file, 'a') as f:
-                    ds_name = "modes"
-                    if ds_name not in f:
-                        # Create resizable datasets (time, nz, ny, nx)
-                        # We use maxshape=(None, ...) to allow resizing along the first dimension
-                        shape = (0,) + modes_data.shape
-                        maxshape = (None,) + modes_data.shape
-                        # Enable compression for efficiency
-                        f.create_dataset(ds_name, shape=shape, maxshape=maxshape, dtype=modes_data.dtype, chunks=True, compression="gzip")
-                        f.create_dataset("time", shape=(0,), maxshape=(None,), dtype='f8', chunks=True)
-                        f.create_dataset("step", shape=(0,), maxshape=(None,), dtype='i8', chunks=True)
-
-                    dset = f[ds_name]
-                    d_time = f["time"]
-                    d_step = f["step"]
-                    
-                    # Resize
-                    new_size = dset.shape[0] + 1
-                    dset.resize(new_size, axis=0)
-                    d_time.resize(new_size, axis=0)
-                    d_step.resize(new_size, axis=0)
-                    
-                    # Write
-                    dset[-1] = modes_data
-                    d_time[-1] = time
-                    d_step[-1] = step
-                
-                logger.info(f"Appended modes for step {step} to {modes_file}")
-
-            elif output_type == 'profiles':
-                # Compute 1D profiles using the helper (no I/O in helper)
-                from fast_heat_solv.physics.spectral_helpers import save_temp_profiles
-
-                # Determine center and laser_position robustly.
-                laser_position = None
-                center = 'hotspot'
-                # Case: profiles_locations provided as a plain string 'laser'
-                if isinstance(profiles_locations, str) and profiles_locations.lower() == 'laser':
-                    if laser_path is not None:
-                        laser_state = laser_path.get_state(time, 0.0)
-                        laser_position = (float(laser_state.x), float(laser_state.y))
-                        center = 'laser'
-                    else:
-                        logger.warning("profiles_locations='laser' requested but no laser_path available; using 'hotspot'.")
-
-                # Case: profiles_locations is a list/tuple
-                elif isinstance(profiles_locations, (list, tuple)) and len(profiles_locations) > 0:
-                    first = profiles_locations[0]
-                    if isinstance(first, str) and first.lower() == 'laser':
-                        if laser_path is not None:
-                            laser_state = laser_path.get_state(time, 0.0)
-                            laser_position = (float(laser_state.x), float(laser_state.y))
-                            center = 'laser'
-                            # replace sentinel with actual position for logging
-                            profiles_locations = [laser_position]
-                        else:
-                            logger.warning("profiles_locations contains 'laser' but no laser_path available; using 'hotspot'.")
-                    elif isinstance(first, (list, tuple)) and len(first) >= 2:
-                        # Explicit numeric coordinates provided
-                        laser_position = (float(first[0]), float(first[1]))
-                        center = laser_position
-
-                # Call helper with a well-formed laser_position (None or tuple(x,y)) and center
-                profiles = save_temp_profiles(state.a, self.context.num, self.context.geom,
-                    state, laser_position, center=center
-                )
-
-                # Write each profile to the profiles/ subfolder
-                profiles_dir = self.get_output_path('', subdir='profiles')
-                for direction, (coords, temps) in profiles.items():
-                    fname = os.path.join(profiles_dir, f"{direction}_spectral_latent_heat.txt")
-                    # Format: Coord [m] | Temp [K]
-                    np.savetxt(fname, np.vstack([coords, temps]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
-                logger.info(f"Saved 1D profiles (center={center}, {laser_position}) for step {step} to {profiles_dir}")
-            
-            elif output_type == 'cut_views':
-                # 1. Ensure XDMF exists for this step
-                filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
-                xdmf_path = f"{filename_base}.xmf"
-                
-                # Check if file exists; if not, we must reconstruct and save it
-                if not os.path.exists(xdmf_path):
-                    state.grid.prepare_full_reconstruction(self.context.geom)
-                    field = reconstruct_temperature_DCT(state.a, state).transpose(2,1,0)
-                    grid_coords = tuple(state.grid.coords_rec) if state.grid.coords_rec is not None else (None, None, None)
-                    
-                    if hasattr(field, "get"):
-                        field = field.get()
-                    step_info = _save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
-                    self._saved_xmf_steps.append(step_info)
-                    self._write_timeseries_xmf()
-                    logger.info(f"Generated XDMF for cut views at {xdmf_path}")
-
-                # 2. Generate cut views for each plane
-                from fast_heat_solv.io_utils.cut_views import generate_plots
-                cut_views_dir = self.get_output_path('', subdir='cut_views')
-                for plane in cut_views_planes:
-                    logger.warning("You may want to set parameters for center, width, height, etc.")
-                    output_file = os.path.join(cut_views_dir, f"cut_{plane}_step{step:06d}.png")
-                    # Determine center based on laser position
-                    laser_state = laser_path.get_state(time, 0.0)
-                    height=0.0002
-                    center = (float(laser_state.x), float(laser_state.y), self.context.geom.size.z-height/2)
-                    generate_plots(
-                        xdmf_path=xdmf_path,
-                        output_dir=cut_views_dir,
-                        show_ui=False,
-                        save_images=True,
-                        normal=plane[0],  # e.g., 'x', 'y', or 'z'
-                        center=center,
-                        width=0.0006,  # 0.6 mm
-                        height=height,  # 0.2 mm
-                        specific_output_filename=output_file
-                    )
-                    logger.info(f"Saved cut view {plane} for step {step} to {output_file}")
-            else:
-                logger.warning(f"Unknown output_type '{output_type}' in save_step. Skipping.")
+            match output_type:
+                case 'full_volume':
+                    self._save_full_volume(time, step, state)
+                case 'modes':
+                    self._save_modes(time, step, state)
+                case 'profiles':
+                    self._save_profiles(time, step, state, laser_path,
+                                        kwargs.get('profiles_locations', []))
+                case 'cut_views':
+                    self._save_cut_views(time, step, state, laser_path,
+                                         kwargs.get('cut_views_planes', []))
+                case _:
+                    logger.warning(f"Unknown output_type '{output_type}' in save_step. Skipping.")
         except Exception as e:
             logger.error(f"Failed to save {output_type} for step {step}: {e}")
             raise
+
+    def _save_full_volume(self, time: float, step: int, state: Any) -> None:
+        """Reconstruct the full temperature volume and write HDF5 + XDMF."""
+        from fast_heat_solv.physics.spectral_helpers import reconstruct_temperature_DCT
+
+        grid = state.grid
+
+        grid.prepare_full_reconstruction(self.context.geom)
+        field = reconstruct_temperature_DCT(state.a, state).transpose(2, 1, 0)  # Ensure (z,y,x) ordering
+        grid_coords = tuple(grid.coords_rec) if grid.coords_rec is not None else (None, None, None)
+
+        filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
+        field = to_host(field)
+        step_info = _save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
+        self._saved_xmf_steps.append(step_info)
+        self._write_timeseries_xmf()
+        logger.info(f"Saved field for step {step} to {filename_base}.h5/.xmf")
+
+    def _save_modes(self, time: float, step: int, state: Any) -> None:
+        """Append this step's spectral modes to a single resizable HDF5 file."""
+        modes_file = self.get_output_path("modes.h5", subdir='fields')
+
+        modes_data = to_host(state.a)
+
+        # Open file in append mode (or create)
+        with h5py.File(modes_file, 'a') as f:
+            ds_name = "modes"
+            if ds_name not in f:
+                # Create resizable datasets (time, nz, ny, nx)
+                # We use maxshape=(None, ...) to allow resizing along the first dimension
+                shape = (0,) + modes_data.shape
+                maxshape = (None,) + modes_data.shape
+                # Enable compression for efficiency
+                f.create_dataset(ds_name, shape=shape, maxshape=maxshape, dtype=modes_data.dtype, chunks=True, compression="gzip")
+                f.create_dataset("time", shape=(0,), maxshape=(None,), dtype='f8', chunks=True)
+                f.create_dataset("step", shape=(0,), maxshape=(None,), dtype='i8', chunks=True)
+
+            dset = f[ds_name]
+            d_time = f["time"]
+            d_step = f["step"]
+
+            # Resize
+            new_size = dset.shape[0] + 1
+            dset.resize(new_size, axis=0)
+            d_time.resize(new_size, axis=0)
+            d_step.resize(new_size, axis=0)
+
+            # Write
+            dset[-1] = modes_data
+            d_time[-1] = time
+            d_step[-1] = step
+
+        logger.info(f"Appended modes for step {step} to {modes_file}")
+
+    def _save_profiles(self, time: float, step: int, state: Any, laser_path: Any,
+                       profiles_locations: Any) -> None:
+        """Compute 1-D temperature profiles and write them to the profiles/ subfolder."""
+        # Compute 1D profiles using the helper (no I/O in helper)
+        from fast_heat_solv.physics.spectral_helpers import save_temp_profiles
+
+        # Determine center and laser position.
+        laser_position = None
+        center = 'hotspot'
+        # Case: profiles_locations provided as a plain string 'laser'
+        if isinstance(profiles_locations, str) and profiles_locations.lower() == 'laser':
+            if laser_path is not None:
+                laser_state = laser_path.get_state(time, 0.0)
+                laser_position = (float(laser_state.x), float(laser_state.y))
+                center = 'laser'
+            else:
+                logger.warning("profiles_locations='laser' requested but no laser_path available; using 'hotspot'.")
+
+        # Case: profiles_locations is a list/tuple
+        elif isinstance(profiles_locations, (list, tuple)) and len(profiles_locations) > 0:
+            first = profiles_locations[0]
+            if isinstance(first, str) and first.lower() == 'laser':
+                if laser_path is not None:
+                    laser_state = laser_path.get_state(time, 0.0)
+                    laser_position = (float(laser_state.x), float(laser_state.y))
+                    center = 'laser'
+                    # replace sentinel with actual position for logging
+                    profiles_locations = [laser_position]
+                else:
+                    logger.warning("profiles_locations contains 'laser' but no laser_path available; using 'hotspot'.")
+            elif isinstance(first, (list, tuple)) and len(first) >= 2:
+                # Explicit numeric coordinates provided
+                laser_position = (float(first[0]), float(first[1]))
+                center = laser_position
+
+        # Call helper with a well-formed laser_position (None or tuple(x,y)) and center
+        profiles = save_temp_profiles(state.a, self.context.num, self.context.geom,
+            state, laser_position, center=center
+        )
+
+        # Write each profile to the profiles/ subfolder
+        profiles_dir = self.get_output_path('', subdir='profiles')
+        for direction, (coords, temps) in profiles.items():
+            fname = os.path.join(profiles_dir, f"{direction}_spectral_latent_heat.txt")
+            # Format: Coord [m] | Temp [K]
+            np.savetxt(fname, np.vstack([coords, temps]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
+        logger.info(f"Saved 1D profiles (center={center}, {laser_position}) for step {step} to {profiles_dir}")
+
+    def _save_cut_views(self, time: float, step: int, state: Any, laser_path: Any,
+                        cut_views_planes: Any) -> None:
+        """Ensure the step's XDMF exists, then render a cut-plane image per plane."""
+        from fast_heat_solv.physics.spectral_helpers import reconstruct_temperature_DCT
+
+        # 1. Ensure XDMF exists for this step
+        filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
+        xdmf_path = f"{filename_base}.xmf"
+
+        # Check if file exists; if not, we must reconstruct and save it
+        if not os.path.exists(xdmf_path):
+            state.grid.prepare_full_reconstruction(self.context.geom)
+            field = reconstruct_temperature_DCT(state.a, state).transpose(2, 1, 0)
+            grid_coords = tuple(state.grid.coords_rec) if state.grid.coords_rec is not None else (None, None, None)
+
+            field = to_host(field)
+            step_info = _save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
+            self._saved_xmf_steps.append(step_info)
+            self._write_timeseries_xmf()
+            logger.info(f"Generated XDMF for cut views at {xdmf_path}")
+
+        # 2. Generate cut views for each plane
+        from fast_heat_solv.io_utils.cut_views import generate_plots
+        cut_views_dir = self.get_output_path('', subdir='cut_views')
+        for plane in cut_views_planes:
+            logger.warning("You may want to set parameters for center, width, height, etc.")
+            output_file = os.path.join(cut_views_dir, f"cut_{plane}_step{step:06d}.png")
+            # Determine center based on laser position
+            laser_state = laser_path.get_state(time, 0.0)
+            height = 0.0002
+            center = (float(laser_state.x), float(laser_state.y), self.context.geom.size.z - height / 2)
+            generate_plots(
+                xdmf_path=xdmf_path,
+                output_dir=cut_views_dir,
+                show_ui=False,
+                save_images=True,
+                normal=plane[0],  # e.g., 'x', 'y', or 'z'
+                center=center,
+                width=0.0006,  # 0.6 mm
+                height=height,  # 0.2 mm
+                specific_output_filename=output_file
+            )
+            logger.info(f"Saved cut view {plane} for step {step} to {output_file}")
 
     def load_step(self, step: Union[int, str] = 'latest') -> Optional[Dict[str, Any]]:
         """
@@ -381,14 +395,9 @@ def _save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", v
 
 
     x_coords, y_coords, z_coords = grid_coords
-    # Ensure all coordinate arrays are NumPy arrays (not CuPy)
-    # TODO handle that better upstream
-    if hasattr(x_coords, "get"):
-        x_coords = x_coords.get()
-    if hasattr(y_coords, "get"):
-        y_coords = y_coords.get()
-    if hasattr(z_coords, "get"):
-        z_coords = z_coords.get()
+    x_coords = to_host(x_coords)
+    y_coords = to_host(y_coords)
+    z_coords = to_host(z_coords)
 
     nz, ny, nx = field.shape
     if (nx != len(x_coords)) or (ny != len(y_coords)) or (nz != len(z_coords)):

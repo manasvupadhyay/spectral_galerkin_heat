@@ -21,8 +21,7 @@ __author__ = "Théo Andrieux"
 __copyright__ = "Copyright 2026, LMS, École Polytechnique"
 
 from abc import ABC, abstractmethod
-from typing import Any, Tuple, Dict, Optional
-import numpy as np
+from typing import Any, Tuple, Dict
 from fast_heat_solv.core.parameters import SimulationContext
 
 class HeatSolver(ABC):

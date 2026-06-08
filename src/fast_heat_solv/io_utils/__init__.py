@@ -2,7 +2,7 @@
 
 **Public API:**
 - **Data structures**: :class:`StructuredField`, :class:`UnstructuredField`, :class:`FieldData`
-- **I/O managers**: :class:`IOManager` (ABC), :class:`LocalFSIOManager` (file-system implementation)
+- **I/O manager**: :class:`LocalFSIOManager` (file-system implementation)
 - **XDMF I/O**: :func:`load_xdmf`, :func:`write_structured_fields`, :func:`write_unstructured_fields`, :class:`XdmfBuilder`
 - **Laser paths**: :class:`GCodeLaserPath` (for G-code based laser motion)
 - **Simulation loading**: :func:`list_runs`, :func:`load_run`
@@ -10,7 +10,6 @@
 - **Visualization**: :func:`generate_plots` (post-processing tool for creating cut-plane visualizations)
 """
 
-from .io_base import IOManager
 from .spectral_fs_io import LocalFSIOManager
 from .xdmf_io import (
     FieldData,
@@ -34,8 +33,7 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
-    # Base interfaces
-    "IOManager",
+    # I/O manager
     "LocalFSIOManager",
     # Data structures
     "FieldData",

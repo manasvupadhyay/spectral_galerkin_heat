@@ -282,7 +282,7 @@ class SimulationContext:
         Returns
         -------
         SimulationContext
-            A populated simulation context ready to initialize solver factories.
+            A populated simulation context ready to build and initialize a solver.
         """
         real_t = np.float32
         sim_cfg = cfg.get('simulation', {})

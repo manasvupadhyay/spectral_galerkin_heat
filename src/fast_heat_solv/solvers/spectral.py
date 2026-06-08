@@ -110,8 +110,7 @@ class SpectralSolver(HeatSolver):
 
         # Initial condition: mean T in mode (0,0,0)
         self.state.a = xp.zeros((num.nz, num.ny, num.nx), dtype=xp.float32)
-        # Use T0 if present, else default to 293.0
-        T0 = getattr(mat, 'T0', 293.0)
+        T0 = mat.T0
         self.state.a[0, 0, 0] = xp.float32(
             T0 * math.sqrt(geom.size.x * geom.size.y * geom.size.z)
         )
@@ -183,11 +182,10 @@ class SpectralSolver(HeatSolver):
         # ================================================================
         # 3. Prepare latent-heat history (once per step)
         # ================================================================
-        if fm:
-            fm.update(laser_state)
-            buffers.a_temp[:] = SsState.a
-            kernels.initialize_latent_heat_if_needed(SsState)
-            kernels.shift_latent_heat_history(SsState, laser_state, num)
+        fm.update(laser_state)
+        buffers.a_temp[:] = SsState.a
+        kernels.initialize_latent_heat_if_needed(SsState)
+        kernels.shift_latent_heat_history(SsState, laser_state, num)
 
         if self.track_picard_history:
             self.picard_history = []
@@ -202,22 +200,20 @@ class SpectralSolver(HeatSolver):
         S_top = grid.dct_scale * kernels.DCT_II(q_las - q_evap_shifted)
 
         # Latent heat: warm-start with shifted Q from previous step
-        Q_latent = None
-        if fm:
-            Q_latent = xp.zeros_like(buffers.Q_latent_buffer)
-            if fm.Q_prev is not None:
-                Q_latent[:] = fm.Q_prev
+        Q_latent = xp.zeros_like(buffers.Q_latent_buffer)
+        if fm.Q_prev is not None:
+            Q_latent[:] = fm.Q_prev
 
         # Bottom convection
-        h_conv = getattr(mat, 'h_conv', 0.0)
-        T0 = xp.float32(getattr(mat, 'T0', 293.0))
+        h_conv = mat.h_conv
+        T0 = xp.float32(mat.T0)
         S_bot = xp.zeros((num.ny, num.nx), dtype=xp.float32) if h_conv > 0 else None
 
         # Build initial a_temp = θ̃ + Q_mnp · F  with all forcing guesses
         kernels.update_modes_etd1(
             SsState.a, SsState.KK, grid.Cp32_broadcast, S_top, buffers.a_temp
         )
-        if fm and fm.T_prev is not None and Q_latent is not None:
+        if fm.T_prev is not None and Q_latent is not None:
             kernels.add_source_term_modes(
                 buffers.a_temp, SsState.KK,
                 kernels.project_box_to_modes(Q_latent, SsState),
@@ -264,7 +260,7 @@ class SpectralSolver(HeatSolver):
             S_top_raw = S_las - S_evap
 
             Q_latent_raw = None
-            if fm and fm.T_prev is not None:
+            if fm.T_prev is not None:
                 xp.copyto(buffers.a_temp, a_old)
                 buffers.Q_latent_buffer.fill(0.0)
                 kernels.compute_latent_heat_source(
@@ -327,12 +323,11 @@ class SpectralSolver(HeatSolver):
         # ================================================================
         # 7. Update latent-heat history with converged temperature
         # ================================================================
-        if fm:
-            kernels.update_latent_heat_history(SsState)
-            if fm.Q_prev is None:
-                fm.Q_prev = xp.zeros_like(buffers.Q_latent_buffer)
-            if Q_latent is not None:
-                fm.Q_prev[:] = Q_latent[:]
+        kernels.update_latent_heat_history(SsState)
+        if fm.Q_prev is None:
+            fm.Q_prev = xp.zeros_like(buffers.Q_latent_buffer)
+        if Q_latent is not None:
+            fm.Q_prev[:] = Q_latent[:]
 
         metrics = {
             'T_surface_max': xp.max(T_temp),

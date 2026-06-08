@@ -31,7 +31,8 @@ if str(SRC) not in sys.path:
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from simulations.main import load_config, get_factory
+from simulations.main import load_config
+from fast_heat_solv.solvers import build_solver
 from fast_heat_solv.core.laser import LaserPath, LaserState
 from fast_heat_solv.core.parameters import SimulationContext
 import fast_heat_solv.physics.spectral_cpu_kernels as kernels
@@ -139,8 +140,7 @@ def run_tol_case(
     """
     context = build_context(config_path, n_steps=n_steps,
                             laser_speed=laser_speed, laser_x0=laser_x0)
-    factory = get_factory(context)
-    solver = factory.create_heat_solver()
+    solver = build_solver(context)
     solver.initialize(context)
 
     solver.mixing_omega = np.float32(omega)

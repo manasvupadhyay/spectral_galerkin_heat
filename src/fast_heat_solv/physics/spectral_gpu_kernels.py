@@ -101,15 +101,9 @@ def _compute_evaporation_flux_kernel(T_surface, q_out, P0, T_boil, DeltaH_LV, R_
         if T < T_liquidus:
             q_out[y, x] = 0.0
         else:
-            # Constants pre-calculated or passed
-            # factor1 = 0.82 * DeltaH_LV * P0 / sqrt(2 * pi * R_v)
-            # Calculated inside or passed? Calculating inside for clarity, 
-            # ideally pass as uniform to save registers.
-            
-            # Using math.sqrt/exp for scalar device functions
             factor1 = 0.82 * DeltaH_LV * P0 / math.sqrt(2.0 * math.pi * R_v)
             factor2 = DeltaH_LV / (R_v * T_boil)
-            
+
             term = (1.0 / math.sqrt(T)) * math.exp(factor2 * (1.0 - T_boil / T))
             q_out[y, x] = factor1 * term
 
@@ -204,12 +198,7 @@ def compute_evaporation_flux(T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liq
 
 
 def compute_gaussian_laser_flux(X, Y, laser_x, laser_y, laser_r, laser_coef):
-    """Compute Gaussian flux on grid defined by 1D CuPy arrays X, Y.
-
-    Mirrors the CPU implementation: form 2D mesh via broadcasting to avoid
-    shape-broadcast errors when X and Y are 1D arrays of different lengths.
-    """
-    # Ensure X, Y are 1D arrays (cell-centered coordinates)
+    """Compute Gaussian flux on grid defined by 1D CuPy arrays X, Y."""
     # dx: shape (1, nx), dy: shape (ny, 1)
     dx = X[None, :] - laser_x
     dy = Y[:, None] - laser_y
@@ -218,11 +207,8 @@ def compute_gaussian_laser_flux(X, Y, laser_x, laser_y, laser_r, laser_coef):
 
 
 
-# Backend-agnostic free functions live in ``spectral_ops``: the pure einsum/copy
-# ones read the array module from ``SsState.xp``; the hook-using ones reach the
-# FFT / ndimage / source-term primitives below through ``SsState.hooks``. They
-# are re-exported here so callers keep using ``spectral_gpu_kernels.<fn>``;
-# ``_reconstruct_temperature_box`` is used internally by ``_source_term`` callers.
+# Backend-agnostic free functions live in ``spectral_ops``; re-exported here so
+# callers keep using ``spectral_gpu_kernels.<fn>``.
 project_box_to_modes = _ops.project_box_to_modes
 _reconstruct_temperature_box = _ops.reconstruct_temperature_box
 initialize_latent_heat_if_needed = _ops.initialize_latent_heat_if_needed
@@ -250,9 +236,6 @@ def _source_term(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
 
 def DCT_II(q):
     """Apply Discrete Cosine Transform Type II (Ortho) on GPU."""
-    # Cupyx provides dctn in modern versions. 
-    # If using older CuPy where dctn is missing, one must use FFT approach.
-    # Assuming valid environment:
     return cupy_fft.dctn(q, type=2, norm='ortho', axes=None).astype(cp.float32)
 
 def IDCT_II(a):

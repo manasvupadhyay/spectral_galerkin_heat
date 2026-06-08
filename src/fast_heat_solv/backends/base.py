@@ -23,14 +23,23 @@ __copyright__ = "Copyright 2026, LMS, École Polytechnique"
 import numpy as _np
 
 
+def to_host(arr):
+    """Return a host :class:`numpy.ndarray` for *arr* (NumPy or CuPy).
+
+    No-op (a plain ``numpy.asarray``) when *arr* is already a host array;
+    calls ``arr.get()`` when *arr* is a CuPy device array.
+    """
+    get = getattr(arr, "get", None)
+    return get() if callable(get) else _np.asarray(arr)
+
+
 class MathBackend:
     """Bundles the array module and physics kernels for one execution target.
 
-    NumPy and CuPy expose the same API with the same signatures, so a backend
-    is deliberately a thin container rather than an abstract wrapper layer:
-    the solver does ``xp = backend.xp`` and then calls ``xp.zeros(...)``,
-    ``xp.multiply(...)``, etc. directly. Only host-transfer genuinely differs
-    between targets, so :meth:`to_numpy` is the single behavioural method.
+    NumPy and CuPy expose the same API, so a backend is a thin container: the
+    solver does ``xp = backend.xp`` and then calls ``xp.zeros(...)``,
+    ``xp.multiply(...)``, etc. directly. Host-transfer is the only operation
+    that differs between targets, so :meth:`to_numpy` is the single method.
 
     Parameters
     ----------
@@ -64,8 +73,7 @@ class MathBackend:
         numpy.ndarray
             The array on the host.
         """
-        get = getattr(arr, "get", None)
-        return get() if callable(get) else _np.asarray(arr)
+        return to_host(arr)
 
     def __repr__(self) -> str:
         return f"MathBackend(name={self.name!r})"

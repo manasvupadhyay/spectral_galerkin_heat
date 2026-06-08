@@ -1,14 +1,11 @@
 """Backend-agnostic spectral free functions (shared by CPU and GPU kernels).
 
 These operate on a :class:`~fast_heat_solv.physics.spectral_state.SpectralSolverState`
-and are pure ``einsum`` / array-copy logic — identical on CPU and GPU once the
-array module is taken from ``SsState.xp`` instead of being hard-coded to
-``np`` / ``cp``. They used to exist as near-identical copies in
-``spectral_cpu_kernels`` and ``spectral_gpu_kernels``; both modules now import
-them from here.
+and are pure ``einsum`` / array-copy logic: they take the array module from
+``SsState.xp``, so both kernel modules import them from here.
 
-Functions that genuinely differ between backends — FFT (``DCT_II`` / ``IDCT_II``),
-``scipy``/``cupyx`` ndimage shifts, and the numba ``@njit`` vs ``@cuda.jit``
+Operations that differ between backends — FFT (``DCT_II`` / ``IDCT_II``),
+``scipy``/``cupyx`` ndimage shifts, and the ``@njit`` vs ``@cuda.jit``
 source-term kernel — stay in the per-backend kernel modules.
 """
 
@@ -92,9 +89,9 @@ def update_latent_heat_history(SsState):
 
 
 # ---------------------------------------------------------------------------
-# Hook-using free functions: pure logic + array ops, with the one irreducible
-# backend primitive (FFT / ndimage shift / source-term launch) reached through
-# ``SsState.hooks`` (see ``spectral_state.BackendHooks``).
+# Hook-using free functions: array ops plus a backend primitive
+# (FFT / ndimage shift / source-term launch) reached through ``SsState.hooks``
+# (see ``spectral_state.BackendHooks``).
 # ---------------------------------------------------------------------------
 
 def reconstruct_surface_temperature(a, SsState):

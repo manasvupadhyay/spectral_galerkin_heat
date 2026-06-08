@@ -1,17 +1,14 @@
 """Backend-parametrized spectral-solver state (shared by CPU and GPU kernels).
 
 These classes hold the precomputed grid, fine-mesh bases, working buffers and
-spectral propagators for :class:`~fast_heat_solv.solvers.spectral.SpectralSolver`.
-They used to exist as near-identical copies in ``spectral_cpu_kernels`` and
-``spectral_gpu_kernels`` (the only difference being ``np.`` vs ``cp.``), so they
-are unified here and parametrized by the array module ``xp``.
+spectral propagators for :class:`~fast_heat_solv.solvers.spectral.SpectralSolver`,
+parametrized by the array module ``xp`` (NumPy or CuPy).
 
 Each kernel module exposes a thin :class:`SpectralSolverState` subclass that
-binds its own ``xp`` (NumPy or CuPy), so callers construct it as
+binds its own ``xp``, so callers construct it as
 ``SpectralSolverState(phys, geom, num, fine)`` regardless of backend.
 
-Like :class:`~fast_heat_solv.core.vector.Vec3`, this lives at the Python
-state-construction layer only: a dataclass cannot enter the numba
+The state is built at the Python layer only: a dataclass cannot enter the
 ``@njit`` / ``@cuda.jit`` kernels, so values are unpacked to scalars/arrays at
 the kernel boundary.
 """
@@ -84,9 +81,7 @@ class SpectralGrid:
     coords_rec: list = None
 
     def __init__(self, geom, xp):
-        # Global mesh coordinates (Cell-Centered). Coordinate arrays stay
-        # per-axis; Vec3 groups only the scalar triples (n, d, size) since a
-        # dataclass cannot enter the numba kernels downstream.
+        # Global mesh coordinates (cell-centered), one array per axis.
         self.x, self.y, self.z = [((xp.arange(n) + 0.5) * d).astype(xp.float32)
                                    for n, d in zip(geom.n, geom.d)]
 
@@ -213,14 +208,13 @@ class SolverBuffers:
         self.a_temp = xp.empty((nz, ny, nx), dtype=xp.float32)
         self.q_evap_old = xp.zeros((ny, nx), dtype=xp.float32)
         self.q_evap_buffer = xp.zeros((ny, nx), dtype=xp.float32)
-        if fine_mesh:
-            self.Q_latent_buffer = xp.zeros((fine_mesh.nz_box, fine_mesh.ny_box, fine_mesh.nx_box), dtype=xp.float32)
+        self.Q_latent_buffer = xp.zeros((fine_mesh.nz_box, fine_mesh.ny_box, fine_mesh.nx_box), dtype=xp.float32)
 
 
 @dataclass(frozen=True)
 class BackendHooks:
-    """The handful of irreducible backend primitives the shared free functions
-    in :mod:`spectral_ops` need but cannot express with ``xp`` alone.
+    """Backend primitives that the shared free functions in :mod:`spectral_ops`
+    need but cannot express with ``xp`` alone.
 
     Each kernel module builds one and attaches it to its
     :class:`SpectralSolverState` subclass, so a function like
@@ -290,8 +284,7 @@ def precompute_K_KK(phys, num, geom, xp):
     K = exp(-alpha * k^2 * dt) for ETD1 (Exact integration of linear part)
     KK = phi_1 / (rho * Cp), where phi_1(z) = (exp(z) - 1) / z, z = -alpha * k^2 * dt
     """
-    # Per-axis wavenumbers in array-index order [z, y, x]; .zyx() makes the
-    # reversal from (x, y, z) explicit instead of an implicit reversed literal.
+    # Per-axis wavenumbers in array-index order [z, y, x].
     k = [np.pi * xp.arange(n) / L for n, L in zip(geom.n.zyx(), geom.size.zyx())]
     k_grids = xp.meshgrid(*k, indexing='ij')  # shape (nz, ny, nx) each
     denom = phys.k / (phys.rho * phys.Cp) * sum(kg**2 for kg in k_grids)

@@ -26,13 +26,12 @@ import logging
 import sys
 import os
 import shutil
-import numpy as np
-from typing import Dict, Any, List
-from dataclasses import asdict
+from typing import Dict, Any
 
 from fast_heat_solv.runner import StandaloneHeatRunner
+from fast_heat_solv.solvers import build_solver
 from fast_heat_solv.core.parameters import (
-    SimulationContext, NumParams, MaterialParams, GeomParams, LaserParams
+    SimulationContext
 )
 from fast_heat_solv.io_utils.cut_views import generate_plots
 
@@ -46,46 +45,6 @@ def load_config(path: str) -> Dict[str, Any]:
         raise FileNotFoundError(f"Config file not found: {path}")
     with open(path, "r") as f:
         return yaml.safe_load(f)
-
-def get_factory(context: SimulationContext):
-    """
-    Select and instantiate the appropriate SimulationFactory based on context.
-    Dispatches between Spectral (CPU/GPU) and FEM implementations.
-    """
-    method = context.method
-    backend = context.backend
-    
-    logger.info(f"Factory Selector: Method='{method}', Backend='{backend}'")
-
-    if method == "spectral":
-        if backend == "gpu":
-            try:
-                from fast_heat_solv.factories.gpu_factory import GPUSimulationFactory
-                return GPUSimulationFactory(context)
-            except ImportError as e:
-                logger.error(f"Failed to import GPU factory (check cupy installation): {e}")
-                raise
-        if backend == "cpu":
-            # Default to CPU if GPU not specified or fails
-            from fast_heat_solv.factories.cpu_factory import CPUSimulationFactory
-            return CPUSimulationFactory(context)
-        if backend == "cpu_linear":
-            from fast_heat_solv.factories.cpu_linear_factory import CPULinearSimulationFactory
-            return CPULinearSimulationFactory(context)
-    
-    elif method == "fem":
-        # Provided here the framework for FEM factory selection
-        # It is not implemented in this codebase. 
-        # Just an example of how to extend the factory selection logic for future implementations.
-        try:
-            from fast_heat_solv.factories.fem_factory import FEMSimulationFactory
-            return FEMSimulationFactory(context)
-        except ImportError as e:
-            logger.error(f"Failed to import FEM factory: {e}")
-            raise
-            
-    else:
-        raise ValueError(f"Unknown simulation method: {method}")
 
 def main():
     parser = argparse.ArgumentParser(description="FastHeatSolv: Spectral Heat Equation Solver")
@@ -141,12 +100,11 @@ def main():
             cause = getattr(cause, '__cause__', None) or getattr(cause, '__context__', None)
         return False
 
-    # 3. Instantiate Factory & Workflow
-
+    # 3. Build solver & workflow
     try:
-        # get_factory only needs context
-        factory = get_factory(context)
-        workflow = StandaloneHeatRunner(context, factory, config=config, yaml_path=yaml_path)
+        logger.info(f"Solver selector: method='{context.method}', backend='{context.backend}'")
+        solver = build_solver(context)
+        workflow = StandaloneHeatRunner(context, solver, config=config, yaml_path=yaml_path)
 
         # 4. Run Simulation
         workflow.run()
@@ -164,10 +122,10 @@ def main():
 
             context.backend = "cpu"
             try:
-                factory = get_factory(context)
-                workflow = StandaloneHeatRunner(context, factory, config=config, yaml_path=yaml_path)
+                solver = build_solver(context)
+                workflow = StandaloneHeatRunner(context, solver, config=config, yaml_path=yaml_path)
                 workflow.run()
-            except Exception as cpu_e:
+            except Exception:
                 logger.exception("Simulation failed on CPU fallback")
                 sys.exit(1)
         else:
@@ -180,8 +138,10 @@ def main():
     
     # Determine if we should visualize TODO : The function save_step already exports profiles and cut view, this is redundant (in workflow)
     should_visualize = viz_cfg.get('auto_visualize', False)
-    if args.viz: should_visualize = True
-    if args.no_viz: should_visualize = False
+    if args.viz:
+        should_visualize = True
+    if args.no_viz:
+        should_visualize = False
 
     if should_visualize:
         logger.info("Starting Visualization...")

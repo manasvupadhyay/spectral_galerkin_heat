@@ -1,7 +1,9 @@
 # Architecture & Design
 
-Each submodule owns its own abstract base class (`base.py`) co-located with its concrete
-implementations.
+A single unified solver runs on CPU or GPU by injecting a `MathBackend`. Where an
+abstraction earns its keep it lives in a co-located `base.py` (`HeatSolver`,
+`MathBackend`, `LaserPath`); single-implementation interfaces are deliberately
+avoided.
 
 ## Directory Structure
 
@@ -11,31 +13,34 @@ fastHeatSolv/
 ├── README.md
 ├── src/
 │   └── fast_heat_solv/
-│       ├── __init__.py             # Package version
+│       ├── __init__.py             # Package version + public API
 │       ├── runner.py               # StandaloneHeatRunner: simulation loop orchestrator
 │       ├── core/
 │       │   ├── parameters.py       # Data classes: SimulationContext, NumParams, MaterialParams, …
-│       │   └── laser.py            # LaserState dataclass + LaserPath ABC
+│       │   ├── laser.py            # LaserState dataclass + LaserPath ABC
+│       │   └── vector.py           # Vec3: immutable (x, y, z) value type
+│       ├── backends/
+│       │   ├── base.py             # MathBackend: bundles array module (xp) + kernels
+│       │   ├── numpy_backend.py    # NumpyBackend (CPU)
+│       │   ├── cupy_backend.py     # CupyBackend (GPU)
+│       │   └── __init__.py         # get_backend(name)
 │       ├── solvers/
 │       │   ├── base.py             # HeatSolver ABC
-│       │   ├── spectral_cpu.py     # SpectralSolverCPU  (NumPy / Numba)
-│       │   ├── spectral_gpu.py     # SpectralSolverGPU  (CuPy)
-│       │   └── spectral_cpu_linear.py
-│       ├── factories/
-│       │   ├── base.py             # SimulationFactory ABC
-│       │   ├── cpu_factory.py      # CPUSimulationFactory
-│       │   ├── gpu_factory.py      # GPUSimulationFactory
-│       │   └── cpu_linear_factory.py
+│       │   ├── spectral.py         # SpectralSolver (unified CPU/GPU, backend-injected)
+│       │   ├── spectral_cpu_linear.py
+│       │   └── __init__.py         # build_solver(context): solver selector
 │       ├── physics/
-│       │   ├── spectral_cpu_kernels.py   # Low-level CPU spectral kernels
-│       │   ├── spectral_gpu_kernels.py   # Low-level GPU spectral kernels
-│       │   └── spectral_helpers.py       # DCT reconstruction utilities
+│       │   ├── spectral_state.py        # Backend-agnostic state (SpectralGrid, FineMeshState, …)
+│       │   ├── spectral_ops.py          # Backend-agnostic free functions
+│       │   ├── spectral_cpu_kernels.py  # Low-level CPU spectral kernels (NumPy / Numba)
+│       │   ├── spectral_gpu_kernels.py  # Low-level GPU spectral kernels (CuPy / CUDA)
+│       │   └── spectral_helpers.py      # DCT reconstruction utilities
 │       └── io_utils/
-│           ├── io_base.py          # IOManager ABC
 │           ├── spectral_fs_io.py   # LocalFSIOManager  (HDF5 + XDMF)
+│           ├── xdmf_io.py          # XdmfBuilder + structured/unstructured readers
 |           ...
 ├── simulations/
-│   ├── main.py                     # CLI entry point: parses YAML, dispatches factory, runs simulation
+│   ├── main.py                     # CLI entry point: parses YAML, builds solver, runs simulation
 │   ├── example_orchestrator.py     # Library usage example (no I/O, frame-by-frame)
 │   └── config/                     # YAML configuration files + G-code paths
 └── docs/
@@ -44,26 +49,39 @@ fastHeatSolv/
 
 ## Component Descriptions
 
-- **CLI (`simulations/main.py`)**: Parses a YAML config, selects the appropriate factory, and
-  delegates execution to `StandaloneHeatRunner`.
+- **CLI (`simulations/main.py`)**: Parses a YAML config, builds the solver via
+  `build_solver(context)`, and delegates execution to `StandaloneHeatRunner`.
 
 - **Runner (`runner.py`)**: `StandaloneHeatRunner` — the simulation loop orchestrator.
-  Owns the `while t < t_end` loop, delegates all physics to `HeatSolver` and all I/O to
-  `IOManager`. 
+  Owns the `while t < t_end` loop; receives a `HeatSolver` and a `LocalFSIOManager`
+  by injection (the I/O manager defaults to a fresh `LocalFSIOManager`), delegating
+  all physics to the former and all I/O to the latter.
 
-- **Factory base (`factories/base.py`)**: `SimulationFactory` ABC — declares `create_heat_solver()`
-  and `create_io_manager()`. Concrete factories wire together solver + I/O for a specific backend.
+- **Solver selector (`solvers/__init__.py`)**: `build_solver(context)` — a single
+  dispatch on `(method, backend)` that returns the configured `HeatSolver`. It
+  replaces the former `SimulationFactory` hierarchy, which only ever differed in
+  this one choice.
 
-- **Solver base (`solvers/base.py`)**: `HeatSolver` ABC — declares `initialize()`, `step()`, and
-  `finalize()`. Concrete solvers contain all physics.
+- **Solver base (`solvers/base.py`)**: `HeatSolver` ABC — declares `initialize()`,
+  `step()`, and `finalize()`. The unified `SpectralSolver` runs on CPU or GPU
+  purely through its injected `MathBackend`; `SpectralSolverCPULinear` is a
+  separate linear variant.
 
-- **IO base (`io_utils/io_base.py`)**: `IOManager` ABC — declares the full I/O contract
-  (`initialize`, `process_step`, `process_end`, `finalize`, `save_step`, …).
+- **Backends (`backends/`)**: `MathBackend` bundles an array module (`xp`, NumPy or
+  CuPy) with its matching physics-kernel module. `get_backend(name)` returns
+  `NumpyBackend` or `CupyBackend`, so the same solver code targets either device.
 
-- **Laser (`core/laser.py`)**: `LaserState` dataclass and `LaserPath` ABC.  Used by both solvers
-  (to query laser position/power) and `io_utils/gcode_path.py`.
+- **I/O (`io_utils/spectral_fs_io.py`)**: `LocalFSIOManager` — the concrete
+  filesystem I/O handler (HDF5 + XDMF). It owns the full I/O contract
+  (`initialize`, `process_step`, `process_end`, `finalize`, `save_step`, …);
+  `save_step` dispatches per output type to small `_save_*` helpers.
 
-- **Physics (`physics/`)**: Pure numerical kernels (Numba/CuPy).
+- **Laser (`core/laser.py`)**: `LaserState` dataclass and `LaserPath` ABC.  Used by
+  the solver (to query laser position/power) and `io_utils/gcode_path.py`.
+
+- **Physics (`physics/`)**: Backend-agnostic state and free functions
+  (`spectral_state`, `spectral_ops`) plus the pure numerical kernels
+  (`spectral_cpu_kernels` Numba / `spectral_gpu_kernels` CuPy).
 
 ## Architecture Diagram
 
@@ -82,37 +100,27 @@ flowchart TD
     Context["core/parameters.py\nSimulationContext"]:::core
     Laser["core/laser.py\nLaserState · LaserPath"]:::core
 
-    IFact["factories/base.py\n≪abstract≫ SimulationFactory"]:::abstract
+    Build["solvers/__init__.py\nbuild_solver()"]:::client
     ISolv["solvers/base.py\n≪abstract≫ HeatSolver"]:::abstract
-    IIO["io_utils/io_base.py\n≪abstract≫ IOManager"]:::abstract
+    IBack["backends/base.py\n≪abstract≫ MathBackend"]:::abstract
 
-    CPUFact["factories/cpu_factory.py\nCPUSimulationFactory"]:::concrete
-    GPUFact["factories/gpu_factory.py\nGPUSimulationFactory"]:::concrete
-
-    CPUSolv["solvers/spectral_cpu.py\nSpectralSolverCPU"]:::product
-    GPUSolv["solvers/spectral_gpu.py\nSpectralSolverGPU"]:::product
+    Solver["solvers/spectral.py\nSpectralSolver"]:::product
+    CPUBack["backends/numpy_backend.py\nNumpyBackend"]:::concrete
+    GPUBack["backends/cupy_backend.py\nCupyBackend"]:::concrete
     FSIO["io_utils/spectral_fs_io.py\nLocalFSIOManager"]:::product
 
     %% --- Relationships ---
-    CLI -->|"creates context + factory"| Context
-    CLI -->|"instantiates"| Runner
-    Runner -->|"uses"| IFact
+    CLI -->|"creates context"| Context
+    CLI -->|"build_solver(context)"| Build
+    CLI -->|"instantiates with solver + io"| Runner
+    Build -->|"returns"| Solver
     Runner -->|"calls"| ISolv
-    Runner -->|"calls"| IIO
+    Runner -->|"calls"| FSIO
 
-    IFact -.->|"implemented by"| CPUFact
-    IFact -.->|"implemented by"| GPUFact
+    Solver -.->|"implements"| ISolv
+    Solver -->|"injected with"| IBack
+    IBack  -.->|"implemented by"| CPUBack
+    IBack  -.->|"implemented by"| GPUBack
 
-    CPUFact -->|"creates"| CPUSolv
-    CPUFact -->|"creates"| FSIO
-    GPUFact -->|"creates"| GPUSolv
-    GPUFact -->|"creates"| FSIO
-
-    CPUSolv -.->|"implements"| ISolv
-    GPUSolv -.->|"implements"| ISolv
-    FSIO    -.->|"implements"| IIO
-
-    CPUSolv -->|"queries"| Laser
-    GPUSolv -->|"queries"| Laser
+    Solver -->|"queries"| Laser
 ```
-

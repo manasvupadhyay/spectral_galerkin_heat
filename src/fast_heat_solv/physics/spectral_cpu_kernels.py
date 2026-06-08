@@ -140,9 +140,6 @@ def compute_evaporation_flux(T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liq
     """
     Compute evaporative heat flux based on surface temperature using Arrhenius law.
     q_out is updated in-place.
-
-    Signature matches ``spectral_gpu_kernels.compute_evaporation_flux`` so the
-    unified solver can call it through either backend.
     """
     ny, nx = T_surface.shape
     factor1 = 0.82 * DeltaH_LV * P0 / np.sqrt(2 * np.pi * R_v)
@@ -169,11 +166,8 @@ def compute_gaussian_laser_flux(x, y, laser_x, laser_y, laser_r, laser_coef):
     return (laser_coef * np.exp(-2.0 * r_sq / laser_r ** 2))
 
 
-# Backend-agnostic free functions live in ``spectral_ops``: the pure einsum/copy
-# ones read the array module from ``SsState.xp``; the hook-using ones reach the
-# FFT / ndimage / source-term primitives below through ``SsState.hooks``. They
-# are re-exported here so callers keep using ``spectral_cpu_kernels.<fn>``;
-# ``_reconstruct_temperature_box`` is used internally above.
+# Backend-agnostic free functions live in ``spectral_ops``; re-exported here so
+# callers keep using ``spectral_cpu_kernels.<fn>``.
 project_box_to_modes = _ops.project_box_to_modes
 _reconstruct_temperature_box = _ops.reconstruct_temperature_box
 initialize_latent_heat_if_needed = _ops.initialize_latent_heat_if_needed

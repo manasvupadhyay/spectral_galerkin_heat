@@ -69,21 +69,26 @@ Export settings controlling what is saved and when.
 ### Global Dataclass `SimulationContext`
 
 All configuration sections are deserialized into a unified `SimulationContext` object passed to
-the Abstract Factory.
+`build_solver()` and the `StandaloneHeatRunner`.
 
 ```python
-from dataclasses import dataclass
-from fast_heat_solv.core.parameters import NumParams, GeomParams, MaterialParams, IOParams
+from dataclasses import dataclass, field
+from typing import Any, Dict
+from fast_heat_solv.core.parameters import (
+    NumParams, GeomParams, MaterialParams, LaserParams, FineMeshParams
+)
 from fast_heat_solv.core.laser import LaserPath
 
 @dataclass
 class SimulationContext:
     num: NumParams
-    geom: GeomParams
     mat: MaterialParams
+    geom: GeomParams
+    laser: LaserParams
     laser_path: LaserPath
-    io: IOParams
-    method: str = "spectral"
-    backend: str = "cpu"
+    io: Dict[str, Any]                 # flat I/O config dict from YAML
+    method: str = "spectral"           # "spectral" or "fem"
+    backend: str = "cpu"               # "cpu", "gpu", or "cpu_linear"
+    fine: FineMeshParams = field(default_factory=FineMeshParams)
 ```
 </content>
