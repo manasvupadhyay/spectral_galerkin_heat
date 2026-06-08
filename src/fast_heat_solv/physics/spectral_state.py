@@ -150,7 +150,8 @@ class FineMeshState:
         dx, dy, dz = geom.d
         Lx, Ly, Lz = geom.size
 
-        # Fine-mesh refinement factor and ROI box extents come from FineMeshParams
+        # Refinement factor and extents of the refined, laser-following sub-box
+        # come from FineMeshParams
         # (configurable via the ``fine_mesh`` config section).
         self.refinement = fine.refinement
         Lx_box, Ly_box, Lz_box = fine.box_size

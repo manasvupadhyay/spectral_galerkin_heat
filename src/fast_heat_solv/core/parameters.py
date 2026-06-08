@@ -205,7 +205,7 @@ class LaserParams:
 
 @dataclass
 class FineMeshParams:
-    """Moving fine-mesh ROI parameters for latent-heat / nonlinear terms.
+    """Moving fine-mesh parameters — a refined, laser-following sub-box of the domain — for latent-heat / nonlinear terms.
 
     The solver reconstructs temperature on a refined box that tracks the laser,
     to resolve the sharp mushy-zone gradients the coarse spectral grid cannot.
@@ -216,7 +216,7 @@ class FineMeshParams:
         Per-axis cell-refinement factor of the fine mesh relative to the global
         spectral grid (fine spacing ``= geom.d / refinement``), by default 4.
     box_size : Vec3
-        Extent of the fine ROI box in metres ``(Lx_box, Ly_box, Lz_box)``: the
+        Extent of the refined, laser-following sub-box in metres ``(Lx_box, Ly_box, Lz_box)``: the
         x/y extents span the laser footprint, the z extent is the near-surface
         depth. By default ``Vec3(0.9e-3, 0.9e-3, 0.04e-3)``.
     """
@@ -247,7 +247,8 @@ class SimulationContext:
     backend : str, optional
         Compute backend ('cpu' or 'gpu'), by default 'cpu'.
     fine : FineMeshParams, optional
-        Moving fine-mesh ROI parameters (refinement, box extents). Defaults to
+        Moving fine-mesh parameters — the refined, laser-following sub-box
+        (refinement, box extents). Defaults to
         :class:`FineMeshParams` defaults.
     """
     num: 'NumParams'
@@ -312,7 +313,8 @@ class SimulationContext:
             n=Vec3(int(nx), int(ny), int(nz)),
         )
 
-        # Fine-mesh ROI (optional; defaults reproduce the previous hardcoded box).
+        # Fine mesh — the refined, laser-following sub-box (optional; defaults
+        # reproduce the previous hardcoded box).
         fine_cfg = cfg.get('fine_mesh', {})
         default_box = (0.9e-3, 0.9e-3, 0.04e-3)
         box = fine_cfg.get('box_size', default_box)

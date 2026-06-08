@@ -52,7 +52,7 @@ def project_box_to_modes(field_box, SsState):
 
 
 def reconstruct_temperature_box(a, SsState):
-    """Reconstructs temperature in a small ROI around the laser."""
+    """Reconstructs temperature in the refined, laser-following sub-box of the domain."""
     if SsState.fine_mesh is None:
         raise RuntimeError("Fine mesh not initialized.")
     xp = SsState.xp
