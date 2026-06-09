@@ -6,6 +6,32 @@ from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+
+def read_field_h5(path: str) -> Optional[Dict[str, Any]]:
+    """Read a saved field HDF5 file into a dict.
+
+    Returns ``{'temperature', 'time', 'step', **attrs}`` or ``None`` if the file
+    is missing/unreadable. Shared by :meth:`SimulationResult.get_field` and
+    :meth:`LocalFSIOManager.load_step` so the two stay in sync.
+    """
+    if not os.path.exists(path):
+        return None
+    try:
+        with h5py.File(path, 'r') as f:
+            t = f['temperature']
+            data = {
+                'temperature': t[:],
+                'time': t.attrs.get('time', 0.0),
+                'step': t.attrs.get('step', -1),
+            }
+            for k, v in t.attrs.items():
+                data[k] = v
+            return data
+    except Exception as e:
+        logger.error(f"Failed to read field {path}: {e}")
+        return None
+
+
 class SimulationResult:
     """
     Interface for loading simulation results from a specific run directory.
@@ -66,27 +92,7 @@ class SimulationResult:
         Returns dict containing 'temperature', 'time', etc.
         """
         fname = f"field_step{step:06d}.h5"
-        path = os.path.join(self.fields_dir, fname)
-        
-        if not os.path.exists(path):
-            return None
-            
-        try:
-            with h5py.File(path, 'r') as f:
-                # Load everything into memory for convenience (fields are usually manageable per step)
-                # For very large fields, might want to return the handle instead.
-                data = {
-                    'temperature': f['temperature'][:],
-                    'time': f['temperature'].attrs.get('time', 0.0),
-                    'step': f['temperature'].attrs.get('step', -1)
-                }
-                # Load other attributes
-                for k, v in f['temperature'].attrs.items():
-                    data[k] = v
-                return data
-        except Exception as e:
-            logger.error(f"Error loading field {path}: {e}")
-            return None
+        return read_field_h5(os.path.join(self.fields_dir, fname))
 
 
 def list_runs(output_root: str = "out") -> List[str]:

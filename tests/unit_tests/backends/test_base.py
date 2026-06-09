@@ -15,10 +15,12 @@ def test_backend_container_stores_fields():
 
 
 def test_repr_contains_name():
+    # repr surfaces the backend name — it shows up in logs / error messages.
     assert "name='numpy'" in repr(NumpyBackend())
 
 
 def test_numpy_backend_wires_cpu_kernels():
+    # The CPU backend must bind numpy + the CPU kernel module the solver calls.
     b = NumpyBackend()
     assert b.name == "numpy"
     assert b.xp is np
@@ -26,16 +28,19 @@ def test_numpy_backend_wires_cpu_kernels():
 
 
 def test_get_backend_numpy():
+    # get_backend dispatches by name to the matching MathBackend.
     b = get_backend("numpy")
     assert isinstance(b, NumpyBackend)
     assert b.name == "numpy"
 
 
 def test_get_backend_defaults_to_numpy():
+    # No name given -> CPU (numpy) is the default.
     assert isinstance(get_backend(), NumpyBackend)
 
 
 def test_get_backend_unknown_raises():
+    # An unknown backend name is a config error, not a silent fallback.
     with pytest.raises(ValueError):
         get_backend("foo")
 
@@ -49,5 +54,6 @@ def test_to_numpy_host_passthrough():
 
 
 def test_to_host_on_numpy_array():
+    # to_host is the GPU->CPU helper; on a host array it's a plain passthrough.
     a = np.array([1.0, 2.0, 3.0])
     np.testing.assert_array_equal(to_host(a), a)

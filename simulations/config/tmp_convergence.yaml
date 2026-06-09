@@ -74,7 +74,7 @@ io:
     - full_volume
   profiles_locations:
     - hotspot
-  cut_views_planes:
+  slice_planes:
     - xy
     - yz
     - xz

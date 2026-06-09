@@ -54,7 +54,7 @@ class LocalFSIOManager:
         self._outputs = io_cfg.get('outputs') or []
         self._at_end = io_cfg.get('at_end') or []
         self._profiles_locations = io_cfg.get('profiles_locations') or []
-        self._cut_views_planes = io_cfg.get('cut_views_planes') or []
+        self._slice_planes = io_cfg.get('slice_planes') or []
 
         if self._interval is None:
             logger.info("io.output_interval is None: periodic outputs disabled; only 'at_end' outputs will be saved.")
@@ -102,7 +102,7 @@ class LocalFSIOManager:
         Save the current simulation state for the requested ``output_type``.
 
         Dispatches to a per-output helper (``full_volume``, ``modes``,
-        ``profiles`` or ``cut_views``, as defined in the YAML config). Time and
+        ``profiles`` or ``slices``, as defined in the YAML config). Time and
         step are recorded in filenames / XMF metadata.
         """
         output_type = kwargs.get('output_type', 'full_volume')
@@ -115,9 +115,9 @@ class LocalFSIOManager:
                 case 'profiles':
                     self._save_profiles(time, step, state, laser_path,
                                         kwargs.get('profiles_locations', []))
-                case 'cut_views':
-                    self._save_cut_views(time, step, state, laser_path,
-                                         kwargs.get('cut_views_planes', []))
+                case 'slices':
+                    self._save_slices(time, step, state, laser_path,
+                                         kwargs.get('slice_planes', []))
                 case _:
                     logger.warning(f"Unknown output_type '{output_type}' in save_step. Skipping.")
         except Exception as e:
@@ -220,13 +220,13 @@ class LocalFSIOManager:
         # Write each profile to the profiles/ subfolder
         profiles_dir = self.get_output_path('', subdir='profiles')
         for direction, (coords, temps) in profiles.items():
-            fname = os.path.join(profiles_dir, f"{direction}_spectral_latent_heat.txt")
+            fname = os.path.join(profiles_dir, f"{direction}_step{step:06d}.txt")
             # Format: Coord [m] | Temp [K]
             np.savetxt(fname, np.vstack([coords, temps]).T, header=f'{direction}(m) T(K)', fmt='% .6e')
         logger.info(f"Saved 1D profiles (center={center}, {laser_position}) for step {step} to {profiles_dir}")
 
-    def _save_cut_views(self, time: float, step: int, state: Any, laser_path: Any,
-                        cut_views_planes: Any) -> None:
+    def _save_slices(self, time: float, step: int, state: Any, laser_path: Any,
+                        slice_planes: Any) -> None:
         """Ensure the step's XDMF exists, then render a cut-plane image per plane."""
         from fast_heat_solv.physics.spectral_helpers import reconstruct_temperature_DCT
 
@@ -244,21 +244,21 @@ class LocalFSIOManager:
             step_info = _save_field_to_hdf5(filename_base, field, grid_coords, value_name="temperature", t=time, step=step)
             self._saved_xmf_steps.append(step_info)
             self._write_timeseries_xmf()
-            logger.info(f"Generated XDMF for cut views at {xdmf_path}")
+            logger.info(f"Generated XDMF for slices at {xdmf_path}")
 
-        # 2. Generate cut views for each plane
-        from fast_heat_solv.io_utils.cut_views import generate_plots
-        cut_views_dir = self.get_output_path('', subdir='cut_views')
-        for plane in cut_views_planes:
+        # 2. Generate slices for each plane
+        from fast_heat_solv.io_utils.slices import generate_plots
+        slices_dir = self.get_output_path('', subdir='slices')
+        for plane in slice_planes:
             logger.warning("You may want to set parameters for center, width, height, etc.")
-            output_file = os.path.join(cut_views_dir, f"cut_{plane}_step{step:06d}.png")
+            output_file = os.path.join(slices_dir, f"slice_{plane}_step{step:06d}.png")
             # Determine center based on laser position
             laser_state = laser_path.get_state(time, 0.0)
             height = 0.0002
             center = (float(laser_state.x), float(laser_state.y), self.context.geom.size.z - height / 2)
             generate_plots(
                 xdmf_path=xdmf_path,
-                output_dir=cut_views_dir,
+                output_dir=slices_dir,
                 show_ui=False,
                 save_images=True,
                 normal=plane[0],  # e.g., 'x', 'y', or 'z'
@@ -267,7 +267,7 @@ class LocalFSIOManager:
                 height=height,  # 0.2 mm
                 specific_output_filename=output_file
             )
-            logger.info(f"Saved cut view {plane} for step {step} to {output_file}")
+            logger.info(f"Saved slice {plane} for step {step} to {output_file}")
 
     def load_step(self, step: Union[int, str] = 'latest') -> Optional[Dict[str, Any]]:
         """
@@ -296,21 +296,9 @@ class LocalFSIOManager:
         if not target_file:
             return None
             
-        full_path = os.path.join(fields_dir, target_file)
-        if not os.path.exists(full_path):
-            return None
-            
-        try:
-            with h5py.File(full_path, 'r') as f:
-                data = {
-                    'temperature': f['temperature'][:],
-                    'time': f['temperature'].attrs.get('time', 0.0),
-                    'step': f['temperature'].attrs.get('step', -1)
-                }
-                return data
-        except Exception as e:
-            logger.error(f"Failed to load step {step}: {e}")
-            return None
+        # Shared reader (see io_utils.loader) keeps load_step / get_field in sync.
+        from fast_heat_solv.io_utils.loader import read_field_h5
+        return read_field_h5(os.path.join(fields_dir, target_file))
 
     # ------------------------------------------------------------------
     #  Step-level & end-of-simulation IO orchestration
@@ -328,7 +316,7 @@ class LocalFSIOManager:
                 t, step, state, laser_path,
                 output_type=output_type,
                 profiles_locations=self._profiles_locations,
-                cut_views_planes=self._cut_views_planes,
+                slice_planes=self._slice_planes,
             )
         logger.info(f"Step {step} | t={t:.6e}s | Output(s) saved: {self._outputs}")
 
@@ -349,7 +337,7 @@ class LocalFSIOManager:
                 t, step, state, laser_path,
                 output_type=output_type,
                 profiles_locations=self._profiles_locations,
-                cut_views_planes=self._cut_views_planes,
+                slice_planes=self._slice_planes,
             )
         if self._at_end:
             logger.info(f"Final output(s) saved at end: {self._at_end}")

@@ -38,16 +38,16 @@ in each direction (log–log).
 
 Once latent heat of fusion and evaporative cooling enter, no closed form exists, so the spectral
 solver is compared against an FE model that solves the same governing equations on the same
-domain with the same properties. The cut views show the spectral solver resolving the near-source
+domain with the same properties. The slices show the spectral solver resolving the near-source
 gradients and the melt-pool shape, in agreement with FE and distinct from the analytical
 solution, which omits latent heat and evaporation.
 
 ```{figure} _images/cut_stacked_y.png
-:alt: xz-plane cut views for analytical, FE and spectral models
+:alt: xz-plane slices for analytical, FE and spectral models
 :width: 95%
 :align: center
 
-Cut views of the temperature field in the $xz$ plane: (a) Eagar–Tsai analytical, (b) finite
+Slices of the temperature field in the $xz$ plane: (a) Eagar–Tsai analytical, (b) finite
 element, (c) spectral.
 ```
 

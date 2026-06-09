@@ -45,15 +45,15 @@ Each file contains two columns: coordinate (m) and temperature (K).
 
 ---
 
-## `cut_views`
+## `slices`
 
-Renders 2D PNG slices of the temperature field on chosen cross-section planes. The full field is reconstructed internally if no XDMF file exists for that step.
+Renders 2D PNG slices of the temperature field on chosen cross-slice planes. The full field is reconstructed internally if no XDMF file exists for that step.
 
 **Files produced**
 
-- `cut_views/cut_{plane}_step{N:06d}.png` for each plane in `cut_views_planes`
+- `slices/slice_{plane}_step{N:06d}.png` for each plane in `slice_planes`
 
-**`cut_views_planes`** (required) — any subset of `xy`, `yz`, `xz`.
+**`slice_planes`** (required) — any subset of `xy`, `yz`, `xz`.
 
 The slice center is always the laser position at the saved step (x, y) at a fixed depth near the top surface. Width and height of the slice are currently hardcoded (0.6 mm × 0.2 mm) and not configurable from the YAML.
 

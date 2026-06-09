@@ -33,7 +33,7 @@ from fast_heat_solv.solvers import build_solver
 from fast_heat_solv.core.parameters import (
     SimulationContext
 )
-from fast_heat_solv.io_utils.cut_views import generate_plots
+from fast_heat_solv.io_utils.slices import generate_plots
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -136,7 +136,7 @@ def main():
     viz_cfg = config.get('post_processing', {})
     
     
-    # Determine if we should visualize TODO : The function save_step already exports profiles and cut view, this is redundant (in workflow)
+    # Determine if we should visualize TODO : The function save_step already exports profiles and slice, this is redundant (in workflow)
     should_visualize = viz_cfg.get('auto_visualize', False)
     if args.viz:
         should_visualize = True

@@ -73,6 +73,8 @@ class FixedLaser(LaserPath):
 # Reference configuration
 # ---------------------------------------------------------------------------
 
+# `_CONFIG` (and the `cfg` args below) is a parsed-YAML config dict
+
 # 150 × 150 × 50 μm domain, 32 × 32 × 16 mesh → dx ≈ 4.7 μm.
 # The laser spot diameter is 2 × 60 μm = 120 μm, so the grid resolves it
 # with ~25 cells across the diameter.

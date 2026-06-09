@@ -30,6 +30,12 @@ from fast_heat_solv.core.vector import Vec3
 if TYPE_CHECKING:
     from fast_heat_solv.core.laser import LaserPath
 
+# ``cfg`` throughout is the parsed-YAML configuration dict consumed
+# by ``SimulationContext.from_dict``.
+# cfg stands for config 
+# Scalar values may be a plain number or a {value, unit} mapping (see _get_value).
+
+
 def _get_value(v):
     """Accept a plain scalar or a {value: ..., unit: ...} mapping."""
     if isinstance(v, dict):
@@ -113,10 +119,13 @@ class MaterialParams:
         Standard: 101325 Pa, by default 0.
     R_v : float, optional
         Specific gas constant of the vapor in J/(kg·K). For Ar or vapor phase.
-        by default 0.
+        by default 0. **Must be > 0 for any run that melts** — the evaporation
+        kernel divides by it (see :func:`compute_evaporation_flux`); 0 is only
+        safe when the surface never reaches ``T_liquidus``.
     T_boil : float, optional
         Boiling temperature in Kelvin. Above this, material evaporates.
-        For 316L steel: ~3090 K, by default 0.
+        For 316L steel: ~3090 K, by default 0. **Must be > 0 for any melting
+        run** (same evaporation-kernel division as ``R_v``).
     DeltaH_LV : float, optional
         Latent heat of vaporization in J/kg. Energy released during liquid→vapor
         transition. Typically 1–10 MJ/kg depending on material, by default 0.
@@ -344,7 +353,7 @@ class SimulationContext:
         laser_params = LaserParams(
             radius=real_t(_get_value(laser_cfg['radius'])),
             absorptivity=real_t(_get_value(laser_cfg['absorptivity'])),
-            power=real_t(_get_value(laser_cfg.get('power_nominal')))
+            power=real_t(_get_value(laser_cfg['power_nominal']))
         )
         
         # Laser Path

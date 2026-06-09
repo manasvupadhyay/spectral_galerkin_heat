@@ -67,8 +67,8 @@ io:
     value: 1
     unit: "dimensionless"
   outputs: []
-  at_end: ["profiles", "cut_views"]
+  at_end: ["profiles", "slices"]
   profiles_locations:
     - 'hotspot'                       # 'laser', 'hotspot', or explicit [x, y] in m
-  cut_views_planes:
+  slice_planes:
     - yz

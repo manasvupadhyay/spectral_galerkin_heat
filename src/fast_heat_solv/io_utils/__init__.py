@@ -24,10 +24,10 @@ from .loader import SimulationResult, list_runs, load_run
 from .gcode_path import GCodeLaserPath
 from .compute_L2_error import compute_L2_structured, compute_L2_unstructured, compare
 
-# Deferred: matplotlib import in cut_views is slow; only load on first use.
+# Deferred: matplotlib import in slices is slow; only load on first use.
 def __getattr__(name: str):
     if name == "generate_plots":
-        from .cut_views import generate_plots
+        from .slices import generate_plots
         globals()["generate_plots"] = generate_plots
         return generate_plots
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

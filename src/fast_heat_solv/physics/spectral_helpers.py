@@ -134,9 +134,9 @@ def reconstruct_temperature_volume(a, SsState):
         raise RuntimeError("Reconstruction bases not initialized on SsState. Call prepare_full_reconstruction() first.")
     Bx, By, Bz = grid.B_recon  # (modes_axis, n_points+1) for each axis
 
-    T_step1 = np.tensordot(a, Bx, axes=(2, 0))  # (N_z, N_y, N_x)
-    T_step2 = np.tensordot(T_step1, By, axes=(1, 0))  # (nz, nx, ny)
-    T_full = np.tensordot(T_step2, Bz, axes=(0, 0))  # (N_x, N_y, N_z)
+    T_step1 = np.tensordot(a, Bx, axes=(2, 0))        # (nz, ny, nx+1)
+    T_step2 = np.tensordot(T_step1, By, axes=(1, 0))  # (nz, nx+1, ny+1)
+    T_full = np.tensordot(T_step2, Bz, axes=(0, 0))   # (nx+1, ny+1, nz+1)
 
     return T_full.astype(np.float32)
 

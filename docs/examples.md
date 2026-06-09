@@ -90,7 +90,7 @@ io:
   at_end: [full_volume, profiles]
   profiles_locations:
     - 'laser'                         # 'laser', 'hotspot', or explicit [x, y] in m
-  cut_views_planes:
+  slice_planes:
     - xy
     - yz
     - xz

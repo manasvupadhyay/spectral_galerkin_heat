@@ -75,10 +75,10 @@ io:
     value: null
     unit: "dimensionless"
   outputs: [full_volume]              # [full_volume]
-  at_end: [full_volume, profiles]     # [full_volume, profiles, cut_views, modes]
+  at_end: [full_volume, profiles]     # [full_volume, profiles, slices, modes]
   profiles_locations:
     - 'laser'                         # 'laser', 'hotspot', or explicit [x, y] in m
-  cut_views_planes:
+  slice_planes:
     - xy
     - yz
     - xz

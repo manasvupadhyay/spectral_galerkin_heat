@@ -1,4 +1,4 @@
-"""2D cut view plotting utilities for evaluating simulation exports."""
+"""2D slice plotting utilities for evaluating simulation exports."""
 
 # Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique
 #
@@ -69,6 +69,24 @@ def _load_data(xdmf_path):
 # 2. INTERPOLATION ENGINE
 # ==========================================
 
+# Presentation metadata per slice normal: (xlabel, ylabel, h_axis, v_axis).
+# Kept separate from the slice geometry so the labelling/axis-mapping is
+# independently testable and the "valid normal" check lives in one place.
+_PLANE_LABELS = {
+    "z": ("X (m)", "Y (m)", "x", "y"),
+    "y": ("Scanning direction (m)", "Build direction (m)", "x", "z"),
+    "x": ("Transverse direction (m)", "Build direction (m)", "y", "z"),
+}
+
+
+def _axis_labels(normal):
+    """Return ``(xlabel, ylabel, h_axis, v_axis)`` for a slice *normal*."""
+    try:
+        return _PLANE_LABELS[normal]
+    except KeyError:
+        raise ValueError("Normal must be x, y, or z")
+
+
 def _get_slice(data, normal, center, width, height, reverse_axes=(), resolution=400, method='linear'):
     """
     Interpolates 3D data onto a 2D plane defined by a center point and dimensions.
@@ -82,6 +100,7 @@ def _get_slice(data, normal, center, width, height, reverse_axes=(), resolution=
     logger.info(f"Interpolating slice Normal={normal} at Center={center}, W={width}, H={height}...")
     
     cx, cy, cz = center
+    xlabel, ylabel, h_axis, v_axis = _axis_labels(normal)  # also validates normal
 
     # 1. Define the 2D grid for the slice in User Coordinates
     if normal == 'z':
@@ -94,8 +113,6 @@ def _get_slice(data, normal, center, width, height, reverse_axes=(), resolution=
         
         # User coords: X, Y, Z
         user_points_xyz = np.stack((U.ravel(), V.ravel(), W.ravel()), axis=-1)
-        xlabel, ylabel = 'X (m)', 'Y (m)'
-        h_axis, v_axis = 'x', 'y'
 
     elif normal == 'y':
         # Plane is X-Z. Y is constant.
@@ -107,8 +124,6 @@ def _get_slice(data, normal, center, width, height, reverse_axes=(), resolution=
         
         # User coords: X, Y, Z
         user_points_xyz = np.stack((U.ravel(), W.ravel(), V.ravel()), axis=-1)
-        xlabel, ylabel = 'Scanning direction (m)', 'Build direction (m)'
-        h_axis, v_axis = 'x', 'z'
 
     elif normal == 'x':
         # Plane is Y-Z. X is constant.
@@ -120,11 +135,6 @@ def _get_slice(data, normal, center, width, height, reverse_axes=(), resolution=
         
         # User coords: X, Y, Z
         user_points_xyz = np.stack((W.ravel(), U.ravel(), V.ravel()), axis=-1)
-        xlabel, ylabel = 'Transverse direction (m)', 'Build direction (m)'
-        h_axis, v_axis = 'y', 'z'
-    
-    else:
-        raise ValueError("Normal must be x, y, or z")
 
     # 2. Perform Interpolation
     query_points = user_points_xyz 
@@ -370,11 +380,11 @@ def generate_plots(xdmf_path, output_dir=None, show_ui=True, save_images=False,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot Meltpool X-Sections from XDMF.")
     parser.add_argument("xdmf_file", help="Path to input .xmf or .xdmf file")
-    parser.add_argument("--normal", default="y", choices=['x', 'y', 'z'], help="Normal of the cut plane")
+    parser.add_argument("--normal", default="y", choices=['x', 'y', 'z'], help="Normal of the slice plane")
     
-    parser.add_argument("--center", nargs=3, type=float, default=[0.0, 0.0, 0.0], help="Center point of the cut plane (x y z)")
-    parser.add_argument("--width", type=float, default=2e-3, help="Width of the cut view")
-    parser.add_argument("--height", type=float, default=1e-3, help="Height of the cut view")
+    parser.add_argument("--center", nargs=3, type=float, default=[0.0, 0.0, 0.0], help="Center point of the slice plane (x y z)")
+    parser.add_argument("--width", type=float, default=2e-3, help="Width of the slice")
+    parser.add_argument("--height", type=float, default=1e-3, help="Height of the slice")
     parser.add_argument("--reverse", nargs='*', default=[], choices=['x', 'y', 'z'], help="Axes to reverse for querying data (e.g. --reverse x)")
     
     parser.add_argument("--liquidus", type=float, default=1800, help="Liquidus temperature (K)")
@@ -390,7 +400,7 @@ if __name__ == "__main__":
 
     # If args.out is provided, it is a specific filename. 
     # We pass it as specific_output_filename to generate_plots.
-    # Typical call :python utils/cut_views.py out/0_perfect_sim/fields/field_step002000.xmf --center 0.0095 0.0025 0.002475 --width 0.00035 --height 0.00005 --liquidus 1820 --out cut_spectral.pdf
+    # Typical call :python utils/slices.py out/0_perfect_sim/fields/field_step002000.xmf --center 0.0095 0.0025 0.002475 --width 0.00035 --height 0.00005 --liquidus 1820 --out slice_spectral.pdf
 
     generate_plots(
         xdmf_path=Path(args.xdmf_file),

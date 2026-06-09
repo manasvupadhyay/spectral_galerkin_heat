@@ -61,10 +61,10 @@ Export settings controlling what is saved and when.
 - **output_interval**: Steps between outputs during the run (`int`). Set the value to `null` to
   disable periodic outputs.
 - **outputs**: Output types saved at each interval (e.g. `full_volume`). See {ref}`output-types`.
-- **at_end**: Output types saved once at the end (e.g. `profiles`, `cut_views`). See
+- **at_end**: Output types saved once at the end (e.g. `profiles`, `slices`). See
   {ref}`output-types`.
 - **profiles_locations**: Optional. `'laser'`, `'hotspot'`, or an explicit `[x, y]` in metres.
-- **cut_views_planes**: Optional. Planes for 2D cut views (`xy`, `yz`, `xz`).
+- **slice_planes**: Optional. Planes for 2D slices (`xy`, `yz`, `xz`).
 
 ### Global Dataclass `SimulationContext`
 
