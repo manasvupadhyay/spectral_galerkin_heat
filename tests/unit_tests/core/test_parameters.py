@@ -93,6 +93,51 @@ def test_from_dict_preserves_geom_axis_order():
     assert ctx.geom.size == Vec3(5e-3, 2.5e-3, 1.25e-3)
 
 
+# ---------------------------------------------------------------------------
+# Temperature-dependent properties (material.model)
+# ---------------------------------------------------------------------------
+
+# Chadwick 316L branches (ascending powers), matching the FE reference.
+_K_BR = {"solid": [9.248, 0.01571], "liquid": [12.41, 0.003279]}
+_RHO_BR = {"solid": [8084.2, -0.42086, -3.8942e-5],
+           "liquid": [7432.7, 0.039338, -1.8007e-4]}
+_CP_BR = {"solid": [458.98, 0.1328], "liquid": [769.86]}
+
+
+def test_scalar_material_has_no_model():
+    # Regression: a fully scalar material leaves model=None and scalars intact.
+    ctx = SimulationContext.from_dict(_cfg())
+    assert ctx.mat.model is None
+    assert float(ctx.mat.k) == pytest.approx(15.0)
+    assert float(ctx.mat.rho) == pytest.approx(7900.0)
+    assert float(ctx.mat.Cp) == pytest.approx(500.0)
+
+
+def test_branch_material_sets_reference_scalars_at_T0():
+    T0 = 293.0
+    ctx = SimulationContext.from_dict(_cfg(material={
+        "k": _K_BR, "rho": _RHO_BR, "Cp": _CP_BR,
+        "T_solidus": 1674.15, "T_liquidus": 1697.15, "T0": T0,
+    }))
+    assert ctx.mat.model is not None
+    # Below the solidus f_l = 0, so the reference equals the solid branch at T0.
+    assert float(ctx.mat.k) == pytest.approx(9.248 + 0.01571 * T0, rel=1e-5)
+    assert float(ctx.mat.rho) == pytest.approx(
+        8084.2 - 0.42086 * T0 - 3.8942e-5 * T0**2, rel=1e-5)
+    assert float(ctx.mat.Cp) == pytest.approx(458.98 + 0.1328 * T0, rel=1e-5)
+
+
+def test_mixed_branch_and_scalar_material():
+    # k T-dependent, rho/Cp scalar → model present, scalar refs consistent.
+    ctx = SimulationContext.from_dict(_cfg(material={
+        "k": _K_BR, "rho": 7900.0, "Cp": 500.0,
+        "T_solidus": 1674.15, "T_liquidus": 1697.15, "T0": 293.0,
+    }))
+    assert ctx.mat.model is not None
+    assert float(ctx.mat.rho) == pytest.approx(7900.0)
+    assert float(ctx.mat.Cp) == pytest.approx(500.0)
+
+
 @pytest.mark.parametrize(
     "drop",
     [("domain", "size"), ("domain", "mesh"), ("material", "rho"),

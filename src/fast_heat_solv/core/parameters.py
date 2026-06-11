@@ -26,6 +26,7 @@ import numpy as np
 import os
 
 from fast_heat_solv.core.vector import Vec3
+from fast_heat_solv.core.properties import MaterialModel
 
 if TYPE_CHECKING:
     from fast_heat_solv.core.laser import LaserPath
@@ -136,6 +137,13 @@ class MaterialParams:
         Convective heat transfer coefficient in W/(m²·K) at the domain boundary.
         Controls boundary cooling (e.g., bottom surface). Typical: 50–5000 W/(m²·K),
         by default 0.0.
+    model : MaterialModel, optional
+        Temperature-dependent property model (``k(T)``, ``rho(T)``, ``c(T)``
+        polynomial branches). ``None`` for a constant-property material, in which
+        case the solver uses the scalar ``rho``/``k``/``Cp`` directly. When
+        present, the scalar fields hold the **reference constants** evaluated at
+        ``T0`` (which are also baked into the ETD1 propagators); the
+        property-correction path reinstates the fluctuations about them.
     """
     name: str = "Material"
     rho: float = 1.0
@@ -150,6 +158,7 @@ class MaterialParams:
     DeltaH_LV: float = 0
     T0: float = 0
     h_conv: float = 0.0
+    model: Optional['MaterialModel'] = None
     # Add more fields as needed from your YAML/config
 
     @property
@@ -333,20 +342,40 @@ class SimulationContext:
         )
 
         mat_cfg = cfg.get('material', {})
+        T_solidus = real_t(_get_value(mat_cfg.get('T_solidus', 0.0)))
+        T_liquidus = real_t(_get_value(mat_cfg.get('T_liquidus', 0.0)))
+        T0 = real_t(_get_value(mat_cfg.get('T0', 0.0)))
+
+        # Temperature-dependent properties: build a MaterialModel when any of
+        # k/rho/Cp is given as polynomial branches. The scalar k/rho/Cp fields
+        # then hold the reference constants evaluated at T0 — exactly the values
+        # baked into the ETD1 propagators (see property_correction.tex §6.1).
+        material_model = MaterialModel.from_config(
+            mat_cfg, float(T_solidus), float(T_liquidus)
+        )
+        if material_model is not None:
+            k_bar, _a_bar, rho_bar, c_bar = material_model.reference_constants(float(T0))
+            rho_ref, k_ref, cp_ref = real_t(rho_bar), real_t(k_bar), real_t(c_bar)
+        else:
+            rho_ref = real_t(_get_value(mat_cfg['rho']))
+            k_ref = real_t(_get_value(mat_cfg['k']))
+            cp_ref = real_t(_get_value(mat_cfg['Cp']))
+
         mat_params = MaterialParams(
             name=mat_cfg.get('name', 'Material'),
-            rho=real_t(_get_value(mat_cfg['rho'])),
-            k=real_t(_get_value(mat_cfg['k'])),
-            Cp=real_t(_get_value(mat_cfg['Cp'])),
+            rho=rho_ref,
+            k=k_ref,
+            Cp=cp_ref,
             L_f=real_t(_get_value(mat_cfg.get('L_f', 0.0))),
-            T_solidus=real_t(_get_value(mat_cfg.get('T_solidus', 0.0))),
-            T_liquidus=real_t(_get_value(mat_cfg.get('T_liquidus', 0.0))),
+            T_solidus=T_solidus,
+            T_liquidus=T_liquidus,
             Pa=real_t(_get_value(mat_cfg.get('Pa', 0.0))),
             R_v=real_t(_get_value(mat_cfg.get('R_v', 0.0))),
             T_boil=real_t(_get_value(mat_cfg.get('T_boil', 0.0))),
             DeltaH_LV=real_t(_get_value(mat_cfg.get('DeltaH_LV', 0.0))),
-            T0=real_t(_get_value(mat_cfg.get('T0', 0.0))),
-            h_conv=real_t(_get_value(mat_cfg.get('h_conv', 0.0)))
+            T0=T0,
+            h_conv=real_t(_get_value(mat_cfg.get('h_conv', 0.0))),
+            model=material_model,
         )
 
         laser_cfg = cfg.get('laser', {})

@@ -104,6 +104,26 @@ class SpectralGrid:
         # Bottom-surface weighting: cos(p*pi*0/Lz) = 1, so no sign alternation
         self.Cp32_broadcast_bottom = self.C[2].astype(xp.float32)[:, None, None]
 
+        # --- Property-correction support -------------------------------------
+        # Volume element root, for the global DCT-II/IDCT-II volume pair:
+        #   project_volume(f)  = sqrt(dV) * DCT_II(f)
+        #   reconstruct_volume(a) = IDCT_II(a) / sqrt(dV)
+        # (consistent with set_state's sqrt(dx*dy*dz) forward scaling).
+        dz = geom.d.z
+        nz = geom.n.z
+        Lz = geom.size.z
+        self.sqrt_dV = xp.float32(np.sqrt(float(dx * dy * dz)))
+        # Grid spacings (host floats) for finite-difference gradients in the
+        # property correction.
+        self.dx, self.dy, self.dz = float(dx), float(dy), float(dz)
+
+        # Modal multipliers (m*pi/Lx, n*pi/Ly, p*pi/Lz) as 1-D arrays, used to
+        # scale each mixed sine/cosine transform when assembling C^k_mnp. Stored
+        # in per-axis order: kx over x-modes, ky over y, kz over z.
+        self.kx = (np.pi * xp.arange(nx, dtype=xp.float32) / Lx).astype(xp.float32)
+        self.ky = (np.pi * xp.arange(ny, dtype=xp.float32) / Ly).astype(xp.float32)
+        self.kz = (np.pi * xp.arange(nz, dtype=xp.float32) / Lz).astype(xp.float32)
+
     def prepare_full_reconstruction(self, geom):
         """Compute node-centered grids and full-domain reconstruction bases on demand.
 
@@ -233,10 +253,22 @@ class BackendHooks:
         Latent-heat source kernel with signature
         ``(T_curr, T_prev, T_S, T_L, rho, L, dt, out)`` — a plain numba ``@njit``
         call on CPU, a ``@cuda.jit`` launch on GPU.
+    dct : callable, optional
+        Forward (type-II, ortho) DCT over **all** axes — ``DCT_II`` in the kernel
+        modules. Used by the property-correction volume projection.
+    dct_axis : callable, optional
+        ``(arr, axis) -> arr`` one-axis forward DCT-II (ortho). Used to assemble
+        the mixed sine/cosine transforms for the conductivity correction.
+    dst_axis : callable, optional
+        ``(arr, axis) -> arr`` one-axis forward DST-II (ortho). The differentiated
+        axis of the conductivity correction (see ``property_correction.tex`` §6.3).
     """
     idct: Callable
     ndshift: Callable
     source_term: Callable
+    dct: Callable = None
+    dct_axis: Callable = None
+    dst_axis: Callable = None
 
 
 @dataclass

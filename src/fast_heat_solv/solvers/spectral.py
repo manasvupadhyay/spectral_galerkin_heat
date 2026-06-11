@@ -71,6 +71,13 @@ class SpectralSolver(HeatSolver):
         self.track_picard_history: bool = False
         self.picard_history = []
 
+        # Temperature-dependent property correction (property_correction.tex).
+        # Enabled in ``initialize`` when the material carries a non-constant model.
+        self._property_correction: bool = False
+        self._T_prev_full = None   # previous converged full-volume field (∂_t T)
+        self._kbar = None          # reference conductivity k̄ (= propagator const)
+        self._abar = None          # reference volumetric capacity ā
+
     def initialize(self, context: Optional[SimulationContext] = None) -> Any:
         """
         Set up the spectral solver state, allocate buffers, and set the initial condition.
@@ -114,6 +121,32 @@ class SpectralSolver(HeatSolver):
         self.state.a[0, 0, 0] = xp.float32(
             T0 * math.sqrt(geom.size.x * geom.size.y * geom.size.z)
         )
+
+        # --- Temperature-dependent property correction setup ----------------
+        model = getattr(mat, "model", None)
+        self._property_correction = model is not None and not model.is_constant
+        if self._property_correction:
+            k_bar, a_bar, _rho_bar, _c_bar = model.reference_constants(float(T0))
+            self._kbar = xp.float32(k_bar)
+            self._abar = xp.float32(a_bar)
+            # tex §6.1 (Critical): the reference constants used in k'=k(T)-k̄ and
+            # a'=a(T)-ā must equal the constants baked into the ETD1 propagators,
+            # else the exact forcing identity breaks. mat.k / mat.rho*mat.Cp are
+            # set to these references at parse time — verify they agree.
+            prop_kbar = float(mat.k)
+            prop_abar = float(mat.rho) * float(mat.Cp)
+            if not (math.isclose(prop_kbar, k_bar, rel_tol=1e-4)
+                    and math.isclose(prop_abar, a_bar, rel_tol=1e-4)):
+                raise ValueError(
+                    "Property-correction reference constants do not match the "
+                    f"ETD1 propagator constants: k̄ propagator={prop_kbar:.6g} vs "
+                    f"model={k_bar:.6g}; ā propagator={prop_abar:.6g} vs "
+                    f"model={a_bar:.6g}. (property_correction.tex §6.1)"
+                )
+            # Previous full-volume field for ∂_t T; starts at uniform T0.
+            self._T_prev_full = xp.full(
+                (num.nz, num.ny, num.nx), xp.float32(T0), dtype=xp.float32
+            )
 
         return self.state
 
@@ -283,6 +316,16 @@ class SpectralSolver(HeatSolver):
                     grid.Cp32_broadcast_bottom, S_bot_raw,
                 )
 
+            # Temperature-dependent property correction (tex §5): re-evaluated
+            # from the current iterate, folded into the forcing before relaxation
+            # so the fixed point resums the perturbation series to all orders.
+            if self._property_correction:
+                C_corr = kernels.assemble_property_correction(
+                    SsState, buffers.a_temp, self._T_prev_full,
+                    num.dt, mat.model, self._kbar, self._abar,
+                )
+                kernels.add_source_term_modes(buffers.a_temp, SsState.KK, C_corr)
+
             xp.copyto(a_raw, buffers.a_temp)
             xp.subtract(a_raw, a_old, out=residual_curr)
 
@@ -319,6 +362,10 @@ class SpectralSolver(HeatSolver):
         # ================================================================
         buffers.q_evap_old[:] = buffers.q_evap_buffer
         SsState.a = buffers.a_temp.copy()
+
+        # Store the converged full-volume field for the next step's ∂_t T.
+        if self._property_correction:
+            self._T_prev_full[:] = kernels.reconstruct_volume(SsState.a, SsState)
 
         # ================================================================
         # 7. Update latent-heat history with converged temperature

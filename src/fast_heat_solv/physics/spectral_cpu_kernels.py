@@ -24,6 +24,7 @@ Public functions in this module are called by SpectralSolver (NumpyBackend):
 
 
 import numpy as np
+import scipy.fft
 from numba import njit, prange
 from scipy.ndimage import shift as scipy_shift
 import pyfftw
@@ -66,6 +67,9 @@ class SpectralSolverState(_state.SpectralSolverState):
             idct=IDCT_II,
             ndshift=_ndshift,
             source_term=compute_source_term_from_temperature,
+            dct=DCT_II,
+            dct_axis=_dct_axis,
+            dst_axis=_dst_axis,
         )
 
 
@@ -176,6 +180,10 @@ reconstruct_surface_temperature = _ops.reconstruct_surface_temperature
 reconstruct_bottom_temperature = _ops.reconstruct_bottom_temperature
 compute_latent_heat_source = _ops.compute_latent_heat_source
 shift_latent_heat_history = _ops.shift_latent_heat_history
+reconstruct_volume = _ops.reconstruct_volume
+project_volume = _ops.project_volume
+conductivity_correction_modes = _ops.conductivity_correction_modes
+assemble_property_correction = _ops.assemble_property_correction
 
 
 def _ndshift(field, shift_pixels, order, mode, cval):
@@ -194,6 +202,18 @@ def IDCT_II(a):
     return pyfftw.interfaces.scipy_fft.dctn(arr, type=3, norm='ortho', axes=tuple(range(arr.ndim)), workers=-1)
 
 # Gain of few percent compared to scipy.fft.dctn(...) directly
+
+
+def _dct_axis(arr, axis):
+    """One-axis forward DCT-II (ortho), for the mixed property-correction transforms."""
+    return scipy.fft.dct(np.ascontiguousarray(arr, dtype=np.float32),
+                         type=2, axis=axis, norm='ortho', workers=-1)
+
+
+def _dst_axis(arr, axis):
+    """One-axis forward DST-II (ortho), for the differentiated axis of C^k."""
+    return scipy.fft.dst(np.ascontiguousarray(arr, dtype=np.float32),
+                         type=2, axis=axis, norm='ortho', workers=-1)
 
 
 def shift_flux(field: np.ndarray, shift: tuple, geom) -> np.ndarray:

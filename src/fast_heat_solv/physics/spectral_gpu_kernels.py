@@ -130,6 +130,9 @@ class SpectralSolverState(_state.SpectralSolverState):
             idct=IDCT_II,
             ndshift=_ndshift,
             source_term=_source_term,
+            dct=DCT_II,
+            dct_axis=_dct_axis,
+            dst_axis=_dst_axis,
         )
 
 
@@ -217,6 +220,10 @@ reconstruct_surface_temperature = _ops.reconstruct_surface_temperature
 reconstruct_bottom_temperature = _ops.reconstruct_bottom_temperature
 compute_latent_heat_source = _ops.compute_latent_heat_source
 shift_latent_heat_history = _ops.shift_latent_heat_history
+reconstruct_volume = _ops.reconstruct_volume
+project_volume = _ops.project_volume
+conductivity_correction_modes = _ops.conductivity_correction_modes
+assemble_property_correction = _ops.assemble_property_correction
 
 
 def _ndshift(field, shift_pixels, order, mode, cval):
@@ -241,6 +248,20 @@ def DCT_II(q):
 def IDCT_II(a):
     """Apply Discrete Cosine Transform Type III (Inverse Ortho) on GPU."""
     return cupy_fft.dctn(a, type=3, norm='ortho', axes=None).astype(cp.float32)
+
+
+def _dct_axis(arr, axis):
+    """One-axis forward DCT-II (ortho) on GPU — property-correction mixed transform.
+
+    ``cupyx.scipy.fft`` mirrors the ``scipy.fft`` API, so this is the same code
+    path as the CPU binding (property_correction.tex §6.3).
+    """
+    return cupy_fft.dct(arr, type=2, axis=axis, norm='ortho').astype(cp.float32)
+
+
+def _dst_axis(arr, axis):
+    """One-axis forward DST-II (ortho) on GPU — differentiated axis of C^k."""
+    return cupy_fft.dst(arr, type=2, axis=axis, norm='ortho').astype(cp.float32)
 
 
 def shift_flux(field: cp.ndarray, shift: tuple, geom) -> cp.ndarray:

@@ -38,6 +38,10 @@ __all__ = [
     "reconstruct_bottom_temperature",
     "compute_latent_heat_source",
     "shift_latent_heat_history",
+    "reconstruct_volume",
+    "project_volume",
+    "conductivity_correction_modes",
+    "assemble_property_correction",
 ]
 
 
@@ -49,6 +53,126 @@ def project_box_to_modes(field_box, SsState):
     fm = SsState.fine_mesh
     modes = xp.einsum('zyx,Zz,Yy,Xx->ZYX', field_box, fm.B_fine[2], fm.B_fine[1], fm.B_fine[0], optimize=True)
     return modes * fm.dV_fine
+
+
+# ---------------------------------------------------------------------------
+# Global volume transforms for the temperature-dependent property correction
+# (property_correction.tex §6). The cell-centred DCT-II / IDCT-II pair below is
+# consistent with the modal basis baked into the K, KK propagators — distinct
+# from the node-centred DCT-I output helper in ``spectral_helpers``.
+# ---------------------------------------------------------------------------
+
+def reconstruct_volume(a, SsState):
+    """Reconstruct the full cell-centred temperature field over Ω from modes *a*.
+
+    Inverse of :func:`project_volume`: ``T = IDCT_II(a) / sqrt(dV)``. Returns a
+    ``(nz, ny, nx)`` array on the same grid the modes live on.
+    """
+    xp = SsState.xp
+    return (SsState.hooks.idct(a) / SsState.grid.sqrt_dV).astype(xp.float32)
+
+
+def project_volume(field, SsState):
+    """Project a full cell-centred volume field onto the modal basis.
+
+    Forward of :func:`reconstruct_volume`: ``modes = sqrt(dV) * DCT_II(field)``.
+    """
+    xp = SsState.xp
+    return (SsState.hooks.dct(field) * SsState.grid.sqrt_dV).astype(xp.float32)
+
+
+def _mixed_sine_transform(g, axis, SsState):
+    """Project *g* onto the basis differentiated along ``axis``.
+
+    Computes ``S_d{g}`` (``property_correction.tex`` eq. Ck): a DST-II along
+    ``axis`` and a DCT-II along the other two, ortho, scaled by ``sqrt(dV)``,
+    with the DST-II mode-index shift applied — output cosine-mode ``m`` reads
+    ``DST[m-1]`` and ``m = 0`` is set to zero (``∂`` annihilates the constant
+    mode). The highest DST mode (the orthonormal special case) maps to ``m = N``,
+    which is outside the kept mode range and is simply dropped.
+    """
+    xp = SsState.xp
+    hooks = SsState.hooks
+    out = g
+    for ax in range(3):
+        out = hooks.dst_axis(out, ax) if ax == axis else hooks.dct_axis(out, ax)
+
+    shifted = xp.zeros_like(out)
+    src = [slice(None)] * 3
+    dst = [slice(None)] * 3
+    src[axis] = slice(0, -1)   # DST indices 0 .. N-2  (frequencies 1 .. N-1)
+    dst[axis] = slice(1, None)  # cosine modes  1 .. N-1
+    shifted[tuple(dst)] = out[tuple(src)]
+    return shifted * SsState.grid.sqrt_dV
+
+
+def conductivity_correction_modes(g_x, g_y, g_z, SsState):
+    """Assemble the conductivity correction modes ``C^k_mnp`` from ``g = k' ∇T``.
+
+    ``C^k = (mπ/Lx) S_x{g_x} + (nπ/Ly) S_y{g_y} + (pπ/Lz) S_z{g_z}`` — three
+    mixed transforms scaled by their modal multipliers (axis order: x=2, y=1,
+    z=0 in the ``(nz, ny, nx)`` layout).
+    """
+    grid = SsState.grid
+    Sx = _mixed_sine_transform(g_x, 2, SsState)
+    Sy = _mixed_sine_transform(g_y, 1, SsState)
+    Sz = _mixed_sine_transform(g_z, 0, SsState)
+    return (grid.kx[None, None, :] * Sx
+            + grid.ky[None, :, None] * Sy
+            + grid.kz[:, None, None] * Sz)
+
+
+def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
+                                 k_bar, a_bar):
+    """Assemble the temperature-dependent property correction modes ``C_mnp``.
+
+    Implements the forcing-assembly recipe of ``property_correction.tex`` §5/§7:
+    reconstruct ``T`` over Ω from the current trial modes, read the property
+    fluctuations ``k'(T)=k(T)-k̄`` and ``a'(T)=a(T)-ā`` from the tabulated model,
+    form the source fields ``g = k' ∇T`` (finite-difference gradient) and
+    ``s_a = -a' ∂_t T``, and project both:
+
+        C = D{s_a}  +  (mπ/Lx) S_x{g_x} + (nπ/Ly) S_y{g_y} + (pπ/Lz) S_z{g_z}.
+
+    Parameters
+    ----------
+    a_trial : ndarray (nz, ny, nx)
+        Current Picard trial modes.
+    T_prev_full : ndarray (nz, ny, nx)
+        Previous converged full-volume temperature field (for ∂_t T).
+    dt : float
+        Time step.
+    model : MaterialModel
+        Temperature-dependent property model.
+    k_bar, a_bar : float
+        Reference constants baked into the ETD1 propagators (k̄, ā).
+
+    Returns
+    -------
+    C : ndarray (nz, ny, nx)
+        Correction forcing modes, to be injected as ``a += KK · C``.
+    """
+    xp = SsState.xp
+    grid = SsState.grid
+
+    T = reconstruct_volume(a_trial, SsState)
+
+    k_prime = (model.k(T) - k_bar).astype(xp.float32)
+    a_prime = (model.a(T) - a_bar).astype(xp.float32)
+
+    # Gradient by central differences on the reconstructed field (cheaper default
+    # per tex §6.3); xp.gradient returns [∂z, ∂y, ∂x] for the (nz, ny, nx) layout.
+    dT_dz, dT_dy, dT_dx = xp.gradient(T, grid.dz, grid.dy, grid.dx)
+    g_x = k_prime * dT_dx
+    g_y = k_prime * dT_dy
+    g_z = k_prime * dT_dz
+
+    dT_dt = (T - T_prev_full) / xp.float32(dt)
+    s_a = -a_prime * dT_dt
+
+    C_a = project_volume(s_a, SsState)
+    C_k = conductivity_correction_modes(g_x, g_y, g_z, SsState)
+    return (C_a + C_k).astype(xp.float32)
 
 
 def reconstruct_temperature_box(a, SsState):
