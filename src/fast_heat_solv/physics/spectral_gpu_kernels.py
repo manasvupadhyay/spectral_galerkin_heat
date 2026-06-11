@@ -168,7 +168,7 @@ def add_bottom_surface_source(a_temp, KK, Cp_broadcast_bottom, B_scaled):
 
 
 @cuda.jit
-def compute_source_term_from_temperature(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
+def _compute_source_term_from_temperature_kernel(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
     """
     Compute Q = - rho * L * (1 / (TL - TS)) * (dT/dt) * Indicator(TS <= T <= TL)
     Used for latent heat calculation. GPU version (CUDA kernel).
@@ -192,6 +192,16 @@ def compute_source_term_from_temperature(T_curr, T_prev, T_S, T_L, rho, L, dt, o
             out[z, y, x] = factor * dT
         else:
             out[z, y, x] = 0.0
+
+
+def compute_source_term_from_temperature(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
+    """Wrapper for the latent-heat source-term kernel (host-callable)."""
+    blockspergrid, threadsperblock = _launch_config(T_curr.shape)
+    _compute_source_term_from_temperature_kernel[blockspergrid, threadsperblock](
+        T_curr, T_prev, T_S, T_L, rho, L, dt, out
+    )
+
+
 def compute_evaporation_flux(T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liquidus):
     """Wrapper for Evaporation kernel."""
     blockspergrid, threadsperblock = _launch_config(T_surface.shape, (16, 16))
@@ -206,7 +216,7 @@ def compute_gaussian_laser_flux(X, Y, laser_x, laser_y, laser_r, laser_coef):
     dx = X[None, :] - laser_x
     dy = Y[:, None] - laser_y
     r_sq = dx ** 2 + dy ** 2
-    return (laser_coef * cp.exp(-2.0 * r_sq / (laser_r ** 2))).astype(cp.float32)
+    return (laser_coef * cp.exp(-2.0 * r_sq / (laser_r ** 2))).astype(cp.float32, copy=False)
 
 
 
@@ -236,18 +246,18 @@ def _ndshift(field, shift_pixels, order, mode, cval):
 def _source_term(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
     """Latent-heat source primitive (GPU): launch the CUDA source-term kernel."""
     blockspergrid, threadsperblock = _launch_config(T_curr.shape)
-    compute_source_term_from_temperature[blockspergrid, threadsperblock](
+    _compute_source_term_from_temperature_kernel[blockspergrid, threadsperblock](
         T_curr, T_prev, T_S, T_L, rho, L, dt, out
     )
 
 
 def DCT_II(q):
     """Apply Discrete Cosine Transform Type II (Ortho) on GPU."""
-    return cupy_fft.dctn(q, type=2, norm='ortho', axes=None).astype(cp.float32)
+    return cupy_fft.dctn(q, type=2, norm='ortho', axes=None).astype(cp.float32, copy=False)
 
 def IDCT_II(a):
     """Apply Discrete Cosine Transform Type III (Inverse Ortho) on GPU."""
-    return cupy_fft.dctn(a, type=3, norm='ortho', axes=None).astype(cp.float32)
+    return cupy_fft.dctn(a, type=3, norm='ortho', axes=None).astype(cp.float32, copy=False)
 
 
 def _dct_axis(arr, axis):
@@ -256,12 +266,12 @@ def _dct_axis(arr, axis):
     ``cupyx.scipy.fft`` mirrors the ``scipy.fft`` API, so this is the same code
     path as the CPU binding (property_correction.tex §6.3).
     """
-    return cupy_fft.dct(arr, type=2, axis=axis, norm='ortho').astype(cp.float32)
+    return cupy_fft.dct(arr, type=2, axis=axis, norm='ortho').astype(cp.float32, copy=False)
 
 
 def _dst_axis(arr, axis):
     """One-axis forward DST-II (ortho) on GPU — differentiated axis of C^k."""
-    return cupy_fft.dst(arr, type=2, axis=axis, norm='ortho').astype(cp.float32)
+    return cupy_fft.dst(arr, type=2, axis=axis, norm='ortho').astype(cp.float32, copy=False)
 
 
 def shift_flux(field: cp.ndarray, shift: tuple, geom) -> cp.ndarray:

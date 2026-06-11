@@ -69,7 +69,7 @@ def reconstruct_volume(a, SsState):
     ``(nz, ny, nx)`` array on the same grid the modes live on.
     """
     xp = SsState.xp
-    return (SsState.hooks.idct(a) / SsState.grid.sqrt_dV).astype(xp.float32)
+    return (SsState.hooks.idct(a) / SsState.grid.sqrt_dV).astype(xp.float32, copy=False)
 
 
 def project_volume(field, SsState):
@@ -78,7 +78,7 @@ def project_volume(field, SsState):
     Forward of :func:`reconstruct_volume`: ``modes = sqrt(dV) * DCT_II(field)``.
     """
     xp = SsState.xp
-    return (SsState.hooks.dct(field) * SsState.grid.sqrt_dV).astype(xp.float32)
+    return (SsState.hooks.dct(field) * SsState.grid.sqrt_dV).astype(xp.float32, copy=False)
 
 
 def _mixed_sine_transform(g, axis, SsState):
@@ -122,17 +122,93 @@ def conductivity_correction_modes(g_x, g_y, g_z, SsState):
             + grid.kz[:, None, None] * Sz)
 
 
+def _face_project_2d(h_face, SsState):
+    """Orthonormal 2-D DCT-II of a face field over its two axes.
+
+    The face array is 2-D; both axes are cosine-projected (the same ortho DCT-II
+    the volume uses). Caller multiplies by the face area root ``sqrt(dA)`` and the
+    third-axis normalisation/sign vectors. See ``update.tex`` eqs. (xface)-(zface).
+    """
+    out = SsState.hooks.dct_axis(h_face, 0)
+    out = SsState.hooks.dct_axis(out, 1)
+    return out
+
+
+def _alt_sign(n, SsState):
+    """Cached ``(-1)^j`` vector of length *n* on the active backend (face terms)."""
+    xp = SsState.xp
+    cache = getattr(SsState.grid, "_alt_sign_cache", None)
+    if cache is None:
+        cache = {}
+        SsState.grid._alt_sign_cache = cache
+    s = cache.get(n)
+    if s is None:
+        s = xp.where(xp.arange(n) % 2 == 0, xp.float32(1.0), xp.float32(-1.0))
+        cache[n] = s
+    return s
+
+
+def surface_correction_modes(g_x, g_y, g_z, SsState):
+    """Boundary contribution of the conductivity correction (``update.tex`` §4).
+
+    ``-∮ k'∂_nT Φ_mnp dS`` over the six faces. With ``g = k'∇T`` already formed,
+    the flux on each face is extrapolated to the boundary (linear, O(h²)),
+    cosine-projected over the two in-face axes, scaled by ``sqrt(dA)``, and
+    distributed along the third axis by the basis boundary values ``C_ℓ`` and
+    ``(-1)^ℓ C_ℓ`` (``grid.C`` holds the continuous ``C_ℓ``). Layout is (z, y, x).
+    """
+    xp = SsState.xp
+    grid = SsState.grid
+    Cx, Cy, Cz = grid.C[0], grid.C[1], grid.C[2]
+    sgn_x = _alt_sign(Cx.shape[0], SsState)
+    sgn_y = _alt_sign(Cy.shape[0], SsState)
+    sgn_z = _alt_sign(Cz.shape[0], SsState)
+    rdA_x = xp.float32((grid.dy * grid.dz) ** 0.5)   # x-faces span (y, z)
+    rdA_y = xp.float32((grid.dx * grid.dz) ** 0.5)   # y-faces span (x, z)
+    rdA_z = xp.float32((grid.dx * grid.dy) ** 0.5)   # z-faces span (x, y)
+
+    # x-faces (x = 0, Lx): in-face axes are (z, y); broadcast over x (axis 2).
+    hx0 = 1.5 * g_x[:, :, 0] - 0.5 * g_x[:, :, 1]
+    hxL = 1.5 * g_x[:, :, -1] - 0.5 * g_x[:, :, -2]
+    Dx0 = _face_project_2d(hx0, SsState) * rdA_x
+    DxL = _face_project_2d(hxL, SsState) * rdA_x
+    surf = (Cx[None, None, :]
+            * (Dx0[:, :, None] - sgn_x[None, None, :] * DxL[:, :, None]))
+
+    # y-faces (y = 0, Ly): in-face axes are (z, x); broadcast over y (axis 1).
+    hy0 = 1.5 * g_y[:, 0, :] - 0.5 * g_y[:, 1, :]
+    hyL = 1.5 * g_y[:, -1, :] - 0.5 * g_y[:, -2, :]
+    Dy0 = _face_project_2d(hy0, SsState) * rdA_y
+    DyL = _face_project_2d(hyL, SsState) * rdA_y
+    surf = surf + (Cy[None, :, None]
+                   * (Dy0[:, None, :] - sgn_y[None, :, None] * DyL[:, None, :]))
+
+    # z-faces (z = 0, Lz): in-face axes are (y, x); broadcast over z (axis 0).
+    hz0 = 1.5 * g_z[0, :, :] - 0.5 * g_z[1, :, :]
+    hzL = 1.5 * g_z[-1, :, :] - 0.5 * g_z[-2, :, :]
+    Dz0 = _face_project_2d(hz0, SsState) * rdA_z
+    DzL = _face_project_2d(hzL, SsState) * rdA_z
+    surf = surf + (Cz[:, None, None]
+                   * (Dz0[None, :, :] - sgn_z[:, None, None] * DzL[None, :, :]))
+    return surf.astype(xp.float32, copy=False)
+
+
 def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
-                                 k_bar, a_bar):
+                                 k_bar, a_bar, mode="mixed"):
     """Assemble the temperature-dependent property correction modes ``C_mnp``.
 
     Implements the forcing-assembly recipe of ``property_correction.tex`` §5/§7:
     reconstruct ``T`` over Ω from the current trial modes, read the property
     fluctuations ``k'(T)=k(T)-k̄`` and ``a'(T)=a(T)-ā`` from the tabulated model,
-    form the source fields ``g = k' ∇T`` (finite-difference gradient) and
-    ``s_a = -a' ∂_t T``, and project both:
+    form ``g = k' ∇T`` (finite-difference gradient) and ``s_a = -a' ∂_t T``, then
+    project. Two algebraically-equivalent projections are available:
 
-        C = D{s_a}  +  (mπ/Lx) S_x{g_x} + (nπ/Ly) S_y{g_y} + (pπ/Lz) S_z{g_z}.
+    - ``mode="mixed"`` (reference): the weak form of ``property_correction.tex``
+      Eq.(Ck), three mixed sine/cosine transforms for ``C^k`` plus one DCT for
+      ``C^a`` — 15 full-volume FFT axis-passes.
+    - ``mode="divergence"`` (``update.tex``): integrate ``C^k`` by parts so the
+      volume term merges with ``C^a`` into a single DCT of
+      ``f = -a'∂_tT + ∇·(k'∇T)``, plus six cheap 2-D face transforms — ~6 passes.
 
     Parameters
     ----------
@@ -146,6 +222,8 @@ def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
         Temperature-dependent property model.
     k_bar, a_bar : float
         Reference constants baked into the ETD1 propagators (k̄, ā).
+    mode : {"mixed", "divergence"}
+        Projection scheme (default "mixed", the validated reference).
 
     Returns
     -------
@@ -157,8 +235,8 @@ def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
 
     T = reconstruct_volume(a_trial, SsState)
 
-    k_prime = (model.k(T) - k_bar).astype(xp.float32)
-    a_prime = (model.a(T) - a_bar).astype(xp.float32)
+    k_prime = (model.k(T) - k_bar).astype(xp.float32, copy=False)
+    a_prime = (model.a(T) - a_bar).astype(xp.float32, copy=False)
 
     # Gradient by central differences on the reconstructed field (cheaper default
     # per tex §6.3); xp.gradient returns [∂z, ∂y, ∂x] for the (nz, ny, nx) layout.
@@ -170,9 +248,19 @@ def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
     dT_dt = (T - T_prev_full) / xp.float32(dt)
     s_a = -a_prime * dT_dt
 
+    if mode == "divergence":
+        # Move the derivative off Φ (update.tex eq. Ckdiv): the conductivity
+        # volume term becomes a DCT of ∇·(k'∇T), merged with the capacity source.
+        div_g = (xp.gradient(g_x, grid.dx, axis=2)
+                 + xp.gradient(g_y, grid.dy, axis=1)
+                 + xp.gradient(g_z, grid.dz, axis=0))
+        C_vol = project_volume(s_a + div_g, SsState)
+        C_surf = surface_correction_modes(g_x, g_y, g_z, SsState)
+        return (C_vol + C_surf).astype(xp.float32, copy=False)
+
     C_a = project_volume(s_a, SsState)
     C_k = conductivity_correction_modes(g_x, g_y, g_z, SsState)
-    return (C_a + C_k).astype(xp.float32)
+    return (C_a + C_k).astype(xp.float32, copy=False)
 
 
 def reconstruct_temperature_box(a, SsState):
@@ -227,7 +315,7 @@ def reconstruct_surface_temperature(a, SsState):
     xp = SsState.xp
     grid = SsState.grid
     A = xp.einsum('p,pij->ij', grid.Cp32_broadcast[:, 0, 0], a, optimize=True)
-    return (grid.recon_scale * SsState.hooks.idct(A)).astype(xp.float32)
+    return (grid.recon_scale * SsState.hooks.idct(A)).astype(xp.float32, copy=False)
 
 
 def reconstruct_bottom_temperature(a, SsState):
@@ -239,7 +327,7 @@ def reconstruct_bottom_temperature(a, SsState):
     xp = SsState.xp
     grid = SsState.grid
     A = xp.einsum('p,pij->ij', grid.Cp32_broadcast_bottom[:, 0, 0], a, optimize=True)
-    return (grid.recon_scale * SsState.hooks.idct(A)).astype(xp.float32)
+    return (grid.recon_scale * SsState.hooks.idct(A)).astype(xp.float32, copy=False)
 
 
 def compute_latent_heat_source(Q_buffer, phys, num, SsState):

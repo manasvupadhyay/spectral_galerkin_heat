@@ -80,6 +80,15 @@ class NumParams:
     dt_nominal: float = 0.0
     update_interval: float = 1e-3
     save_all: bool = False
+    # Optional Picard fixed-point controls (None -> use the solver defaults).
+    # The temperature-dependent property correction needs a higher cap than the
+    # base 30 (property_correction.tex §8.3); expose them so the config can raise it.
+    max_picard_iter: Optional[int] = None
+    picard_tol: Optional[float] = None
+    picard_omega: Optional[float] = None
+    # Property-correction projection: "mixed" (sine weak form) or "divergence"
+    # (Green's first identity — faster and more boundary-faithful). None -> solver default.
+    correction_mode: Optional[str] = None
 
 @dataclass
 class MaterialParams:
@@ -323,7 +332,14 @@ class SimulationContext:
             t_end=t_end,
             n_steps=n_steps,
             dt_nominal=dt_nominal,
-            update_interval=float(sim_cfg.get('update_interval', 1e-3))
+            update_interval=float(sim_cfg.get('update_interval', 1e-3)),
+            max_picard_iter=(int(sim_cfg['max_picard_iter'])
+                             if sim_cfg.get('max_picard_iter') is not None else None),
+            picard_tol=(float(sim_cfg['picard_tol'])
+                        if sim_cfg.get('picard_tol') is not None else None),
+            picard_omega=(float(sim_cfg['picard_omega'])
+                          if sim_cfg.get('picard_omega') is not None else None),
+            correction_mode=sim_cfg.get('correction_mode'),
         )
 
         geom_params = GeomParams(

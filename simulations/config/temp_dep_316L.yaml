@@ -10,19 +10,28 @@ simulation:
   method: "spectral"
   backend: "gpu"
   duration:
-    value: 1.2e-2
+    value: 1.2e-2                  # 3000 steps × dt (half the FE window, to t=6 ms)
     unit: "s"
   dt:
-    value: 2.0e-6
+    value: 4.0e-6
     unit: "s"
-  update_interval: 50
+  update_interval: 1
+  
+  max_picard_iter: 80
+  # Picard relaxation. (contraction ≈1−ω)
+  picard_omega: 0.31
+  # Property correction via Green's first identity (update.tex): ~1.8× faster than
+  # the sine weak form (15→6 transform passes) and more boundary-faithful — the
+  # sine projection weights the faces by zero and discards the near-surface
+  # gradient; the divergence form keeps it (warmer, FE-ward laser peak).
+  correction_mode: "divergence"
 
 domain:
   size: [2.0e-3, 1.0e-3, 0.5e-3]   # [Lx, Ly, Lz] in m (FE: 2 × 1 × 0.5 mm)
-  mesh: [400, 200, 100]            # [nx, ny, nz] — refine for the convergence sweep
+  mesh: [512, 256, 350]            # [nx, ny, nz] — reconstructs to 513×257×351
 
 fine_mesh:
-  refinement: 4
+  refinement: 2
   box_size: [0.9e-3, 0.9e-3, 0.04e-3]
 
 material:
@@ -75,12 +84,12 @@ laser:
     unit: "W"
   path:
     type: "gcode"
-    file: "linear_track.gcode"     # v_scan = 0.150 m/s, start at x_min, y-centre
+    file: "linear_track_316L.gcode"  # v_scan = 0.150 m/s, start at x_min, y-centre
 
 io:
-  output_interval:
-    value: null
-    unit: "dimensionless"
+  # Snapshot every 500 steps (= 0.002 s at dt=4e-6) so spectral output lines up
+  # with the FE reference snapshots (t = 0.002, 0.004 … 0.012 s) for the L2 comparison.
+  output_interval: 500
   outputs: [full_volume]
   at_end: [full_volume, profiles]
   profiles_locations:

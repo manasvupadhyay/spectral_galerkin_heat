@@ -70,6 +70,9 @@ class SpectralSolver(HeatSolver):
         self.max_picard_iter: int = 30
         self.track_picard_history: bool = False
         self.picard_history = []
+        # Projection scheme for the property correction: "mixed" (sine weak form,
+        # the validated reference) or "divergence" (Green's first identity).
+        self._correction_mode: str = "mixed"
 
         # Temperature-dependent property correction (property_correction.tex).
         # Enabled in ``initialize`` when the material carries a non-constant model.
@@ -111,6 +114,22 @@ class SpectralSolver(HeatSolver):
         geom = self.context.geom
         num = self.context.num
         mat = self.context.mat
+
+        # Optional config-driven Picard controls (default: keep the values set in
+        # __init__). The T-dependent correction converges right at the base cap of
+        # 30, so configs may raise it (property_correction.tex §8.3).
+        if getattr(num, "max_picard_iter", None) is not None:
+            self.max_picard_iter = int(num.max_picard_iter)
+        if getattr(num, "picard_tol", None) is not None:
+            self.convergence_tol = xp.float32(num.picard_tol)
+        if getattr(num, "picard_omega", None) is not None:
+            self.mixing_omega = xp.float32(num.picard_omega)
+        if getattr(num, "correction_mode", None) is not None:
+            mode = str(num.correction_mode).lower()
+            if mode not in ("mixed", "divergence"):
+                raise ValueError(
+                    f"correction_mode must be 'mixed' or 'divergence', got {mode!r}")
+            self._correction_mode = mode
 
         # Initialize spectral solver state
         self.state = kernels.SpectralSolverState(mat, geom, num, self.context.fine)
@@ -323,6 +342,7 @@ class SpectralSolver(HeatSolver):
                 C_corr = kernels.assemble_property_correction(
                     SsState, buffers.a_temp, self._T_prev_full,
                     num.dt, mat.model, self._kbar, self._abar,
+                    mode=self._correction_mode,
                 )
                 kernels.add_source_term_modes(buffers.a_temp, SsState.KK, C_corr)
 
@@ -335,7 +355,9 @@ class SpectralSolver(HeatSolver):
 
             rms_diff = xp.sqrt(xp.vdot(residual_curr, residual_curr) / n_elements)
             rms_old = xp.sqrt(xp.vdot(a_old, a_old) / n_elements)
-            true_rel_err = float(rms_diff) / max(float(rms_old), 1e-9)
+            # Form the ratio on the device so the convergence check costs a single
+            # host sync per Picard iteration instead of two.
+            true_rel_err = float(rms_diff / xp.maximum(rms_old, xp.float32(1e-9)))
 
             if self.track_picard_history:
                 rho_k = None
