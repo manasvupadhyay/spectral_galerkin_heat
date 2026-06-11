@@ -13,7 +13,7 @@ def test_getitem():
 
 
 def test_iter_pairs_with_zip():
-    # zip(n, d) over two Vec3 is the idiom the state constructors use.
+    # zip(n, d) over two Vec3 is what the state constructors use.
     n, d = Vec3(8, 4, 2), Vec3(0.5, 0.5, 0.5)
     assert list(zip(n, d)) == [(8, 0.5), (4, 0.5), (2, 0.5)]
 
@@ -51,7 +51,6 @@ def test_map():
 
 # A Vec3 built on `geom` (size/n/d) is handed out and shared by reference across
 # the solver, never copied. We don't want to drops `frozen`
-
 
 
 def test_frozen():

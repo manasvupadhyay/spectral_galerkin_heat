@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 compute_L2_error.py
 ===================
@@ -29,14 +30,26 @@ Numerical integration
 - **Unstructured evaluation**: lumped mass integration using vertex
   volumes computed from the tetrahedral mesh connectivity
 
-CLI
----
-See ``scripts/compute_L2_error.py``.
+Usage
+-----
+    python compute_L2_error.py file_A.xdmf file_B.xdmf [options]
+
+    # Compare spectral output vs FE validation:
+    python compute_L2_error.py \\
+        ../out/sim/fields/field_step000200.xmf \\
+        validation.xdmf \\
+        --attr-a temperature --attr-b Temperature
+
+    # Fast convergence study (skip error output):
+    python compute_L2_error.py spectral.xmf fe.xdmf --no-error-output
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
+import os
+import sys
 import time
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Union
@@ -129,23 +142,87 @@ def _clamp_query_points(query_pts: np.ndarray, sf: StructuredField) -> np.ndarra
     return clamped
 
 
+class VTKUnstructuredInterpolator:
+    def __init__(self, xyz: np.ndarray, values: np.ndarray, connectivity: Optional[np.ndarray]):
+        import vtk
+        from vtk.util.numpy_support import numpy_to_vtk, numpy_to_vtkIdTypeArray
+        
+        # Build vtkPoints
+        pts = vtk.vtkPoints()
+        pts.SetData(numpy_to_vtk(xyz, deep=0))
+        
+        # Build vtkUnstructuredGrid
+        grid = vtk.vtkUnstructuredGrid()
+        grid.SetPoints(pts)
+        
+        if connectivity is not None and connectivity.shape[1] == 4:
+            cells = np.empty((connectivity.shape[0], 5), dtype=np.int64)
+            cells[:, 0] = 4
+            cells[:, 1:] = connectivity
+            cell_array = vtk.vtkCellArray()
+            # VTK < 9.0 compatibility
+            if hasattr(cell_array, "ImportLegacyFormat"):
+                cell_array.ImportLegacyFormat(numpy_to_vtkIdTypeArray(cells.ravel(), deep=0))
+            else:
+                cell_array.SetCells(connectivity.shape[0], numpy_to_vtkIdTypeArray(cells.ravel(), deep=0))
+            grid.SetCells(vtk.VTK_TETRA, cell_array)
+        else:
+            # Fallback to Delaunay3D if no valid connectivity provided
+            logger.info("   No connectivity found, using vtkDelaunay3D (might still be slow)...")
+            poly = vtk.vtkPolyData()
+            poly.SetPoints(pts)
+            del3d = vtk.vtkDelaunay3D()
+            del3d.SetInputData(poly)
+            del3d.Update()
+            grid = del3d.GetOutput()
+            
+        arr = numpy_to_vtk(values, deep=0)
+        arr.SetName("values")
+        grid.GetPointData().SetScalars(arr)
+        
+        self.grid = grid
+        
+    def __call__(self, xyz_query: np.ndarray) -> np.ndarray:
+        import vtk
+        from vtk.util.numpy_support import numpy_to_vtk, vtk_to_numpy
+        
+        q_pts = vtk.vtkPoints()
+        q_pts.SetData(numpy_to_vtk(xyz_query, deep=0))
+        poly = vtk.vtkPolyData()
+        poly.SetPoints(q_pts)
+        
+        probe = vtk.vtkProbeFilter()
+        probe.SetInputData(poly)
+        probe.SetSourceData(self.grid)
+        probe.SetComputeTolerance(False)
+        probe.Update()
+        
+        out = probe.GetOutput()
+        out_scalars = out.GetPointData().GetScalars("values")
+        if out_scalars is None:
+            return np.full(len(xyz_query), np.nan)
+        
+        res = vtk_to_numpy(out_scalars).copy()
+        valid_array = out.GetPointData().GetArray("vtkValidPointMask")
+        if valid_array is not None:
+             valid = vtk_to_numpy(valid_array).astype(bool)
+             res[~valid] = np.nan
+        return res
+
 def _build_unstructured_interpolator(uf: UnstructuredField):
-    """Return a ``LinearNDInterpolator`` for an UnstructuredField.
+    """Return an interpolator for an UnstructuredField.
 
-    ``LinearNDInterpolator`` builds a Delaunay triangulation of the
-    node cloud and performs **piecewise-linear** (barycentric)
-    interpolation inside each simplex.
-
-    For a P1 finite-element solution on linear tetrahedra this is
-    **mathematically exact** - the FE shape functions are themselves
-    piecewise linear, so the interpolation reproduces the discretised
-    field with no approximation error.
-
-    Complexity: O(N log N) triangulation + O(Q log N) per query batch.
+    Uses VTK for rapidly evaluating values in the P1 tetrahedral finite 
+    elements using exact element geometry instead of creating a huge
+    Delaunay triangulation with SciPy which takes hours.
     """
-    from scipy.interpolate import LinearNDInterpolator
-
-    return LinearNDInterpolator(uf.xyz, uf.T)
+    try:
+        import vtk
+        return VTKUnstructuredInterpolator(uf.xyz, uf.T, uf.connectivity)
+    except ImportError:
+        logger.warning("VTK not found, falling back to extremely slow LinearNDInterpolator...")
+        from scipy.interpolate import LinearNDInterpolator
+        return LinearNDInterpolator(uf.xyz, uf.T)
 
 
 # ---------------------------------------------------------------------------
@@ -257,9 +334,9 @@ def _evaluate_on_grid(
         return _eval_structured_chunked(interp, x, y, z, slab_max_points)
 
     # Unstructured
-    logger.info(f"  Building Delaunay triangulation ({len(fd.T)} vertices)...")
+    logger.info(f"  Building VTK Unstructured Grid from ({len(fd.T)} vertices)...")
     interp = _build_unstructured_interpolator(fd)
-    logger.info("  Triangulation complete")
+    logger.info("  Interpolator ready")
     return _eval_unstructured_chunked(interp, x, y, z, slab_max_points)
 
 
@@ -683,7 +760,7 @@ def compare(
             )
 
         print(f"  Mode: BOTH UNSTRUCTURED - common grid {resolution}")
-        print("  WARNING: This requires Delaunay triangulation (slow)")
+        print("  WARNING: Projecting unstructured meshes onto a uniform grid.")
         print()
 
         x, y, z = _make_common_grid(field_a, field_b, resolution=resolution)
@@ -734,3 +811,70 @@ def compare(
     print("=" * 70)
 
     return norms
+
+
+# ---------------------------------------------------------------------------
+#  CLI
+# ---------------------------------------------------------------------------
+
+def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    parser = argparse.ArgumentParser(
+        description="Compute L2 norm error between two XDMF solution files."
+    )
+    parser.add_argument("file_a", help="Path to XDMF file A (reference)")
+    parser.add_argument("file_b", help="Path to XDMF file B")
+    parser.add_argument(
+        "--attr-a",
+        default=None,
+        help="Attribute name in file A (default: first found)",
+    )
+    parser.add_argument(
+        "--attr-b",
+        default=None,
+        help="Attribute name in file B (default: first found)",
+    )
+    parser.add_argument(
+        "--output",
+        default="error",
+        help="Base name for error output files (default: 'error')",
+    )
+    parser.add_argument(
+        "--resolution",
+        default=None,
+        help="Grid resolution for two-unstructured case, e.g. '128,128,128'",
+    )
+    parser.add_argument(
+        "--no-error-output",
+        action="store_true",
+        help="Skip writing error XDMF/H5 files (faster for convergence studies)",
+    )
+
+    args = parser.parse_args()
+
+    res = None
+    if args.resolution:
+        parts = [int(x) for x in args.resolution.split(",")]
+        res = tuple(parts[:3])
+
+    norms = compare(
+        path_a=Path(args.file_a),
+        path_b=Path(args.file_b),
+        attr_a=args.attr_a,
+        attr_b=args.attr_b,
+        output_base=Path(args.output),
+        resolution=res,
+        write_error=not args.no_error_output,
+    )
+
+    # Exit with non-zero if there were NaN issues
+    if norms["pct_valid"] < 50.0:
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

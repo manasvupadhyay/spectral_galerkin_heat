@@ -30,6 +30,18 @@ gpu = [
 viz = [
     "matplotlib>=3.10.8",
 ]
+# FE cross-validation (tests/integration/test_fenics.py). FEniCSx/dolfinx and the
+# gmsh Python API are conda-only (no usable PyPI wheels for dolfinx) — install via
+# conda-forge, NOT pip.
+#   conda install -c conda-forge fenics-dolfinx=0.9.0 fenics-basix=0.9.0 \
+#       fenics-ffcx=0.9.0 fenics-ufl=2024.2.0 mpi4py petsc4py
+#   pip install gmsh   # (pure-python wheel; pulls the gmsh SDK)
+# The listing here documents the requirement; `pip install .[fenics]` only covers
+# the pip-installable pieces (gmsh).
+fenics = [
+    "gmsh>=4.13",
+    "fenics-ufl>=2024.2.0",
+]
 docs = [
     "sphinx>=8.1.3",
     "sphinx-rtd-theme>=3.0.1",

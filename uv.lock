@@ -408,6 +408,10 @@ docs = [
     { name = "sphinx-design" },
     { name = "sphinx-rtd-theme" },
 ]
+fenics = [
+    { name = "fenics-ufl" },
+    { name = "gmsh" },
+]
 gpu = [
     { name = "cupy-cuda13x" },
 ]
@@ -442,6 +446,8 @@ viz = [
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=26.3.1" },
     { name = "cupy-cuda13x", marker = "extra == 'gpu'", specifier = ">=14.1.1" },
+    { name = "fenics-ufl", marker = "extra == 'fenics'", specifier = ">=2024.2.0" },
+    { name = "gmsh", marker = "extra == 'fenics'", specifier = ">=4.13" },
     { name = "h5py", specifier = ">=3.16.0" },
     { name = "isort", marker = "extra == 'dev'", specifier = ">=8.0.1" },
     { name = "matplotlib", specifier = ">=3.10.8" },
@@ -459,7 +465,7 @@ requires-dist = [
     { name = "sphinx-design", marker = "extra == 'docs'", specifier = ">=0.6.1" },
     { name = "sphinx-rtd-theme", marker = "extra == 'docs'", specifier = ">=3.0.1" },
 ]
-provides-extras = ["gpu", "viz", "docs", "dev"]
+provides-extras = ["gpu", "viz", "fenics", "docs", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -479,6 +485,18 @@ docs = [
 ]
 gpu = [{ name = "cupy-cuda13x", specifier = ">=14.1.1" }]
 viz = [{ name = "matplotlib", specifier = ">=3.10.8" }]
+
+[[package]]
+name = "fenics-ufl"
+version = "2026.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a6/47/343585815bd6dec982490912805395d62b3859b3567db15b8c80ec8b4e44/fenics_ufl-2026.1.0.tar.gz", hash = "sha256:c83be6dcd4301f7e27b70cda076ada36e0bedabb9338d87a38fce44f3ab0f9ce", size = 333502, upload-time = "2026-06-09T16:36:07.231Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/03/51a8302a098281b219c93ce7e50b4491c10094570383b7b39925d32dcacb/fenics_ufl-2026.1.0-py3-none-any.whl", hash = "sha256:91dfbe9aa9365b3953a6315d7ea0832b0e20a357ae0ec86875530c94c46e8958", size = 265345, upload-time = "2026-06-09T16:36:05.797Z" },
+]
 
 [[package]]
 name = "filelock"
@@ -528,6 +546,17 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/11/83/a48b73e54efa272ee65315a6331b30a9b3a98733310bc11402606809c50e/fonttools-4.62.0-cp314-cp314t-win32.whl", hash = "sha256:d28d5baacb0017d384df14722a63abe6e0230d8ce642b1615a27d78ffe3bc983", size = 2347785, upload-time = "2026-03-09T16:49:59.698Z" },
     { url = "https://files.pythonhosted.org/packages/f8/27/c67eab6dc3525bdc39586511b1b3d7161e972dacc0f17476dbaf932e708b/fonttools-4.62.0-cp314-cp314t-win_amd64.whl", hash = "sha256:3f9e20c4618f1e04190c802acae6dc337cb6db9fa61e492fd97cd5c5a9ff6d07", size = 2413914, upload-time = "2026-03-09T16:50:02.251Z" },
     { url = "https://files.pythonhosted.org/packages/9c/57/c2487c281dde03abb2dec244fd67059b8d118bd30a653cbf69e94084cb23/fonttools-4.62.0-py3-none-any.whl", hash = "sha256:75064f19a10c50c74b336aa5ebe7b1f89fd0fb5255807bfd4b0c6317098f4af3", size = 1152427, upload-time = "2026-03-09T16:50:04.074Z" },
+]
+
+[[package]]
+name = "gmsh"
+version = "4.15.2"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/19/a6/f3f74f53234c812ffa0191ce2aceb0811ea82bdf12867a73bebb03f28f7a/gmsh-4.15.2-py2.py3-none-macosx_10_15_x86_64.whl", hash = "sha256:9f5a97b6633e40be331cb777ab571cef96e6ff5979bb7b20aad2438724ca417b", size = 40171095, upload-time = "2026-03-24T19:33:46.37Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/b4/0d25938ad62ea4db6bcbdecbc77c72d05d8a6a679abe4addcd86167ffd77/gmsh-4.15.2-py2.py3-none-macosx_12_0_arm64.whl", hash = "sha256:f6649b3e59f49272e7ee8ab282ecb4d1a6e0d627e86cf3e3b1a83fd07417e4f8", size = 36427761, upload-time = "2026-03-24T19:33:51.161Z" },
+    { url = "https://files.pythonhosted.org/packages/ab/d4/336becb1488ac4fbab205043987128839c8c62d54e2036b7e887bd009040/gmsh-4.15.2-py2.py3-none-manylinux_2_24_x86_64.whl", hash = "sha256:4076a948ce22625330d1413d4982e22b5c69fc2f0f7951f5df64c778cf54108c", size = 40006930, upload-time = "2026-03-24T19:33:55.549Z" },
+    { url = "https://files.pythonhosted.org/packages/78/e9/63c763c0d75544680800651d5ea8c7c3203ae4b5e054706f19a54021a7fb/gmsh-4.15.2-py2.py3-none-win_amd64.whl", hash = "sha256:7b36083bb410fa27c5d0e052929d1a9844a5b09169d66017b72b41aabd49d711", size = 42235999, upload-time = "2026-03-24T19:34:00.529Z" },
 ]
 
 [[package]]
