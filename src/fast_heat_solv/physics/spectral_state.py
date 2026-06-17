@@ -262,6 +262,11 @@ class BackendHooks:
     dst_axis : callable, optional
         ``(arr, axis) -> arr`` one-axis forward DST-II (ortho). The differentiated
         axis of the conductivity correction (see ``property_correction.tex`` §6.3).
+    corr_source : callable, optional
+        ``(T, k', a', T_prev, dt, dx, dy, dz) -> f`` fused divergence-form
+        correction forcing ``f = ∇·(k'∇T) - a'∂_tT``. GPU fast path replacing the
+        six ``xp.gradient`` calls; ``None`` falls back to the ``xp`` finite
+        differences in :func:`spectral_ops.assemble_property_correction`.
     """
     idct: Callable
     ndshift: Callable
@@ -269,6 +274,7 @@ class BackendHooks:
     dct: Callable = None
     dct_axis: Callable = None
     dst_axis: Callable = None
+    corr_source: Callable = None
 
 
 @dataclass

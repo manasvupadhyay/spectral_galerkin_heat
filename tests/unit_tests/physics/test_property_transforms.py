@@ -181,7 +181,7 @@ def test_capacity_correction_zero_for_steady_field():
 
 
 # ---------------------------------------------------------------------------
-# Divergence form (Green's first identity, update.tex) vs the mixed reference
+# Divergence form (Green's first identity, property_correction.tex) vs the mixed reference
 # ---------------------------------------------------------------------------
 
 def _kdep_model():
@@ -209,48 +209,46 @@ def test_divergence_mode_null_is_exact():
     assert float(np.max(np.abs(C))) == 0.0
 
 
-def test_divergence_matches_mixed_in_low_modes():
-    """Green's form reproduces the sine weak form in the resolved (low) modes.
+def test_divergence_assembles_volume_only():
+    """The divergence correction is the volume projection of ``s_a + ∇·(k'∇T)``.
 
-    The two forms differ only at high frequency (FD divergence vs the exact
-    spectral mπ/Lx); in the lowest quarter of modes per axis they must agree
-    closely. The surface term is what makes this hold — dropping it leaves an
-    O(1) boundary error.
+    The conductivity boundary term ``-∮k'∂_nT Φ dS`` is no longer assembled inside
+    the correction: using the Neumann BC it is folded into the prescribed surface
+    flux (rescaled by ``k̄/k``) by the solver. So ``assemble_property_correction``
+    in divergence mode must return exactly the merged volume DCT, with no face
+    contribution.
     """
     from fast_heat_solv.physics.spectral_ops import (
-        conductivity_correction_modes, surface_correction_modes,
-        project_volume, reconstruct_volume)
+        assemble_property_correction, project_volume, reconstruct_volume)
 
     st = _state(40, 32, 24)
     model = _kdep_model()
-    k_bar = 13.0
+    k_bar, a_bar = 13.0, 7900.0 * 500.0
     rng = np.random.default_rng(12)
-    # Smooth field: a physical T is smooth, so damp the modal spectrum (otherwise
-    # a white-noise field is dominated by unresolved high-frequency content).
     nz, ny, nx = 24, 32, 40
     decay = (np.exp(-(np.arange(nx) / 6.0) ** 2)[None, None, :]
              * np.exp(-(np.arange(ny) / 6.0) ** 2)[None, :, None]
              * np.exp(-(np.arange(nz) / 6.0) ** 2)[:, None, None])
     a = (rng.standard_normal((nz, ny, nx)).astype(np.float32) * 200.0 * decay)
     a[0, 0, 0] += 1.2e4
+    T_prev = reconstruct_volume(a, st)
+    dt = 1e-6
+
+    C = assemble_property_correction(st, a, T_prev, dt, model, k_bar, a_bar,
+                                     mode="divergence")
+
+    # Reference: volume projection of f = -a' ∂_t T + ∇·(k' ∇T), no face terms.
     T = reconstruct_volume(a, st)
     kp = (model.k(T) - k_bar).astype(np.float32)
+    ap = (model.a(T) - a_bar).astype(np.float32)
     gz, gy, gx = (kp * d for d in np.gradient(T, st.grid.dz, st.grid.dy, st.grid.dx))
-
-    Ck_mixed = conductivity_correction_modes(gx, gy, gz, st)
     div_g = (np.gradient(gx, st.grid.dx, axis=2)
              + np.gradient(gy, st.grid.dy, axis=1)
              + np.gradient(gz, st.grid.dz, axis=0))
-    Ck_div = project_volume(div_g.astype(np.float32), st) \
-        + surface_correction_modes(gx, gy, gz, st)
-    Ck_nosurf = project_volume(div_g.astype(np.float32), st)
+    s_a = -ap * (T - T_prev) / np.float32(dt)
+    C_ref = project_volume((s_a + div_g).astype(np.float32), st)
 
-    sl = (slice(0, 3), slice(0, 4), slice(0, 5))   # lowest ~12% modes/axis (resolved)
-    den = np.linalg.norm(Ck_mixed[sl])
-    e_with = np.linalg.norm(Ck_div[sl] - Ck_mixed[sl]) / den
-    e_no = np.linalg.norm(Ck_nosurf[sl] - Ck_mixed[sl]) / den
-    assert e_with < 0.03, f"divergence vs mixed low-mode relerr {e_with:.3f}"
-    assert e_no > 0.3, f"surface term should be essential (no-surf relerr {e_no:.3f})"
+    np.testing.assert_allclose(C, C_ref, rtol=1e-5, atol=1e-4)
 
 
 def test_conductivity_correction_sums_three_axes():
