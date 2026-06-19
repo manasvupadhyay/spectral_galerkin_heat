@@ -6,13 +6,12 @@
 # production-grid case should run on GPU (backend: gpu).
 
 simulation:
-  name: "temp_dep_316L"
+  name: "fullres_tref2300_full"
   method: "spectral"
   backend: "gpu"
   duration:
-    value: 6.0e-4
+    value: 1.2e-2                  # 3000 steps -> t=0.012, beam at x=1.8mm (FE hotspot)
     unit: "s"
-  
   dt:
     value: 4.0e-6
     unit: "s"
@@ -29,7 +28,7 @@ simulation:
 
 domain:
   size: [2.0e-3, 1.0e-3, 0.5e-3]   # [Lx, Ly, Lz] in m (FE: 2 × 1 × 0.5 mm)
-  mesh: [512, 256, 350]            # [nx, ny, nz] — reconstructs to 513×257×351
+  mesh: [512, 256, 450]            # [nx, ny, nz] — reconstructs to 513×257×351
 
 fine_mesh:
   refinement: 2
@@ -58,6 +57,9 @@ material:
     unit: "K"
   T0:
     value: 293.0
+    unit: "K"
+  T_ref:
+    value: 2300.0
     unit: "K"
   h_conv:
     value: 3000.0

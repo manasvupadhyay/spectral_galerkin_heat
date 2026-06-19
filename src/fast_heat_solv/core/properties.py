@@ -171,6 +171,63 @@ class MaterialModel:
         """Volumetric sensible heat capacity ``a(T) = rho(T) * c(T)``."""
         return self.rho(T) * self.c(T)
 
+    def k_prime_a_prime(self, T, k_bar, a_bar):
+        """Fluctuations ``(k(T) - k_bar, a(T) - a_bar)`` in a single fused pass.
+
+        The straightforward ``k(T)``/``a(T)`` evaluation allocates ~25 temporary
+        full-volume arrays (Horner + liquid-fraction blend, twice for ``a=rho*c``);
+        on GPU that is ~140 ms per Picard iteration. This fuses the whole thing
+        into one ``ElementwiseKernel`` (built once from the model's coefficients),
+        cutting it to a few ms. The NumPy path keeps the readable evaluator.
+        """
+        xp = _xp(T)
+        if xp is np:
+            return ((self.k(T) - k_bar).astype(np.float32),
+                    (self.a(T) - a_bar).astype(np.float32))
+        import cupy
+        kern = self._fused_gpu_kernel()
+        kp = cupy.empty(T.shape, dtype=cupy.float32)
+        ap = cupy.empty(T.shape, dtype=cupy.float32)
+        kern(T.astype(cupy.float32, copy=False),
+             cupy.float32(k_bar), cupy.float32(a_bar), kp, ap)
+        return kp, ap
+
+    def _fused_gpu_kernel(self):
+        """Build (and cache) the fused CuPy kernel for ``k', a'`` from the coeffs."""
+        kern = getattr(self, "_kp_ap_kernel", None)
+        if kern is not None:
+            return kern
+        import cupy
+
+        def horner(coeffs):
+            # ascending coeffs -> nested Horner C expression in variable T
+            c = [float(v) for v in coeffs]
+            expr = f"{c[-1]:.9e}f"
+            for v in reversed(c[:-1]):
+                expr = f"({v:.9e}f + T*{expr})"
+            return expr
+
+        Ts, Tl = float(self.k.T_solidus), float(self.k.T_liquidus)
+        if Tl > Ts:
+            fl = (f"float fl = (T-{Ts:.9e}f)*{1.0/(Tl-Ts):.9e}f; "
+                  f"fl = fl<0.0f?0.0f:(fl>1.0f?1.0f:fl);")
+        else:  # degenerate mushy band -> step at the solidus
+            fl = f"float fl = (T>={Ts:.9e}f)?1.0f:0.0f;"
+        body = f"""
+        {fl}
+        float omfl = 1.0f - fl;
+        float kk  = omfl*{horner(self.k.solid)}   + fl*{horner(self.k.liquid)};
+        float rho = omfl*{horner(self.rho.solid)} + fl*{horner(self.rho.liquid)};
+        float cc  = omfl*{horner(self.c.solid)}   + fl*{horner(self.c.liquid)};
+        kp = kk - kbar;
+        ap = rho*cc - abar;
+        """
+        kern = cupy.ElementwiseKernel(
+            "float32 T, float32 kbar, float32 abar",
+            "float32 kp, float32 ap", body, "prop_kp_ap")
+        self._kp_ap_kernel = kern
+        return kern
+
     @property
     def is_constant(self) -> bool:
         """True when every property is a single constant (null-correction path)."""

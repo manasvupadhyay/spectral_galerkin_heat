@@ -70,6 +70,9 @@ class SpectralSolver(HeatSolver):
         self.max_picard_iter: int = 30
         self.track_picard_history: bool = False
         self.picard_history = []
+        # Projection scheme for the property correction: "mixed" (sine weak form,
+        # the validated reference) or "divergence" (Green's first identity).
+        self._correction_mode: str = "mixed"
 
         # Temperature-dependent property correction (property_correction.tex).
         # Enabled in ``initialize`` when the material carries a non-constant model.
@@ -112,6 +115,22 @@ class SpectralSolver(HeatSolver):
         num = self.context.num
         mat = self.context.mat
 
+        # Optional config-driven Picard controls (default: keep the values set in
+        # __init__). The T-dependent correction converges right at the base cap of
+        # 30, so configs may raise it (property_correction.tex §8.3).
+        if getattr(num, "max_picard_iter", None) is not None:
+            self.max_picard_iter = int(num.max_picard_iter)
+        if getattr(num, "picard_tol", None) is not None:
+            self.convergence_tol = xp.float32(num.picard_tol)
+        if getattr(num, "picard_omega", None) is not None:
+            self.mixing_omega = xp.float32(num.picard_omega)
+        if getattr(num, "correction_mode", None) is not None:
+            mode = str(num.correction_mode).lower()
+            if mode not in ("mixed", "divergence"):
+                raise ValueError(
+                    f"correction_mode must be 'mixed' or 'divergence', got {mode!r}")
+            self._correction_mode = mode
+
         # Initialize spectral solver state
         self.state = kernels.SpectralSolverState(mat, geom, num, self.context.fine)
 
@@ -126,7 +145,10 @@ class SpectralSolver(HeatSolver):
         model = getattr(mat, "model", None)
         self._property_correction = model is not None and not model.is_constant
         if self._property_correction:
-            k_bar, a_bar, _rho_bar, _c_bar = model.reference_constants(float(T0))
+            # Reference for k̄, ā is T_ref (defaults to T0); evaluating it warmer
+            # shrinks the fluctuation k'=k(T)-k̄ the correction must resum.
+            T_ref = float(getattr(mat, "T_ref", 0.0)) or float(T0)
+            k_bar, a_bar, _rho_bar, _c_bar = model.reference_constants(T_ref)
             self._kbar = xp.float32(k_bar)
             self._abar = xp.float32(a_bar)
             # tex §6.1 (Critical): the reference constants used in k'=k(T)-k̄ and
@@ -272,10 +294,22 @@ class SpectralSolver(HeatSolver):
         # ================================================================
         S_las = grid.dct_scale * kernels.DCT_II(q_las)
 
+        # Divergence-mode property correction handles the conductivity boundary
+        # term by rescaling the prescribed surface flux by k̄/k(T_surface): using
+        # the Neumann BC (-k ∂_nT = q), the boundary piece -∮k'∂_nT Φ dS merges
+        # with F^Γ = -∮qΦ dS into -∮(k̄/k)qΦ dS (property_correction.tex). This is
+        # exact and replaces the finite-difference face term (mixed mode keeps the
+        # plain flux and carries the conductivity correction purely in the volume).
+        rescale_flux = (
+            self._property_correction and self._correction_mode == "divergence"
+        )
+
         S_bot_raw = None
         if h_conv > 0:
             T_bottom = kernels.reconstruct_bottom_temperature(buffers.a_temp, SsState)
             q_conv = xp.float32(-h_conv) * (T_bottom - T0)
+            if rescale_flux:
+                q_conv = q_conv * (self._kbar / mat.model.k(T_bottom))
             S_bot_raw = grid.dct_scale * kernels.DCT_II(q_conv)
 
         # ================================================================
@@ -289,8 +323,15 @@ class SpectralSolver(HeatSolver):
                 T_surface, buffers.q_evap_buffer,
                 mat.Pa, mat.T_boil, mat.DeltaH_LV, mat.R_v, mat.T_liquidus,
             )
-            S_evap = grid.dct_scale * kernels.DCT_II(buffers.q_evap_buffer)
-            S_top_raw = S_las - S_evap
+            if rescale_flux:
+                # Exact Neumann-BC boundary correction: scale the net top flux by
+                # k̄/k(T_surface) before projecting (folds -∮k'∂_nT Φ dS into F^Γ).
+                q_top = ((q_las - buffers.q_evap_buffer)
+                         * (self._kbar / mat.model.k(T_surface)))
+                S_top_raw = grid.dct_scale * kernels.DCT_II(q_top)
+            else:
+                S_evap = grid.dct_scale * kernels.DCT_II(buffers.q_evap_buffer)
+                S_top_raw = S_las - S_evap
 
             Q_latent_raw = None
             if fm.T_prev is not None:
@@ -323,6 +364,7 @@ class SpectralSolver(HeatSolver):
                 C_corr = kernels.assemble_property_correction(
                     SsState, buffers.a_temp, self._T_prev_full,
                     num.dt, mat.model, self._kbar, self._abar,
+                    mode=self._correction_mode,
                 )
                 kernels.add_source_term_modes(buffers.a_temp, SsState.KK, C_corr)
 
@@ -335,7 +377,9 @@ class SpectralSolver(HeatSolver):
 
             rms_diff = xp.sqrt(xp.vdot(residual_curr, residual_curr) / n_elements)
             rms_old = xp.sqrt(xp.vdot(a_old, a_old) / n_elements)
-            true_rel_err = float(rms_diff) / max(float(rms_old), 1e-9)
+            # Form the ratio on the device so the convergence check costs a single
+            # host sync per Picard iteration instead of two.
+            true_rel_err = float(rms_diff / xp.maximum(rms_old, xp.float32(1e-9)))
 
             if self.track_picard_history:
                 rho_k = None

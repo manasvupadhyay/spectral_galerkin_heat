@@ -180,6 +180,77 @@ def test_capacity_correction_zero_for_steady_field():
     np.testing.assert_allclose(C, Ck, rtol=1e-4, atol=1e-4)
 
 
+# ---------------------------------------------------------------------------
+# Divergence form (Green's first identity, property_correction.tex) vs the mixed reference
+# ---------------------------------------------------------------------------
+
+def _kdep_model():
+    from fast_heat_solv.core.properties import MaterialModel
+    return MaterialModel.from_config(
+        {"k": {"solid": [9.248, 0.01571], "liquid": [12.41, 0.003279]},
+         "rho": 7900.0, "Cp": 500.0},
+        1674.15, 1697.15,
+    )
+
+
+def test_divergence_mode_null_is_exact():
+    """k'=a'=0 ⇒ the divergence form (volume + faces) is exactly zero too."""
+    from fast_heat_solv.physics.spectral_ops import (
+        assemble_property_correction, reconstruct_volume)
+
+    st = _state(10, 8, 6)
+    model = _const_model()
+    rng = np.random.default_rng(11)
+    a = rng.standard_normal((6, 8, 10)).astype(np.float32) * 50.0
+    a[0, 0, 0] += 1.0e4
+    T_prev = reconstruct_volume(a, st)
+    C = assemble_property_correction(st, a, T_prev, 1e-6, model,
+                                     15.0, 7900.0 * 500.0, mode="divergence")
+    assert float(np.max(np.abs(C))) == 0.0
+
+
+def test_divergence_assembles_volume_only():
+    """The divergence correction is the volume projection of ``s_a + ∇·(k'∇T)``.
+
+    The conductivity boundary term ``-∮k'∂_nT Φ dS`` is no longer assembled inside
+    the correction: using the Neumann BC it is folded into the prescribed surface
+    flux (rescaled by ``k̄/k``) by the solver. So ``assemble_property_correction``
+    in divergence mode must return exactly the merged volume DCT, with no face
+    contribution.
+    """
+    from fast_heat_solv.physics.spectral_ops import (
+        assemble_property_correction, project_volume, reconstruct_volume)
+
+    st = _state(40, 32, 24)
+    model = _kdep_model()
+    k_bar, a_bar = 13.0, 7900.0 * 500.0
+    rng = np.random.default_rng(12)
+    nz, ny, nx = 24, 32, 40
+    decay = (np.exp(-(np.arange(nx) / 6.0) ** 2)[None, None, :]
+             * np.exp(-(np.arange(ny) / 6.0) ** 2)[None, :, None]
+             * np.exp(-(np.arange(nz) / 6.0) ** 2)[:, None, None])
+    a = (rng.standard_normal((nz, ny, nx)).astype(np.float32) * 200.0 * decay)
+    a[0, 0, 0] += 1.2e4
+    T_prev = reconstruct_volume(a, st)
+    dt = 1e-6
+
+    C = assemble_property_correction(st, a, T_prev, dt, model, k_bar, a_bar,
+                                     mode="divergence")
+
+    # Reference: volume projection of f = -a' ∂_t T + ∇·(k' ∇T), no face terms.
+    T = reconstruct_volume(a, st)
+    kp = (model.k(T) - k_bar).astype(np.float32)
+    ap = (model.a(T) - a_bar).astype(np.float32)
+    gz, gy, gx = (kp * d for d in np.gradient(T, st.grid.dz, st.grid.dy, st.grid.dx))
+    div_g = (np.gradient(gx, st.grid.dx, axis=2)
+             + np.gradient(gy, st.grid.dy, axis=1)
+             + np.gradient(gz, st.grid.dz, axis=0))
+    s_a = -ap * (T - T_prev) / np.float32(dt)
+    C_ref = project_volume((s_a + div_g).astype(np.float32), st)
+
+    np.testing.assert_allclose(C, C_ref, rtol=1e-5, atol=1e-4)
+
+
 def test_conductivity_correction_sums_three_axes():
     from fast_heat_solv.physics.spectral_ops import (
         _mixed_sine_transform,

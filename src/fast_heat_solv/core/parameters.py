@@ -80,6 +80,15 @@ class NumParams:
     dt_nominal: float = 0.0
     update_interval: float = 1e-3
     save_all: bool = False
+    # Optional Picard fixed-point controls (None -> use the solver defaults).
+    # The temperature-dependent property correction needs a higher cap than the
+    # base 30 (property_correction.tex §8.3); expose them so the config can raise it.
+    max_picard_iter: Optional[int] = None
+    picard_tol: Optional[float] = None
+    picard_omega: Optional[float] = None
+    # Property-correction projection: "mixed" (sine weak form) or "divergence"
+    # (Green's first identity — faster and more boundary-faithful). None -> solver default.
+    correction_mode: Optional[str] = None
 
 @dataclass
 class MaterialParams:
@@ -159,6 +168,12 @@ class MaterialParams:
     T0: float = 0
     h_conv: float = 0.0
     model: Optional['MaterialModel'] = None
+    # Reference temperature for the property-correction baseline k̄, ā (the
+    # constants baked into the ETD1 propagators). Defaults to T0; a warmer value
+    # (e.g. the liquidus / mean pool temperature) shrinks the property
+    # fluctuation k'=k(T)-k̄ that the semi-implicit correction must resum — the
+    # Chen-Shen stabilization choice (property_correction.tex §6.1).
+    T_ref: float = 0.0
     # Add more fields as needed from your YAML/config
 
     @property
@@ -323,7 +338,14 @@ class SimulationContext:
             t_end=t_end,
             n_steps=n_steps,
             dt_nominal=dt_nominal,
-            update_interval=float(sim_cfg.get('update_interval', 1e-3))
+            update_interval=float(sim_cfg.get('update_interval', 1e-3)),
+            max_picard_iter=(int(sim_cfg['max_picard_iter'])
+                             if sim_cfg.get('max_picard_iter') is not None else None),
+            picard_tol=(float(sim_cfg['picard_tol'])
+                        if sim_cfg.get('picard_tol') is not None else None),
+            picard_omega=(float(sim_cfg['picard_omega'])
+                          if sim_cfg.get('picard_omega') is not None else None),
+            correction_mode=sim_cfg.get('correction_mode'),
         )
 
         geom_params = GeomParams(
@@ -345,16 +367,19 @@ class SimulationContext:
         T_solidus = real_t(_get_value(mat_cfg.get('T_solidus', 0.0)))
         T_liquidus = real_t(_get_value(mat_cfg.get('T_liquidus', 0.0)))
         T0 = real_t(_get_value(mat_cfg.get('T0', 0.0)))
+        # Property-correction reference temperature (defaults to T0). Evaluating
+        # k̄, ā at a warmer T_ref shrinks the fluctuation the correction resums.
+        T_ref = real_t(_get_value(mat_cfg.get('T_ref', float(T0))))
 
         # Temperature-dependent properties: build a MaterialModel when any of
         # k/rho/Cp is given as polynomial branches. The scalar k/rho/Cp fields
-        # then hold the reference constants evaluated at T0 — exactly the values
+        # then hold the reference constants evaluated at T_ref — exactly the values
         # baked into the ETD1 propagators (see property_correction.tex §6.1).
         material_model = MaterialModel.from_config(
             mat_cfg, float(T_solidus), float(T_liquidus)
         )
         if material_model is not None:
-            k_bar, _a_bar, rho_bar, c_bar = material_model.reference_constants(float(T0))
+            k_bar, _a_bar, rho_bar, c_bar = material_model.reference_constants(float(T_ref))
             rho_ref, k_ref, cp_ref = real_t(rho_bar), real_t(k_bar), real_t(c_bar)
         else:
             rho_ref = real_t(_get_value(mat_cfg['rho']))
@@ -376,6 +401,7 @@ class SimulationContext:
             T0=T0,
             h_conv=real_t(_get_value(mat_cfg.get('h_conv', 0.0))),
             model=material_model,
+            T_ref=T_ref,
         )
 
         laser_cfg = cfg.get('laser', {})

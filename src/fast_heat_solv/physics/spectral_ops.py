@@ -69,7 +69,7 @@ def reconstruct_volume(a, SsState):
     ``(nz, ny, nx)`` array on the same grid the modes live on.
     """
     xp = SsState.xp
-    return (SsState.hooks.idct(a) / SsState.grid.sqrt_dV).astype(xp.float32)
+    return (SsState.hooks.idct(a) / SsState.grid.sqrt_dV).astype(xp.float32, copy=False)
 
 
 def project_volume(field, SsState):
@@ -78,7 +78,7 @@ def project_volume(field, SsState):
     Forward of :func:`reconstruct_volume`: ``modes = sqrt(dV) * DCT_II(field)``.
     """
     xp = SsState.xp
-    return (SsState.hooks.dct(field) * SsState.grid.sqrt_dV).astype(xp.float32)
+    return (SsState.hooks.dct(field) * SsState.grid.sqrt_dV).astype(xp.float32, copy=False)
 
 
 def _mixed_sine_transform(g, axis, SsState):
@@ -123,16 +123,28 @@ def conductivity_correction_modes(g_x, g_y, g_z, SsState):
 
 
 def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
-                                 k_bar, a_bar):
+                                 k_bar, a_bar, mode="mixed"):
     """Assemble the temperature-dependent property correction modes ``C_mnp``.
 
     Implements the forcing-assembly recipe of ``property_correction.tex`` §5/§7:
     reconstruct ``T`` over Ω from the current trial modes, read the property
     fluctuations ``k'(T)=k(T)-k̄`` and ``a'(T)=a(T)-ā`` from the tabulated model,
-    form the source fields ``g = k' ∇T`` (finite-difference gradient) and
-    ``s_a = -a' ∂_t T``, and project both:
+    form ``g = k' ∇T`` (finite-difference gradient) and ``s_a = -a' ∂_t T``, then
+    project. Both projections return only the **volume** modes; the boundary
+    contribution of the conductivity correction is handled by the solver as a
+    rescaling of the prescribed surface flux (see the divergence branch below and
+    ``SpectralSolver.step``). Two projections are available:
 
-        C = D{s_a}  +  (mπ/Lx) S_x{g_x} + (nπ/Ly) S_y{g_y} + (pπ/Lz) S_z{g_z}.
+    - ``mode="mixed"`` (reference): the weak form of ``property_correction.tex``
+      Eq.(Ck), three mixed sine/cosine transforms for ``C^k`` plus one DCT for
+      ``C^a`` — 15 full-volume FFT axis-passes. The sine basis vanishes on the
+      faces, so the boundary content is carried entirely by the (unscaled) base
+      forcing ``F^Γ``.
+    - ``mode="divergence"`` (``property_correction.tex``): integrate ``C^k`` by
+      parts so the volume term merges with ``C^a`` into a single DCT of
+      ``f = -a'∂_tT + ∇·(k'∇T)`` — ~4 passes. The boundary term it generates is
+      not assembled here; using the Neumann BC it merges with ``F^Γ`` into a
+      single rescaled-flux integral ``-∮ (k̄/k) q Φ dS`` applied in the solver.
 
     Parameters
     ----------
@@ -146,6 +158,8 @@ def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
         Temperature-dependent property model.
     k_bar, a_bar : float
         Reference constants baked into the ETD1 propagators (k̄, ā).
+    mode : {"mixed", "divergence"}
+        Projection scheme (default "mixed", the validated reference).
 
     Returns
     -------
@@ -157,8 +171,40 @@ def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
 
     T = reconstruct_volume(a_trial, SsState)
 
-    k_prime = (model.k(T) - k_bar).astype(xp.float32)
-    a_prime = (model.a(T) - a_bar).astype(xp.float32)
+    # Fluctuations k'(T), a'(T) in one fused pass (≈37× faster than the per-op
+    # Horner/blend evaluation on GPU; see MaterialModel.k_prime_a_prime).
+    k_prime, a_prime = model.k_prime_a_prime(T, k_bar, a_bar)
+
+    if mode == "divergence":
+        # Move the derivative off Φ (property_correction.tex eq. Ckdiv): the conductivity
+        # volume term becomes a DCT of ∇·(k'∇T), merged with the capacity source.
+        #
+        # The boundary term -∮ k'∂_nT Φ dS is NOT assembled here. With the imposed
+        # Neumann flux -k ∂_nT = q it equals +∮ (k'/k) q Φ dS, which combines with
+        # the base boundary forcing F^Γ = -∮ q Φ dS into a single rescaled-flux
+        # integral  -∮ (k̄/k) q Φ dS . The solver therefore applies the property
+        # correction at the boundary simply by scaling the prescribed surface flux
+        # by k̄/k(T_surface) (see SpectralSolver.step); this is exact (uses the BC,
+        # not a finite-difference boundary gradient) and needs no face transforms.
+        #
+        # The real-space forcing f = ∇·(k'∇T) - a'∂_tT is assembled by a fused
+        # backend kernel when available (GPU: two stencil passes replacing six
+        # xp.gradient calls); otherwise fall back to xp finite differences.
+        corr_source = getattr(SsState.hooks, "corr_source", None)
+        if corr_source is not None:
+            f = corr_source(T, k_prime, a_prime, T_prev_full, float(dt),
+                            grid.dx, grid.dy, grid.dz)
+            return project_volume(f, SsState).astype(xp.float32, copy=False)
+
+        dT_dz, dT_dy, dT_dx = xp.gradient(T, grid.dz, grid.dy, grid.dx)
+        g_x = k_prime * dT_dx
+        g_y = k_prime * dT_dy
+        g_z = k_prime * dT_dz
+        s_a = -a_prime * ((T - T_prev_full) / xp.float32(dt))
+        div_g = (xp.gradient(g_x, grid.dx, axis=2)
+                 + xp.gradient(g_y, grid.dy, axis=1)
+                 + xp.gradient(g_z, grid.dz, axis=0))
+        return project_volume(s_a + div_g, SsState).astype(xp.float32, copy=False)
 
     # Gradient by central differences on the reconstructed field (cheaper default
     # per tex §6.3); xp.gradient returns [∂z, ∂y, ∂x] for the (nz, ny, nx) layout.
@@ -172,7 +218,7 @@ def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
 
     C_a = project_volume(s_a, SsState)
     C_k = conductivity_correction_modes(g_x, g_y, g_z, SsState)
-    return (C_a + C_k).astype(xp.float32)
+    return (C_a + C_k).astype(xp.float32, copy=False)
 
 
 def reconstruct_temperature_box(a, SsState):
@@ -227,7 +273,7 @@ def reconstruct_surface_temperature(a, SsState):
     xp = SsState.xp
     grid = SsState.grid
     A = xp.einsum('p,pij->ij', grid.Cp32_broadcast[:, 0, 0], a, optimize=True)
-    return (grid.recon_scale * SsState.hooks.idct(A)).astype(xp.float32)
+    return (grid.recon_scale * SsState.hooks.idct(A)).astype(xp.float32, copy=False)
 
 
 def reconstruct_bottom_temperature(a, SsState):
@@ -239,7 +285,7 @@ def reconstruct_bottom_temperature(a, SsState):
     xp = SsState.xp
     grid = SsState.grid
     A = xp.einsum('p,pij->ij', grid.Cp32_broadcast_bottom[:, 0, 0], a, optimize=True)
-    return (grid.recon_scale * SsState.hooks.idct(A)).astype(xp.float32)
+    return (grid.recon_scale * SsState.hooks.idct(A)).astype(xp.float32, copy=False)
 
 
 def compute_latent_heat_source(Q_buffer, phys, num, SsState):
@@ -248,6 +294,15 @@ def compute_latent_heat_source(Q_buffer, phys, num, SsState):
     Uses the current trial modes (``buffers.a_temp``) and the stored
     ``T_prev``.  Does not update ``T_prev``; call
     :func:`update_latent_heat_history` after the iteration has converged.
+
+    The latent sink is ``Q = -rho(T) * L_f * (f_l(T) - f_l(T_prev)) / dt`` with
+    ``f_l`` clamped to ``[0, 1]`` — the same expression the FE reference uses
+    (``Q_latent = rho_eff * L_f * (lf - lf_n)/dt``). For a temperature-dependent
+    material the density is the **blended** ``rho(T) = (1-f_l)rho_s(T)+f_l
+    rho_l(T)`` evaluated per cell, not the constant reference ``rho(T0)`` baked
+    into the propagators — using the reference here over-weights the sink by
+    ~rho(T0)/rho(T_melt) ≈ 12 % and cools the pool spuriously. Constant-property
+    materials keep the fused scalar-rho kernel (validated, unchanged).
     """
     fm = SsState.fine_mesh
     if fm is None or fm.T_prev is None:
@@ -255,6 +310,22 @@ def compute_latent_heat_source(Q_buffer, phys, num, SsState):
         return
 
     T_box = reconstruct_temperature_box(SsState.buffers.a_temp, SsState)
+
+    model = getattr(phys, "model", None)
+    if model is not None and not model.is_constant:
+        # Temperature-dependent density: evaluate rho(T) per cell and form the
+        # clamped liquid-fraction increment directly (clamping f_l also captures
+        # cells that cross the whole mushy band in one step, which the indicator
+        # kernel below drops). Backend-agnostic via SsState.xp.
+        xp = SsState.xp
+        T_S = xp.float32(phys.T_solidus)
+        inv_band = xp.float32(1.0 / (phys.T_liquidus - phys.T_solidus))
+        fl_curr = xp.clip((T_box - T_S) * inv_band, xp.float32(0.0), xp.float32(1.0))
+        fl_prev = xp.clip((fm.T_prev - T_S) * inv_band, xp.float32(0.0), xp.float32(1.0))
+        rho_eff = model.rho(T_box)
+        Q_buffer[:] = (-rho_eff * xp.float32(phys.L_f) * (fl_curr - fl_prev)
+                       / xp.float32(num.dt)).astype(xp.float32)
+        return
 
     SsState.hooks.source_term(
         T_box, fm.T_prev,
