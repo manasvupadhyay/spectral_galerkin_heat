@@ -1,14 +1,18 @@
-# Temperature-dependent 316L — mirrors the FE reference
-# (andreas_heat_solv/simulations/2_comparison_FE/Theo_cuboid_FE_temp_dep.py).
-# Property branches are the Chadwick polynomials (ascending powers of T, SI).
-# Intended for the GPU FE-comparison run (property_correction.tex §8.3); the
-# global property correction makes a 3-D transform a per-iteration cost, so this
-# production-grid case should run on GPU (backend: gpu).
+# Temperature-INDEPENDENT counterpart of temp_dep_316L.yaml.
+# Identical mesh / dt / duration / laser / domain; the only difference is that
+# k, rho, Cp are constant scalars instead of polynomial branches, so the solver
+# takes the constant-coefficient fast path (no per-step property correction).
+#
+# The constants are the polynomials of temp_dep_316L.yaml evaluated at T0=293 K
+# (the reference constants the solver bakes into the ETD propagators):
+#   k_bar = 13.851029999999998 W/(m.K)
+#   rho_bar = 7957.544888242 kg/m3
+#   c_bar = 497.8904 J/(kg.K)
 
 simulation:
-  name: "temp_dep_316L"
+  name: "temp_indep_316L"
   method: "spectral"
-  backend: "gpu"
+  backend: "cpu"
   duration:
     value: 6.0e-4
     unit: "s"
@@ -19,7 +23,7 @@ simulation:
 
 domain:
   size: [2.0e-3, 1.0e-3, 0.5e-3]   # [Lx, Ly, Lz] in m (FE: 2 × 1 × 0.5 mm)
-  mesh: [400, 200, 100]            # [nx, ny, nz] — refine for the convergence sweep
+  mesh: [400, 200, 100]            # [nx, ny, nz]
 
 fine_mesh:
   refinement: 4
@@ -27,16 +31,16 @@ fine_mesh:
 
 material:
   name: "316L"
-  # Temperature-dependent: solid/liquid polynomial branches blended by f_l.
+  # Temperature-independent: constants = polynomials evaluated at T0=293 K.
   k:
-    solid:  [9.248, 0.01571]        # k_s  = 9.248 + 0.01571·T
-    liquid: [12.41, 0.003279]       # k_l  = 12.41 + 0.003279·T
+    value: 13.851029999999998
+    unit: "W/(m.K)"
   rho:
-    solid:  [8084.2, -0.42086, -3.8942e-5]
-    liquid: [7432.7, 0.039338, -1.8007e-4]
+    value: 7957.544888242
+    unit: "kg/m3"
   Cp:
-    solid:  [458.98, 0.1328]        # c_s  = 458.98 + 0.1328·T
-    liquid: [769.86]                # c_l  = 769.86 (constant)
+    value: 497.8904
+    unit: "J/(kg.K)"
   L_f:
     value: 2.677e5
     unit: "J/kg"

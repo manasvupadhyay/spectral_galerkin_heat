@@ -6,9 +6,9 @@
 # production-grid case should run on GPU (backend: gpu).
 
 simulation:
-  name: "temp_dep_316L"
+  name: "temp_dep_316L_centered"
   method: "spectral"
-  backend: "gpu"
+  backend: "cpu"
   duration:
     value: 6.0e-4
     unit: "s"
@@ -75,7 +75,7 @@ laser:
     unit: "W"
   path:
     type: "gcode"
-    file: "linear_track.gcode"     # v_scan = 0.150 m/s, start at x_min, y-centre
+    file: "linear_track_centered.gcode"
 
 io:
   output_interval:
