@@ -23,7 +23,8 @@ fastHeatSolv/
 │       │   ├── base.py             # MathBackend: bundles array module (xp) + kernels
 │       │   ├── numpy_backend.py    # NumpyBackend (CPU)
 │       │   ├── cupy_backend.py     # CupyBackend (GPU)
-│       │   └── __init__.py         # get_backend(name)
+│       │   ├── _registry.py        # backend registry: register_backend + get_backend
+│       │   └── __init__.py         # get_backend(name); registers built-in backends
 │       ├── solvers/
 │       │   ├── base.py             # HeatSolver ABC
 │       │   ├── spectral.py         # SpectralSolver (unified CPU/GPU, backend-injected)
@@ -68,8 +69,11 @@ fastHeatSolv/
   separate linear variant.
 
 - **Backends (`backends/`)**: `MathBackend` bundles an array module (`xp`, NumPy or
-  CuPy) with its matching physics-kernel module. `get_backend(name)` returns
-  `NumpyBackend` or `CupyBackend`, so the same solver code targets either device.
+  CuPy) with its matching physics-kernel module. A name→factory registry
+  (`_registry.py`) resolves backends: `get_backend(name)` returns `NumpyBackend`
+  or `CupyBackend`, so the same solver code targets either device. Extra backends
+  register themselves with the `@register_backend("name")` decorator, so adding
+  one never requires editing `get_backend`.
 
 - **I/O (`io_utils/spectral_fs_io.py`)**: `LocalFSIOManager` — the concrete
   filesystem I/O handler (HDF5 + XDMF). It owns the full I/O contract

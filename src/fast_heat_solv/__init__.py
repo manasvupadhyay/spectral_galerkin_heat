@@ -26,7 +26,8 @@ phase change and evaporation.
 - **Core interfaces**: :class:`~fast_heat_solv.core.parameters.SimulationContext`,
   :class:`~fast_heat_solv.core.laser.LaserPath`, :class:`~fast_heat_solv.core.laser.LaserState`
 - **Backends**: :class:`~fast_heat_solv.backends.MathBackend`,
-  :func:`~fast_heat_solv.backends.get_backend`
+  :func:`~fast_heat_solv.backends.get_backend`,
+  :func:`~fast_heat_solv.backends.register_backend`
 - **Solvers**: :class:`~fast_heat_solv.solvers.HeatSolver`,
   :class:`~fast_heat_solv.solvers.spectral.SpectralSolver`
 - **I/O**: :class:`~fast_heat_solv.io_utils.LocalFSIOManager`,
@@ -55,6 +56,7 @@ from .backends import (
     MathBackend,
     NumpyBackend,
     get_backend,
+    register_backend,
 )
 
 # Solver and runner imports are deferred — they pull in numba/pyfftw which
@@ -90,6 +92,7 @@ __all__ = [
     "MathBackend",
     "NumpyBackend",
     "get_backend",
+    "register_backend",
     # Solvers
     "HeatSolver",
     "SpectralSolver",

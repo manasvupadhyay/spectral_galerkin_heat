@@ -24,8 +24,10 @@ import numpy as np
 
 import fast_heat_solv.physics.spectral_cpu_kernels as _cpu_kernels
 from .base import MathBackend
+from ._registry import register_backend
 
 
+@register_backend("numpy")
 class NumpyBackend(MathBackend):
     """CPU backend: NumPy arrays and Numba CPU kernels."""
 
