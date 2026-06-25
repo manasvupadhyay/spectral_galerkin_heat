@@ -37,6 +37,38 @@ def _get_value(v):
     return v
 
 
+# Floating-point precisions the solver supports, keyed by config name.
+_SUPPORTED_DTYPES = {"float32": np.float32, "float64": np.float64}
+
+
+def _resolve_dtype(name):
+    """Resolve a precision name (e.g. ``"float32"``) to a NumPy scalar type.
+
+    Parameters
+    ----------
+    name : str
+        Precision name from the ``simulation.dtype`` config key.
+
+    Returns
+    -------
+    type
+        ``numpy.float32`` or ``numpy.float64``.
+
+    Raises
+    ------
+    ValueError
+        If *name* is not a supported precision.
+    """
+    key = str(name).lower()
+    try:
+        return _SUPPORTED_DTYPES[key]
+    except KeyError:
+        choices = ", ".join(sorted(_SUPPORTED_DTYPES))
+        raise ValueError(
+            f"Unknown dtype: {name!r}. Choose one of: {choices}."
+        ) from None
+
+
 @dataclass
 class NumParams:
     """
@@ -63,6 +95,10 @@ class NumParams:
         by default 1e-3.
     save_all : bool, optional
         If True, save the full temperature field at every time step;  default False.
+    dtype : type, optional
+        Floating-point precision for the solver arrays (``numpy.float32`` or
+        ``numpy.float64``), by default ``numpy.float32``. Set via the
+        ``simulation.dtype`` config key.
     """
     dt: float
     nx: int
@@ -73,6 +109,7 @@ class NumParams:
     dt_nominal: float = 0.0
     update_interval: float = 1e-3
     save_all: bool = False
+    dtype: Any = np.float32
 
 @dataclass
 class MaterialParams:
@@ -285,7 +322,7 @@ class SimulationContext:
         SimulationContext
             A populated simulation context ready to build and initialize a solver.
         """
-        real_t = np.float32
+        real_t = _resolve_dtype(cfg.get('simulation', {}).get('dtype', 'float32'))
         sim_cfg = cfg.get('simulation', {})
         domain_cfg = cfg.get('domain', {})
         sim_method = sim_cfg.get('method', 'spectral').lower()
@@ -305,7 +342,8 @@ class SimulationContext:
             t_end=t_end,
             n_steps=n_steps,
             dt_nominal=dt_nominal,
-            update_interval=float(sim_cfg.get('update_interval', 1e-3))
+            update_interval=float(sim_cfg.get('update_interval', 1e-3)),
+            dtype=real_t,
         )
 
         geom_params = GeomParams(

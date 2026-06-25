@@ -35,11 +35,17 @@ __copyright__ = "Copyright 2026, LMS, École Polytechnique"
 
 import logging
 from dataclasses import dataclass
+from types import ModuleType
 from typing import Any, Callable
 
 import numpy as np
 
 from fast_heat_solv.physics import spectral_helpers as spec_hp
+
+# Backend-agnostic array type: a ``numpy.ndarray`` or a ``cupy.ndarray``.
+# Aliased to ``Any`` rather than a union so importing this module never pulls in
+# CuPy (an optional dependency); the name documents intent at the call sites.
+NDArray = Any
 
 __all__ = [
     "SpectralGrid",
@@ -59,18 +65,24 @@ def _asnumpy(arr):
     return get() if callable(get) else np.asarray(arr)
 
 
-@dataclass
 class SpectralGrid:
-    """Immutable grid definitions and reconstruction bases."""
+    """Immutable grid definitions and reconstruction bases.
+
+    Plain class (not a ``@dataclass``): the fields are computed from
+    ``(geom, xp)`` in :meth:`__init__`, not passed in, so the generated
+    dataclass ``__init__`` would not fit. The annotated declarations below
+    document the schema and provide defaults for the lazily-built fields
+    (``B_recon`` / ``coords_rec``).
+    """
     # Global coordinates (Cell-Centered)
-    x: Any = None
-    y: Any = None
-    z: Any = None
+    x: NDArray = None
+    y: NDArray = None
+    z: NDArray = None
 
     # Reconstruction constants
     recon_scale: float = 0.0
-    Cp32_broadcast: Any = None
-    Cp32_broadcast_bottom: Any = None
+    Cp32_broadcast: NDArray = None
+    Cp32_broadcast_bottom: NDArray = None
     dct_scale: float = 0.0
 
     # Normalization coefficients (indexed by axis: 0=x, 1=y, 2=z)
@@ -80,29 +92,32 @@ class SpectralGrid:
     B_recon: list = None
     coords_rec: list = None
 
-    def __init__(self, geom, xp):
+    def __init__(self, geom, xp, dtype=np.float32):
+        # Floating-point precision for all arrays built here (np.float32 /
+        # np.float64); ``np.float32`` keeps the historical default.
+        self.dtype = dtype
+
         # Global mesh coordinates (cell-centered), one array per axis.
-        self.x, self.y, self.z = [((xp.arange(n) + 0.5) * d).astype(xp.float32)
+        self.x, self.y, self.z = [((xp.arange(n) + 0.5) * d).astype(dtype)
                                    for n, d in zip(geom.n, geom.d)]
 
-        # Normalization coefficients (C[0]=x, C[1]=y, C[2]=z), float32 on both
-        # backends.
-        self.C = tuple(xp.asarray(spec_hp._C_coef(n, L), dtype=xp.float32)
+        # Normalization coefficients (C[0]=x, C[1]=y, C[2]=z).
+        self.C = tuple(xp.asarray(spec_hp._C_coef(n, L), dtype=dtype)
                        for n, L in zip(geom.n, geom.size))
 
         # Scaling factors (scalar math stays on the host via np.sqrt).
         dx, dy = geom.d.x, geom.d.y
         nx, ny = geom.n.x, geom.n.y
         Lx, Ly = geom.size.x, geom.size.y
-        self.dct_scale = xp.float32((dx * dy) * np.sqrt((nx * ny) / (Lx * Ly)))
-        self.recon_scale = xp.float32(np.sqrt(nx * ny) / np.sqrt(Lx * Ly))
+        self.dct_scale = dtype((dx * dy) * np.sqrt((nx * ny) / (Lx * Ly)))
+        self.recon_scale = dtype(np.sqrt(nx * ny) / np.sqrt(Lx * Ly))
 
         # Compute top-surface weighting for projection
-        sign = xp.power(-1.0, xp.arange(geom.n.z, dtype=xp.float32)).astype(xp.float32)
-        self.Cp32_broadcast = (self.C[2].astype(xp.float32) * sign)[:, None, None]
+        sign = xp.power(-1.0, xp.arange(geom.n.z, dtype=dtype)).astype(dtype)
+        self.Cp32_broadcast = (self.C[2].astype(dtype) * sign)[:, None, None]
 
         # Bottom-surface weighting: cos(p*pi*0/Lz) = 1, so no sign alternation
-        self.Cp32_broadcast_bottom = self.C[2].astype(xp.float32)[:, None, None]
+        self.Cp32_broadcast_bottom = self.C[2].astype(dtype)[:, None, None]
 
     def prepare_full_reconstruction(self, geom):
         """Compute node-centered grids and full-domain reconstruction bases on demand.
@@ -118,16 +133,20 @@ class SpectralGrid:
         Lx, Ly, Lz = geom.size
         dx, dy, dz = geom.d
 
-        self.coords_rec = [((np.arange(n + 1)) * d).astype(np.float32)
+        self.coords_rec = [((np.arange(n + 1)) * d).astype(self.dtype)
                            for n, d in zip((nx, ny, nz), (dx, dy, dz))]
         C_host = [_asnumpy(self.C[a]) for a in range(3)]
-        self.B_recon = [(C_host[a][:, None] * np.cos(np.pi * np.arange(n)[:, None] * self.coords_rec[a][None, :] / L)).astype(np.float32)
+        self.B_recon = [(C_host[a][:, None] * np.cos(np.pi * np.arange(n)[:, None] * self.coords_rec[a][None, :] / L)).astype(self.dtype)
                         for a, (n, L) in enumerate(zip((nx, ny, nz), (Lx, Ly, Lz)))]
 
 
-@dataclass
 class FineMeshState:
-    """Handles the moving fine mesh for latent heat/nonlinearities."""
+    """Handles the moving fine mesh for latent heat/nonlinearities.
+
+    Plain class (not a ``@dataclass``): fields are computed in
+    :meth:`__init__`. The annotated declarations document the schema and
+    default the late-set ``T_prev`` / ``Q_prev`` to ``None``.
+    """
     refinement: int = 4
     nx_box: int = 0
     ny_box: int = 0
@@ -143,10 +162,11 @@ class FineMeshState:
     B_fine_full: list = None    # cosine bases indexed by axis; z uses domain-shifted coords
     B_fine: list = None         # active window bases; z does not slide
 
-    T_prev: Any = None
-    Q_prev: Any = None
+    T_prev: NDArray = None
+    Q_prev: NDArray = None
 
-    def __init__(self, geom, grid: SpectralGrid, fine, xp):
+    def __init__(self, geom, grid: SpectralGrid, fine, xp, dtype=np.float32):
+        self.dtype = dtype
         dx, dy, dz = geom.d
         Lx, Ly, Lz = geom.size
 
@@ -160,7 +180,7 @@ class FineMeshState:
         d_fine = [self.dx_fine, self.dy_fine, self.dz_fine]
 
         self.n_fine_totals = [int(np.ceil(L / d)) for L, d in zip([Lx, Ly, Lz_box], d_fine)]
-        self.coords_fine = [((xp.arange(n) + 0.5) * d).astype(xp.float32)
+        self.coords_fine = [((xp.arange(n) + 0.5) * d).astype(dtype)
                             for n, d in zip(self.n_fine_totals, d_fine)]
 
         z_fine_global = (Lz - Lz_box) + self.coords_fine[2]
@@ -170,7 +190,7 @@ class FineMeshState:
         L_domain = [Lx, Ly, Lz]
         fine_coords = [self.coords_fine[0], self.coords_fine[1], z_fine_global]
         self.B_fine_full = [
-            (grid.C[a][:, None] * xp.cos(np.pi * xp.arange(mode_counts[a])[:, None] * fine_coords[a][None, :] / L_domain[a])).astype(xp.float32)
+            (grid.C[a][:, None] * xp.cos(np.pi * xp.arange(mode_counts[a])[:, None] * fine_coords[a][None, :] / L_domain[a])).astype(dtype)
             for a in range(3)
         ]
 
@@ -179,8 +199,8 @@ class FineMeshState:
         self.nz_box = min(int(np.ceil(Lz_box / self.dz_fine)), self.n_fine_totals[2])
 
         self.B_fine = [
-            xp.zeros((geom.n.x, self.nx_box), dtype=xp.float32),
-            xp.zeros((geom.n.y, self.ny_box), dtype=xp.float32),
+            xp.zeros((geom.n.x, self.nx_box), dtype=dtype),
+            xp.zeros((geom.n.y, self.ny_box), dtype=dtype),
             self.B_fine_full[2][:, :self.nz_box],  # z: static full-depth slice
         ]
         self.dV_fine = self.dx_fine * self.dy_fine * self.dz_fine
@@ -196,20 +216,23 @@ class FineMeshState:
         # z does not slide
 
 
-@dataclass
 class SolverBuffers:
-    """Reusable working arrays."""
-    a_temp: Any = None      # (nz, ny, nx)
-    q_evap_old: Any = None  # (ny, nx)
-    q_evap_buffer: Any = None
-    Q_latent_buffer: Any = None
+    """Reusable working arrays.
 
-    def __init__(self, num, fine_mesh: FineMeshState, xp):
+    Plain class (not a ``@dataclass``): all buffers are allocated from
+    ``(num, fine_mesh, xp)`` in :meth:`__init__`.
+    """
+    a_temp: NDArray = None      # (nz, ny, nx)
+    q_evap_old: NDArray = None  # (ny, nx)
+    q_evap_buffer: NDArray = None
+    Q_latent_buffer: NDArray = None
+
+    def __init__(self, num, fine_mesh: FineMeshState, xp, dtype=np.float32):
         nx, ny, nz = num.nx, num.ny, num.nz
-        self.a_temp = xp.empty((nz, ny, nx), dtype=xp.float32)
-        self.q_evap_old = xp.zeros((ny, nx), dtype=xp.float32)
-        self.q_evap_buffer = xp.zeros((ny, nx), dtype=xp.float32)
-        self.Q_latent_buffer = xp.zeros((fine_mesh.nz_box, fine_mesh.ny_box, fine_mesh.nx_box), dtype=xp.float32)
+        self.a_temp = xp.empty((nz, ny, nx), dtype=dtype)
+        self.q_evap_old = xp.zeros((ny, nx), dtype=dtype)
+        self.q_evap_buffer = xp.zeros((ny, nx), dtype=dtype)
+        self.Q_latent_buffer = xp.zeros((fine_mesh.nz_box, fine_mesh.ny_box, fine_mesh.nx_box), dtype=dtype)
 
 
 @dataclass(frozen=True)
@@ -239,7 +262,6 @@ class BackendHooks:
     source_term: Callable
 
 
-@dataclass
 class SpectralSolverState:
     """Coordinator class for the spectral method state.
 
@@ -247,6 +269,11 @@ class SpectralSolverState:
     expose thin subclasses that bind their own ``xp`` (and attach
     :class:`BackendHooks`) so callers use the
     ``SpectralSolverState(phys, geom, num, fine)`` signature.
+
+    Plain class (not a ``@dataclass``): the sub-components are built in
+    :meth:`__init__`. The annotated declarations document the schema and
+    default the late-set ``a`` / ``hooks`` (the latter attached by the
+    per-backend subclass) to ``None``.
     """
     # 1. Components
     grid: SpectralGrid = None
@@ -254,32 +281,39 @@ class SpectralSolverState:
     fine_mesh: FineMeshState = None
 
     # 2. Primary State
-    a: Any = None       # Current temperature modes (nz, ny, nx)
+    a: NDArray = None       # Current temperature modes (nz, ny, nx)
 
     # 3. Spectral Propagators
-    K: Any = None
-    KK: Any = None
+    K: NDArray = None
+    KK: NDArray = None
 
     # 4. Bound array module (numpy or cupy) — lets backend-agnostic free
     # functions in ``spectral_ops`` recover ``xp`` from the state object.
-    xp: Any = None
+    xp: ModuleType = None
 
-    # 5. Backend primitive hooks (FFT / ndimage shift / source-term launch),
+    # 5. Floating-point precision (np.float32 / np.float64) used for every
+    # array built below — recoverable by free functions alongside ``xp``.
+    dtype: Any = None
+
+    # 6. Backend primitive hooks (FFT / ndimage shift / source-term launch),
     # attached by the per-backend subclass; see ``BackendHooks``.
     hooks: "BackendHooks" = None
 
     def __init__(self, phys, geom, num, fine, xp):
         self.xp = xp
+        # Precision for all solver arrays; defaults to float32 if ``num`` has
+        # no ``dtype`` (e.g. a hand-built NumParams from before this field).
+        self.dtype = getattr(num, "dtype", np.float32)
         # Initialize sub-components
-        self.grid = SpectralGrid(geom, xp)
-        self.fine_mesh = FineMeshState(geom, self.grid, fine, xp)
-        self.buffers = SolverBuffers(num, self.fine_mesh, xp)
+        self.grid = SpectralGrid(geom, xp, self.dtype)
+        self.fine_mesh = FineMeshState(geom, self.grid, fine, xp, self.dtype)
+        self.buffers = SolverBuffers(num, self.fine_mesh, xp, self.dtype)
 
         # Precompute propagators
-        self.K, self.KK = precompute_K_KK(phys, num, geom, xp)
+        self.K, self.KK = precompute_K_KK(phys, num, geom, xp, self.dtype)
 
 
-def precompute_K_KK(phys, num, geom, xp):
+def precompute_K_KK(phys, num, geom, xp, dtype=np.float32):
     """
     Compute spectral Propagators (K, KK) based on grid and time step.
     K = exp(-alpha * k^2 * dt) for ETD1 (Exact integration of linear part)
@@ -289,7 +323,7 @@ def precompute_K_KK(phys, num, geom, xp):
     k = [np.pi * xp.arange(n) / L for n, L in zip(geom.n.zyx(), geom.size.zyx())]
     k_grids = xp.meshgrid(*k, indexing='ij')  # shape (nz, ny, nx) each
     denom = phys.k / (phys.rho * phys.Cp) * sum(kg**2 for kg in k_grids)
-    K = xp.exp(-denom * num.dt).astype(xp.float32)
+    K = xp.exp(-denom * num.dt).astype(dtype)
     mask_zero = (denom == 0)
     # Avoid div by zero
     denom[mask_zero] = 1.0
@@ -297,5 +331,5 @@ def precompute_K_KK(phys, num, geom, xp):
     phi_1 = (K - 1.0) / (-denom)
     phi_1[mask_zero] = num.dt
 
-    KK = (phi_1 / (phys.rho * phys.Cp)).astype(xp.float32)
+    KK = (phi_1 / (phys.rho * phys.Cp)).astype(dtype)
     return K, KK

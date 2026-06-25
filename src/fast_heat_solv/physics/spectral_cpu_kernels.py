@@ -184,13 +184,20 @@ def _ndshift(field, shift_pixels, order, mode, cval):
 
 
 def DCT_II(q):
-    """Apply Discrete Cosine Transform Type II (Ortho)."""
-    arr = np.ascontiguousarray(q, dtype=np.float32)
+    """Apply Discrete Cosine Transform Type II (Ortho).
+
+    Precision-transparent: the transform runs (and returns) in the input
+    array's float dtype (float32 or float64).
+    """
+    arr = np.ascontiguousarray(q)
     return pyfftw.interfaces.scipy_fft.dctn(arr, type=2, norm='ortho', axes=tuple(range(arr.ndim)), workers=-1)
 
 def IDCT_II(a):
-    """Apply Discrete Cosine Transform Type II (Ortho)."""
-    arr = np.ascontiguousarray(a, dtype=np.float32)
+    """Apply Discrete Cosine Transform Type II (Ortho).
+
+    Precision-transparent: runs in the input array's float dtype.
+    """
+    arr = np.ascontiguousarray(a)
     return pyfftw.interfaces.scipy_fft.dctn(arr, type=3, norm='ortho', axes=tuple(range(arr.ndim)), workers=-1)
 
 # Gain of few percent compared to scipy.fft.dctn(...) directly

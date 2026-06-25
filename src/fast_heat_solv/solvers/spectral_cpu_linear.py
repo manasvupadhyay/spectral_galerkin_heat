@@ -85,7 +85,7 @@ class SpectralSolverCPULinear(HeatSolver):
         self.state = kernels.SpectralSolverState(mat, geom, num, self.context.fine)
 
         # Initial condition: mean T in mode (0,0,0)
-        self.state.a = np.zeros((num.nz, num.ny, num.nx), dtype=np.float32)
+        self.state.a = np.zeros((num.nz, num.ny, num.nx), dtype=self.state.dtype)
         T0 = mat.T0
         self.state.a[0,0,0] = T0 * np.sqrt(geom.size.x * geom.size.y * geom.size.z)
 
@@ -174,8 +174,9 @@ class SpectralSolverCPULinear(HeatSolver):
         if self.state is None or self.context is None:
             raise RuntimeError("Solver must be initialized before calling set_state().")
         geom = self.context.geom
-        T = np.asarray(temperature_field, dtype=np.float32)
-        scale = np.sqrt(np.float32(geom.d.x * geom.d.y * geom.d.z))
+        dtype = self.state.dtype
+        T = np.asarray(temperature_field, dtype=dtype)
+        scale = dtype(np.sqrt(geom.d.x * geom.d.y * geom.d.z))
         self.state.a = kernels.DCT_II(T) * scale
 
     def finalize(self) -> None:

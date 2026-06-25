@@ -263,10 +263,66 @@ def test_cpu_simulation_e2e(tmp_path, monkeypatch):
 
 
 @pytest.mark.integration
-def test_gpu_simulation_e2e(tmp_path, monkeypatch):
+@pytest.mark.parametrize("dtype_name, np_dtype", [
+    ("float32", np.float32),
+    ("float64", np.float64),
+])
+def test_cpu_dtype_e2e(tmp_path, monkeypatch, dtype_name, np_dtype):
+    """The configured ``simulation.dtype`` flows end-to-end (state + output).
+
+    Runs the full CPU pipeline at the requested precision and checks that the
+    solver state arrays and the saved temperature field carry that dtype, and
+    that the field is physically sane.
+    """
+    cfg = copy.deepcopy(_CONFIG)
+    cfg["simulation"]["dtype"] = dtype_name
+
+    T = _run_pipeline_final_field(cfg, tmp_path / dtype_name, monkeypatch)
+
+    assert T.dtype == np.dtype(np_dtype), (
+        f"Saved field dtype {T.dtype} != configured {np_dtype}"
+    )
+    assert not np.isnan(T).any() and not np.isinf(T).any()
+    assert T.max() > _T0
+
+
+@pytest.mark.integration
+def test_cpu_float32_float64_consistency_e2e(tmp_path, monkeypatch):
+    """float64 must agree with the trusted float32 baseline.
+
+    Both precisions solve the identical problem; the final fields should match
+    to within a small fraction of the peak temperature (float32 round-off sets
+    the floor). This is the "float64 actually works" guard.
+    """
+    cfg32 = copy.deepcopy(_CONFIG)
+    cfg32["simulation"]["dtype"] = "float32"
+    cfg64 = copy.deepcopy(_CONFIG)
+    cfg64["simulation"]["dtype"] = "float64"
+
+    T32 = _run_pipeline_final_field(cfg32, tmp_path / "f32", monkeypatch).astype(np.float64)
+    T64 = _run_pipeline_final_field(cfg64, tmp_path / "f64", monkeypatch)
+
+    assert T32.shape == T64.shape
+    T_max = float(T32.max())
+    max_abs_diff = float(np.max(np.abs(T64 - T32)))
+    # 1e-4 * T_max absorbs the float32 baseline's round-off vs. the float64 run.
+    assert max_abs_diff == pytest.approx(0.0, abs=1e-4 * T_max), (
+        f"float32 and float64 fields differ by {max_abs_diff:.3e} K, "
+        f"exceeding the 1e-4 * T_max = {1e-4 * T_max:.3e} K bound"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("dtype_name, np_dtype", [
+    ("float32", np.float32),
+    ("float64", np.float64),
+])
+def test_gpu_simulation_e2e(tmp_path, monkeypatch, dtype_name, np_dtype):
     """GPU pipeline smoke test — skipped when CuPy / CUDA is unavailable.
 
-    Mirrors the CPU test exactly but selects the GPU backend.
+    Mirrors the CPU test but selects the GPU backend, parametrized over
+    precision so the float64 GPU path is exercised on CUDA hardware (the
+    ``@cuda.jit`` kernels are dtype-generic and cuFFT supports double).
     """
     try:
         import cupy
@@ -281,6 +337,7 @@ def test_gpu_simulation_e2e(tmp_path, monkeypatch):
 
     gpu_cfg = copy.deepcopy(_CONFIG)
     gpu_cfg["simulation"]["backend"] = "gpu"
+    gpu_cfg["simulation"]["dtype"] = dtype_name
 
     context = _build_context(gpu_cfg)
     runner = StandaloneHeatRunner(context, build_solver(context))
@@ -293,6 +350,9 @@ def test_gpu_simulation_e2e(tmp_path, monkeypatch):
     assert len(run_dirs) == 1
     h5_files = sorted((run_dirs[0] / "fields").glob("field_step*.h5"))
     assert h5_files, "No HDF5 field file written for GPU run"
+    _assert_field_sane(h5_files[-1], _T0)
+    with h5py.File(h5_files[-1], "r") as f:
+        assert f["temperature"][:].dtype == np.dtype(np_dtype)
 
     _assert_field_sane(h5_files[-1], _T0)
 
@@ -360,9 +420,12 @@ def test_cpu_gpu_equivalence_e2e(tmp_path, monkeypatch):
     # atol guards near-T0 cells where relative error is meaningless.
     np.testing.assert_allclose(T_gpu, T_cpu, rtol=1e-5, atol=1e-3)
 
-    # Absolute-difference cap, expected T_max > 3000 K
+    # Peak-relative agreement: the max absolute deviation must stay within
+    # 1e-5 * T_max (T_max > 3000 K for this config). Scalar comparison, so
+    # pytest.approx is the right tool (vs. assert_allclose for the array above).
+    T_max = float(T_cpu.max())
     max_abs_diff = float(np.max(np.abs(T_gpu - T_cpu)))
-    assert max_abs_diff < 0.01, (
+    assert max_abs_diff == pytest.approx(0.0, abs=1e-5 * T_max), (
         f"CPU/GPU temperature fields differ by {max_abs_diff:.3e} K, "
-        f"exceeding the 0.01 K cap"
+        f"exceeding the 1e-5 * T_max = {1e-5 * T_max:.3e} K bound"
     )

@@ -86,10 +86,12 @@ class Vec3:
 
     def __truediv__(self, other: Union["Vec3", Number]) -> "Vec3":
         """Element-wise division by another ``Vec3`` or a scalar."""
-        o = other if isinstance(other, Vec3) else Vec3(other, other, other)
-        return Vec3(self.x / o.x, self.y / o.y, self.z / o.z)
+        if isinstance(other, Vec3):
+            return Vec3(self.x / other.x, self.y / other.y, self.z / other.z)
+        return Vec3(self.x / other, self.y / other, self.z / other)
 
     def __mul__(self, other: Union["Vec3", Number]) -> "Vec3":
         """Element-wise multiplication by another ``Vec3`` or a scalar."""
-        o = other if isinstance(other, Vec3) else Vec3(other, other, other)
-        return Vec3(self.x * o.x, self.y * o.y, self.z * o.z)
+        if isinstance(other, Vec3):
+            return Vec3(self.x * other.x, self.y * other.y, self.z * other.z)
+        return Vec3(self.x * other, self.y * other, self.z * other)

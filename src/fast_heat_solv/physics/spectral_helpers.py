@@ -127,6 +127,7 @@ def reconstruct_temperature_volume(a, SsState):
     """
 
     a = to_host(a)
+    out_dtype = a.dtype  # precision-transparent: follow the modes array
 
     grid = SsState.grid
 
@@ -138,7 +139,7 @@ def reconstruct_temperature_volume(a, SsState):
     T_step2 = np.tensordot(T_step1, By, axes=(1, 0))  # (nz, nx, ny)
     T_full = np.tensordot(T_step2, Bz, axes=(0, 0))  # (N_x, N_y, N_z)
 
-    return T_full.astype(np.float32)
+    return T_full.astype(out_dtype)
 
 def reconstruct_temperature_DCT(a, SsState):
     """Reconstruct node-centered temperature field using DCT type I.
@@ -167,18 +168,19 @@ def reconstruct_temperature_DCT(a, SsState):
 
     Returns
     -------
-    T : ndarray, shape (N_x+1, N_y+1, N_z+1), dtype float32
-        Node-centred temperature field.
+    T : ndarray, shape (N_x+1, N_y+1, N_z+1)
+        Node-centred temperature field, in the modes array's float dtype.
     """
     a = to_host(a)
+    out_dtype = a.dtype  # precision-transparent: follow the modes array
 
     grid = SsState.grid
     nz, ny, nx = a.shape
 
     # ── Fused 1-D weight vectors: normalization × DCT-I halving ──────
     # Combined weight[i] = C[i] * (0.5 if i>0 else 1.0)
-    # Precomputed as 1-D float32 vectors (6 elements total).
-    wx, wy, wz = (np.array(to_host(c), dtype=np.float32) for c in grid.C)
+    # Precomputed as 1-D vectors (6 elements total).
+    wx, wy, wz = (np.array(to_host(c), dtype=out_dtype) for c in grid.C)
     wx[1:] *= 0.5
     wy[1:] *= 0.5
     wz[1:] *= 0.5
@@ -191,7 +193,7 @@ def reconstruct_temperature_DCT(a, SsState):
     b *= wy[None, :, None]
     b *= wx[None, None, :]
 
-    padded = np.empty((nz + 1, ny + 1, nx + 1), dtype=np.float32)
+    padded = np.empty((nz + 1, ny + 1, nx + 1), dtype=out_dtype)
     padded[:nz, :ny, :nx] = b            # single contiguous-to-strided copy
     padded[nz, :, :] = 0.0               # zero the 3 padding planes
     padded[:, ny, :] = 0.0
@@ -203,7 +205,7 @@ def reconstruct_temperature_DCT(a, SsState):
                         overwrite_x=True, workers=-1)
 
     # ── Transpose (nz+1, ny+1, nx+1) → (N_x+1, N_y+1, N_z+1) ─────────
-    return np.ascontiguousarray(T.transpose(2, 1, 0), dtype=np.float32)
+    return np.ascontiguousarray(T.transpose(2, 1, 0), dtype=out_dtype)
 
 def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
     """
@@ -227,7 +229,13 @@ def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
     ndarray
         Array of shape N with temperature values at each queried point.
     """
-    coords = np.asarray(coords, dtype=np.float32)
+    # Bring modal/spectral coefficients to host to avoid mixed NumPy/CuPy
+    # arithmetic in these CPU-based helpers.
+    grid = SsState.grid
+    a_np = to_host(a)
+    out_dtype = a_np.dtype  # precision-transparent: follow the modes array
+
+    coords = np.asarray(coords, dtype=out_dtype)
     if coords.ndim != 2 or coords.shape[1] != 3:
         raise ValueError("coords must be of shape (N, 3)")
 
@@ -235,19 +243,14 @@ def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
     y_vals = np.clip(coords[:, 1], 0.0, geom.size.y)
     z_vals = np.clip(coords[:, 2], 0.0, geom.size.z)
 
-    # Bring modal/spectral coefficients to host to avoid mixed NumPy/CuPy
-    # arithmetic in these CPU-based helpers.
-    grid = SsState.grid
-
     C = [to_host(c) for c in grid.C]
-    a_np = to_host(a).astype(np.float32)
 
-    Bx = (C[0][:, None] * _cosine_basis_along_axis(num.nx, geom.size.x, x_vals)).astype(np.float32)
-    By = (C[1][:, None] * _cosine_basis_along_axis(num.ny, geom.size.y, y_vals)).astype(np.float32)
-    Bz = (C[2][:, None] * _cosine_basis_along_axis(num.nz, geom.size.z, z_vals)).astype(np.float32)
+    Bx = (C[0][:, None] * _cosine_basis_along_axis(num.nx, geom.size.x, x_vals)).astype(out_dtype)
+    By = (C[1][:, None] * _cosine_basis_along_axis(num.ny, geom.size.y, y_vals)).astype(out_dtype)
+    Bz = (C[2][:, None] * _cosine_basis_along_axis(num.nz, geom.size.z, z_vals)).astype(out_dtype)
     temps = np.einsum('pnm,pi,ni,mi->i', a_np, Bz, By, Bx, optimize=True)
 
-    return temps.astype(np.float32)
+    return temps.astype(out_dtype)
 
 
 def save_temp_profiles(

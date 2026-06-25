@@ -107,11 +107,16 @@ class SpectralSolver(HeatSolver):
 
         # Initialize spectral solver state
         self.state = kernels.SpectralSolverState(mat, geom, num, self.context.fine)
+        dtype = self.state.dtype
+
+        # Mixing/convergence scalars at the configured precision.
+        self.mixing_omega = dtype(0.1)
+        self.convergence_tol = dtype(1e-4)
 
         # Initial condition: mean T in mode (0,0,0)
-        self.state.a = xp.zeros((num.nz, num.ny, num.nx), dtype=xp.float32)
+        self.state.a = xp.zeros((num.nz, num.ny, num.nx), dtype=dtype)
         T0 = mat.T0
-        self.state.a[0, 0, 0] = xp.float32(
+        self.state.a[0, 0, 0] = dtype(
             T0 * math.sqrt(geom.size.x * geom.size.y * geom.size.z)
         )
 
@@ -153,6 +158,7 @@ class SpectralSolver(HeatSolver):
         grid = SsState.grid
         buffers = SsState.buffers
         fm = SsState.fine_mesh
+        dtype = SsState.dtype  # configured float precision (float32 / float64)
 
         # --- Laser state ---
         laser_state: LaserState = laser_path.get_state(t, dt)
@@ -206,8 +212,8 @@ class SpectralSolver(HeatSolver):
 
         # Bottom convection
         h_conv = mat.h_conv
-        T0 = xp.float32(mat.T0)
-        S_bot = xp.zeros((num.ny, num.nx), dtype=xp.float32) if h_conv > 0 else None
+        T0 = dtype(mat.T0)
+        S_bot = xp.zeros((num.ny, num.nx), dtype=dtype) if h_conv > 0 else None
 
         # Build initial a_temp = θ̃ + Q_mnp · F  with all forcing guesses
         kernels.update_modes_etd1(
@@ -220,7 +226,7 @@ class SpectralSolver(HeatSolver):
             )
         if h_conv > 0:
             T_bottom = kernels.reconstruct_bottom_temperature(buffers.a_temp, SsState)
-            q_conv = xp.float32(-h_conv) * (T_bottom - T0)
+            q_conv = dtype(-h_conv) * (T_bottom - T0)
             S_bot[:] = grid.dct_scale * kernels.DCT_II(q_conv)
             kernels.add_bottom_surface_source(
                 buffers.a_temp, SsState.KK, grid.Cp32_broadcast_bottom, S_bot
@@ -232,7 +238,7 @@ class SpectralSolver(HeatSolver):
         a_old = xp.empty_like(buffers.a_temp)
         a_raw = xp.empty_like(buffers.a_temp)
         residual_curr = xp.empty_like(buffers.a_temp)
-        n_elements = xp.float32(buffers.a_temp.size)
+        n_elements = dtype(buffers.a_temp.size)
 
         # ================================================================
         # Hoist linear/constant forcing terms
@@ -242,7 +248,7 @@ class SpectralSolver(HeatSolver):
         S_bot_raw = None
         if h_conv > 0:
             T_bottom = kernels.reconstruct_bottom_temperature(buffers.a_temp, SsState)
-            q_conv = xp.float32(-h_conv) * (T_bottom - T0)
+            q_conv = dtype(-h_conv) * (T_bottom - T0)
             S_bot_raw = grid.dct_scale * kernels.DCT_II(q_conv)
 
         # ================================================================
@@ -288,7 +294,7 @@ class SpectralSolver(HeatSolver):
 
             omega = self.mixing_omega
             xp.multiply(a_raw, omega, out=buffers.a_temp)
-            buffers.a_temp += (xp.float32(1.0) - omega) * a_old
+            buffers.a_temp += (dtype(1.0) - omega) * a_old
 
             rms_diff = xp.sqrt(xp.vdot(residual_curr, residual_curr) / n_elements)
             rms_old = xp.sqrt(xp.vdot(a_old, a_old) / n_elements)
@@ -361,11 +367,12 @@ class SpectralSolver(HeatSolver):
         xp = self.backend.xp
         kernels = self.backend.kernels
         geom = self.context.geom
-        T = xp.asarray(temperature_field, dtype=xp.float32)
+        dtype = self.state.dtype
+        T = xp.asarray(temperature_field, dtype=dtype)
         # Forward DCT-II (ortho) converts the spatial field to ortho-normalised
         # coefficients. The solver's internal modes use a scaling of
         # sqrt(dx*dy*dz) relative to the standard ortho DCT coefficients.
-        scale = xp.float32(math.sqrt(float(geom.d.x * geom.d.y * geom.d.z)))
+        scale = dtype(math.sqrt(float(geom.d.x * geom.d.y * geom.d.z)))
         self.state.a = kernels.DCT_II(T) * scale
 
     def finalize(self) -> None:

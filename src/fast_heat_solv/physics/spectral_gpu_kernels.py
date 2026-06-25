@@ -203,7 +203,8 @@ def compute_gaussian_laser_flux(X, Y, laser_x, laser_y, laser_r, laser_coef):
     dx = X[None, :] - laser_x
     dy = Y[:, None] - laser_y
     r_sq = dx ** 2 + dy ** 2
-    return (laser_coef * cp.exp(-2.0 * r_sq / (laser_r ** 2))).astype(cp.float32)
+    # Precision-transparent: follow the grid coordinate arrays' dtype.
+    return (laser_coef * cp.exp(-2.0 * r_sq / (laser_r ** 2))).astype(X.dtype)
 
 
 
@@ -235,12 +236,18 @@ def _source_term(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
 
 
 def DCT_II(q):
-    """Apply Discrete Cosine Transform Type II (Ortho) on GPU."""
-    return cupy_fft.dctn(q, type=2, norm='ortho', axes=None).astype(cp.float32)
+    """Apply Discrete Cosine Transform Type II (Ortho) on GPU.
+
+    Precision-transparent: returns the input array's float dtype.
+    """
+    return cupy_fft.dctn(q, type=2, norm='ortho', axes=None).astype(q.dtype)
 
 def IDCT_II(a):
-    """Apply Discrete Cosine Transform Type III (Inverse Ortho) on GPU."""
-    return cupy_fft.dctn(a, type=3, norm='ortho', axes=None).astype(cp.float32)
+    """Apply Discrete Cosine Transform Type III (Inverse Ortho) on GPU.
+
+    Precision-transparent: returns the input array's float dtype.
+    """
+    return cupy_fft.dctn(a, type=3, norm='ortho', axes=None).astype(a.dtype)
 
 
 def shift_flux(field: cp.ndarray, shift: tuple, geom) -> cp.ndarray:
