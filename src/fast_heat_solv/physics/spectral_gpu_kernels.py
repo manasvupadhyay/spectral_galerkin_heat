@@ -217,7 +217,8 @@ def compute_gaussian_laser_flux(X, Y, laser_x, laser_y, laser_r, laser_coef):
     dx = X[None, :] - laser_x
     dy = Y[:, None] - laser_y
     r_sq = dx ** 2 + dy ** 2
-    return (laser_coef * cp.exp(-2.0 * r_sq / (laser_r ** 2))).astype(cp.float32, copy=False)
+    # Precision-transparent: follow the grid coordinate arrays' dtype.
+    return (laser_coef * cp.exp(-2.0 * r_sq / (laser_r ** 2))).astype(X.dtype)
 
 
 

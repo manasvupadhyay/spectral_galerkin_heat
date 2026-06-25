@@ -273,7 +273,7 @@ def reconstruct_surface_temperature(a, SsState):
     xp = SsState.xp
     grid = SsState.grid
     A = xp.einsum('p,pij->ij', grid.Cp32_broadcast[:, 0, 0], a, optimize=True)
-    return (grid.recon_scale * SsState.hooks.idct(A)).astype(xp.float32, copy=False)
+    return (grid.recon_scale * SsState.hooks.idct(A)).astype(SsState.dtype)
 
 
 def reconstruct_bottom_temperature(a, SsState):
@@ -285,7 +285,7 @@ def reconstruct_bottom_temperature(a, SsState):
     xp = SsState.xp
     grid = SsState.grid
     A = xp.einsum('p,pij->ij', grid.Cp32_broadcast_bottom[:, 0, 0], a, optimize=True)
-    return (grid.recon_scale * SsState.hooks.idct(A)).astype(xp.float32, copy=False)
+    return (grid.recon_scale * SsState.hooks.idct(A)).astype(SsState.dtype)
 
 
 def compute_latent_heat_source(Q_buffer, phys, num, SsState):
