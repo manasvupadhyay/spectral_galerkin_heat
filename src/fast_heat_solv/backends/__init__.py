@@ -34,37 +34,24 @@ __author__ = "Théo Andrieux"
 __copyright__ = "Copyright 2026, LMS, École Polytechnique"
 
 from .base import MathBackend
+from ._registry import get_backend, register_backend
+
+# Importing the module runs its ``@register_backend`` decorator.
 from .numpy_backend import NumpyBackend
 
 
-def get_backend(name: str = "numpy") -> MathBackend:
-    """Return a :class:`MathBackend` by name.
+@register_backend("cupy")
+def _make_cupy_backend() -> MathBackend:
+    # Registered as a lazy factory: CuPy is an optional dependency, so its
+    # module is imported only when a CuPy backend is actually requested.
+    from .cupy_backend import CupyBackend
 
-    Parameters
-    ----------
-    name : str, optional
-        ``"numpy"`` for the CPU backend or ``"cupy"`` for the GPU backend.
-        Defaults to ``"numpy"``.
-
-    Returns
-    -------
-    MathBackend
-        The requested backend instance.
-
-    Raises
-    ------
-    ValueError
-        If *name* is neither ``"numpy"`` nor ``"cupy"``.
-    ImportError
-        If ``"cupy"`` is requested but CuPy is not installed.
-    """
-    if name == "numpy":
-        return NumpyBackend()
-    if name == "cupy":
-        # Imported lazily: CuPy is an optional dependency.
-        from .cupy_backend import CupyBackend
-        return CupyBackend()
-    raise ValueError(f"Unknown backend: {name!r}. Choose 'numpy' or 'cupy'.")
+    return CupyBackend()
 
 
-__all__ = ["MathBackend", "NumpyBackend", "get_backend"]
+__all__ = [
+    "MathBackend",
+    "NumpyBackend",
+    "get_backend",
+    "register_backend",
+]
