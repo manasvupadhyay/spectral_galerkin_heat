@@ -26,7 +26,7 @@ from typing import Optional, Any, Tuple, Dict
 
 from fast_heat_solv.backends.base import MathBackend
 from fast_heat_solv.core.parameters import SimulationContext
-from fast_heat_solv.core.laser import LaserState, LaserPath
+from fast_heat_solv.core.laser import LaserState, LaserPath, build_laser_profile
 from fast_heat_solv.solvers.base import HeatSolver
 
 
@@ -81,6 +81,10 @@ class SpectralSolver(HeatSolver):
         self._kbar = None          # reference conductivity k̄ (= propagator const)
         self._abar = None          # reference volumetric capacity ā
 
+        # Beam profile (shape + energy-conserving normalization); resolved from
+        # the config in initialize(). Default keeps a usable solver before then.
+        self._profile = build_laser_profile("gaussian")
+
     def initialize(self, context: Optional[SimulationContext] = None) -> Any:
         """
         Set up the spectral solver state, allocate buffers, and set the initial condition.
@@ -115,15 +119,9 @@ class SpectralSolver(HeatSolver):
         num = self.context.num
         mat = self.context.mat
 
-        # Optional config-driven Picard controls (default: keep the values set in
-        # __init__). The T-dependent correction converges right at the base cap of
-        # 30, so configs may raise it (property_correction.tex §8.3).
-        if getattr(num, "max_picard_iter", None) is not None:
-            self.max_picard_iter = int(num.max_picard_iter)
-        if getattr(num, "picard_tol", None) is not None:
-            self.convergence_tol = xp.float32(num.picard_tol)
-        if getattr(num, "picard_omega", None) is not None:
-            self.mixing_omega = xp.float32(num.picard_omega)
+        # Property-correction projection scheme from the config. The Picard
+        # controls (cap/tol/omega) are applied below at the configured precision
+        # once the solver state exists.
         if getattr(num, "correction_mode", None) is not None:
             mode = str(num.correction_mode).lower()
             if mode not in ("mixed", "divergence"):
@@ -135,9 +133,22 @@ class SpectralSolver(HeatSolver):
         self.state = kernels.SpectralSolverState(mat, geom, num, self.context.fine)
         dtype = self.state.dtype
 
+        # Resolve the beam profile (shape + normalization) from the config.
+        laser = self.context.laser
+        self._profile = build_laser_profile(laser.profile, laser.super_gaussian_order)
+
         # Mixing/convergence scalars at the configured precision.
         self.mixing_omega = dtype(0.1)
         self.convergence_tol = dtype(1e-4)
+
+        # Optional Picard-iteration overrides from the config (simulation block,
+        # parsed onto NumParams). Absent keys keep the defaults above.
+        if getattr(num, "max_picard_iter", None) is not None:
+            self.max_picard_iter = int(num.max_picard_iter)
+        if getattr(num, "picard_tol", None) is not None:
+            self.convergence_tol = dtype(num.picard_tol)
+        if getattr(num, "picard_omega", None) is not None:
+            self.mixing_omega = dtype(num.picard_omega)
 
         # Initial condition: mean T in mode (0,0,0)
         self.state.a = xp.zeros((num.nz, num.ny, num.nx), dtype=dtype)
@@ -221,17 +232,19 @@ class SpectralSolver(HeatSolver):
         is_on = laser_state.is_on
         v_x, v_y = laser_state.v
         absorptivity = laser_params.absorptivity
+        # Energy-conserving peak intensity I₀ = A·P / (f · r_x · r_y); the
+        # profile owns both the f-normalization and the spatial shape below.
         laser_coef = (
-            absorptivity * 2.0 * power / (math.pi * laser_params.radius ** 2)
+            self._profile.peak_intensity(power, absorptivity, laser_params.ref_area)
             if is_on else 0.0
         )
 
         # ================================================================
         # 1. Compute laser flux (constant – does not depend on T)
         # ================================================================
-        q_las = kernels.compute_gaussian_laser_flux(
-            grid.x, grid.y, laser_state.x, laser_state.y,
-            laser_params.radius, laser_coef,
+        q_las = self._profile.flux(
+            xp, grid.x, grid.y, laser_state.x, laser_state.y,
+            laser_params.r_x, laser_params.r_y, laser_coef,
         )
         P_laser = xp.sum(q_las) * geom.d.x * geom.d.y
 
@@ -288,12 +301,12 @@ class SpectralSolver(HeatSolver):
             )
 
         # ================================================================
-        # Pre-allocate arrays to avoid per-iteration allocations
+        # Reuse the Picard scratch buffers allocated once in SolverBuffers
         # ================================================================
-        a_old = xp.empty_like(buffers.a_temp)
-        a_raw = xp.empty_like(buffers.a_temp)
-        residual_curr = xp.empty_like(buffers.a_temp)
-        n_elements = dtype(buffers.a_temp.size)
+        a_old = buffers.a_old
+        a_raw = buffers.a_raw
+        residual_curr = buffers.residual_curr
+        n_elements = buffers.n_elements
 
         # ================================================================
         # Hoist linear/constant forcing terms
