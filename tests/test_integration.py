@@ -420,13 +420,12 @@ def test_cpu_gpu_equivalence_e2e(tmp_path, monkeypatch):
     assert T_cpu.shape == T_gpu.shape, (
         f"Field shape mismatch: CPU {T_cpu.shape} vs GPU {T_gpu.shape}"
     )
-    # rtol absorbs FFT/reduction-order differences between the backends;
-    # atol guards near-T0 cells where relative error is meaningless.
-    np.testing.assert_allclose(T_gpu, T_cpu, rtol=1e-5, atol=1e-3)
+    # FFT/reduction-order shift between backends, abs guards near-T0 cells where
+    # relative error is meaningless.
+    assert T_gpu == pytest.approx(T_cpu, rel=1e-5, abs=1e-3)
 
     # Peak-relative agreement: the max absolute deviation must stay within
-    # 1e-5 * T_max (T_max > 3000 K for this config). Scalar comparison, so
-    # pytest.approx is the right tool (vs. assert_allclose for the array above).
+    # 1e-5 * T_max (T_max > 3000 K for this config).
     T_max = float(T_cpu.max())
     max_abs_diff = float(np.max(np.abs(T_gpu - T_cpu)))
     assert max_abs_diff == pytest.approx(0.0, abs=1e-5 * T_max), (

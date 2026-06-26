@@ -87,6 +87,38 @@ fastHeatSolv/
   (`spectral_state`, `spectral_ops`) plus the pure numerical kernels
   (`spectral_cpu_kernels` Numba / `spectral_gpu_kernels` CuPy).
 
+## Adding a backend (PyTorch, JAX, …)
+
+The solver doesn't need a specific array library to run on. It only uses
+`backend.xp` (the array module) and `backend.kernels` (the math functions), and
+almost all the physics code already works with any NumPy-like `xp`. So a new
+backend is mostly plumbing — if needed an different backend, you need to supply four things:
+
+**1. An array module `xp`.** It needs to behave like NumPy: `zeros`, `arange`,
+`exp`, `sum`, in-place writes (`multiply(..., out=)`, `a[0,0,0] = v`),
+`.astype`, etc. NumPy and CuPy work out of the box. PyTorch and JAX could be used by writing wrappers that rename a few things (and JAX arrays
+can't be modified in place, so those writes need adapting).
+
+**2. A kernels module.** Most functions are reused as-is from `spectral_ops` and
+`spectral_state` — don't rewrite them. You only need to provide the ones that
+truly depend on the library:
+- the cosine transform (`DCT_II` / `IDCT_II`);
+- the sub-pixel shift (`_ndshift`);
+- a couple of simple per-cell formulas (the evaporation and latent-heat source
+  terms, and the Gaussian flux `core.laser.super_gaussian_flux`).
+
+  Then subclass `SpectralSolverState`, bind your own `xp`, and give those primitives to `BackendHooks`. Copy `spectral_cpu_kernels.py` as a template.
+
+**3. A `MathBackend` and registration.** Subclass `MathBackend` with your name,
+`xp`, and kernels, and add `@register_backend("mybackend")`.
+
+**4. A config name.** Hook the `simulation.backend` string up to your backend in
+`solvers/__init__.py` (`build_solver`).
+
+Keep the kernels working for both float32 and float64, and check your backend
+against the CPU one with `test_cpu_gpu_equivalence_e2e` in
+`tests/test_integration.py`.
+
 ## Architecture Diagram
 
 ```{mermaid}

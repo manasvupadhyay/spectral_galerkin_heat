@@ -5,6 +5,9 @@ matching physics-kernel module. Inject one into
 :class:`~fast_heat_solv.solvers.spectral.SpectralSolver` to run on CPU or GPU
 from the same solver code.
 
+Want to run on a different array library (PyTorch, JAX, …)? See "Adding a
+backend" in ``docs/ARCHITECTURE.md`` 
+
 Examples
 --------
 >>> from fast_heat_solv.backends import get_backend
