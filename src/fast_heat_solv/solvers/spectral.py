@@ -376,7 +376,11 @@ class SpectralSolver(HeatSolver):
         self.state.a = kernels.DCT_II(T) * scale
 
     def finalize(self) -> None:
-        """
-        Clean up resources (GPU memory, thread pools) if necessary.
+        """No-op teardown.
+
+        The spectral solver holds no resources requiring explicit release
+        (CuPy frees device memory on garbage collection). This override is
+        present only to satisfy the abstract :meth:`HeatSolver.finalize`
+        interface so the class is instantiable.
         """
         pass
