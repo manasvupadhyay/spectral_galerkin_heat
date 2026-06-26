@@ -5,10 +5,11 @@ What this test covers
 SimulationContext construction → factory → StandaloneHeatRunner time loop →
 LocalFSIOManager XDMF / HDF5 output → physics sanity checks on the saved field.
 
-The test is intentionally slower than the unit tests because it runs the full
-numba JIT pipeline (warm from the on-disk cache after the first run, ~5 s
-thereafter).  It is excluded from the default ``pytest`` run and must be
-invoked explicitly::
+The test is intentionally slower than the unit tests because each test runs the
+full numba + pyfftw pipeline.  A single CPU test (``test_cpu_simulation_e2e``)
+takes ~40 s; The whole file is ~4–5 min with the GPU tests (7 tests including 
+the GPU/equivalence cases; the GPU tests skip when CuPy/CUDA is absent). 
+It is excluded from the default ``pytest`` run and must be invoked explicitly::
 
     pytest -m integration               # integration tests only
     pytest -m "integration or not integration"  # everything
@@ -305,8 +306,11 @@ def test_cpu_float32_float64_consistency_e2e(tmp_path, monkeypatch):
     assert T32.shape == T64.shape
     T_max = float(T32.max())
     max_abs_diff = float(np.max(np.abs(T64 - T32)))
-    # 1e-4 * T_max absorbs the float32 baseline's round-off vs. the float64 run.
-    assert max_abs_diff == pytest.approx(0.0, abs=1e-4 * T_max), (
+    # Both runs solve the identical problem, the fields should be equal
+    # up to the float32 round-off Vs. the float64 run.
+    # Bounded 1e-4 * T_max
+    # (~0.39 K for T_max ~3860 K).
+    assert max_abs_diff == pytest.approx(0.0, abs=1e-5 * T_max), (
         f"float32 and float64 fields differ by {max_abs_diff:.3e} K, "
         f"exceeding the 1e-4 * T_max = {1e-4 * T_max:.3e} K bound"
     )

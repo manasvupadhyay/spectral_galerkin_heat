@@ -28,6 +28,7 @@ import math
 
 from fast_heat_solv.physics import spectral_state as _state
 from fast_heat_solv.physics import spectral_ops as _ops
+from fast_heat_solv.core.laser import super_gaussian_flux as _super_gaussian_flux
 
 __all__ = [
     "SpectralSolverState",
@@ -198,13 +199,14 @@ def compute_evaporation_flux(T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liq
 
 
 def compute_gaussian_laser_flux(X, Y, laser_x, laser_y, laser_r, laser_coef):
-    """Compute Gaussian flux on grid defined by 1D CuPy arrays X, Y."""
-    # dx: shape (1, nx), dy: shape (ny, 1)
-    dx = X[None, :] - laser_x
-    dy = Y[:, None] - laser_y
-    r_sq = dx ** 2 + dy ** 2
-    # Precision-transparent: follow the grid coordinate arrays' dtype.
-    return (laser_coef * cp.exp(-2.0 * r_sq / (laser_r ** 2))).astype(X.dtype)
+    """Gaussian (order-2 super-Gaussian) flux on the 1-D CuPy grid ``(X, Y)``.
+
+    Thin backend wrapper over the shared, backend-agnostic
+    :func:`~fast_heat_solv.core.laser.super_gaussian_flux` (precision-transparent:
+    it follows ``X.dtype``). The spectral solver calls the profile directly; this
+    is kept for the linear solver's Gaussian-only path.
+    """
+    return _super_gaussian_flux(cp, X, Y, laser_x, laser_y, laser_r, laser_r, 2.0, laser_coef)
 
 
 

@@ -227,12 +227,25 @@ class SolverBuffers:
     q_evap_buffer: NDArray = None
     Q_latent_buffer: NDArray = None
 
+    # Picard-iteration scratch (nz, ny, nx) — fixed shape, allocated once here
+    # and reused every time step (see SpectralSolver.step).
+    a_old: NDArray = None
+    a_raw: NDArray = None
+    residual_curr: NDArray = None
+    n_elements: float = 0.0
+
     def __init__(self, num, fine_mesh: FineMeshState, xp, dtype=np.float32):
         nx, ny, nz = num.nx, num.ny, num.nz
         self.a_temp = xp.empty((nz, ny, nx), dtype=dtype)
         self.q_evap_old = xp.zeros((ny, nx), dtype=dtype)
         self.q_evap_buffer = xp.zeros((ny, nx), dtype=dtype)
         self.Q_latent_buffer = xp.zeros((fine_mesh.nz_box, fine_mesh.ny_box, fine_mesh.nx_box), dtype=dtype)
+
+        # Per-iteration Picard scratch — same shape as a_temp, never resized.
+        self.a_old = xp.empty((nz, ny, nx), dtype=dtype)
+        self.a_raw = xp.empty((nz, ny, nx), dtype=dtype)
+        self.residual_curr = xp.empty((nz, ny, nx), dtype=dtype)
+        self.n_elements = dtype(self.a_temp.size)
 
 
 @dataclass(frozen=True)
@@ -324,12 +337,13 @@ def precompute_K_KK(phys, num, geom, xp, dtype=np.float32):
     k_grids = xp.meshgrid(*k, indexing='ij')  # shape (nz, ny, nx) each
     denom = phys.k / (phys.rho * phys.Cp) * sum(kg**2 for kg in k_grids)
     K = xp.exp(-denom * num.dt).astype(dtype)
-    mask_zero = (denom == 0)
-    # Avoid div by zero
-    denom[mask_zero] = 1.0
+
+    # The only singular entry is the 0 mode (k=0 on every axis), which sits at
+    # index [0, 0, 0] 
+    denom[0, 0, 0] = 1.0  # placeholder to avoid 0/0; phi_1[0,0,0] set below
 
     phi_1 = (K - 1.0) / (-denom)
-    phi_1[mask_zero] = num.dt
+    phi_1[0, 0, 0] = num.dt  # lim_{z->0} (e^z - 1)/(-z·denom) -> dt
 
     KK = (phi_1 / (phys.rho * phys.Cp)).astype(dtype)
     return K, KK

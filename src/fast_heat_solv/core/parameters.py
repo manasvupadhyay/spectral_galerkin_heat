@@ -99,6 +99,16 @@ class NumParams:
         Floating-point precision for the solver arrays (``numpy.float32`` or
         ``numpy.float64``), by default ``numpy.float32``. Set via the
         ``simulation.dtype`` config key.
+    max_picard_iter : int, optional
+        Cap on the spectral solver's fixed-point (Picard) iterations per step.
+        ``None`` (default) lets the solver use its built-in default. Set via the
+        ``simulation.max_picard_iter`` config key.
+    picard_tol : float, optional
+        Relative convergence tolerance for the Picard loop. ``None`` (default)
+        uses the solver default. Set via ``simulation.picard_tol``.
+    picard_omega : float, optional
+        Under-relaxation (mixing) factor for the Picard loop. ``None`` (default)
+        uses the solver default. Set via ``simulation.picard_omega``.
     """
     dt: float
     nx: int
@@ -110,6 +120,9 @@ class NumParams:
     update_interval: float = 1e-3
     save_all: bool = False
     dtype: Any = np.float32
+    max_picard_iter: Optional[int] = None
+    picard_tol: Optional[float] = None
+    picard_omega: Optional[float] = None
 
 @dataclass
 class MaterialParams:
@@ -235,10 +248,41 @@ class LaserParams:
     power : float, optional
         Nominal/maximum laser power (watts), by default 0.0. Actual power may vary
         via :class:`LaserPath.get_state`.
+    profile : str, optional
+        Beam-profile name (``"gaussian"`` / ``"flat_top"`` / ``"super_gaussian"``)
+        resolved to a :class:`fast_heat_solv.core.laser.LaserProfile`, by default
+        ``"gaussian"``. Set via the ``laser.profile`` config key.
+    r_x, r_y : float, optional
+        Beam radii along x and y (metres). Default to ``radius`` (circular beam);
+        set both for an elliptical beam. Set via ``laser.r_x`` / ``laser.r_y``.
+    super_gaussian_order : float, optional
+        Super-Gaussian order ``n`` used when ``profile == "super_gaussian"``
+        (``2`` = Gaussian, large = flat-top), by default 2.0. Set via
+        ``laser.super_gaussian_order``.
     """
     radius: float
     absorptivity: float
     power: float = 0.0
+    profile: str = "gaussian"
+    r_x: float = 0.0
+    r_y: float = 0.0
+    super_gaussian_order: float = 2.0
+
+    def __post_init__(self):
+        # Default to a circular beam (r_x = r_y = radius) when axes are unset.
+        if not self.r_x:
+            self.r_x = self.radius
+        if not self.r_y:
+            self.r_y = self.radius
+
+    @property
+    def ref_area(self) -> float:
+        """Reference area ``r_x · r_y`` (``r_b²`` for a circular beam).
+
+        Used by :meth:`LaserProfile.peak_intensity` to enforce
+        ``∬ q dA = A·P``.
+        """
+        return self.r_x * self.r_y
 
 @dataclass
 class FineMeshParams:
@@ -344,6 +388,12 @@ class SimulationContext:
             dt_nominal=dt_nominal,
             update_interval=float(sim_cfg.get('update_interval', 1e-3)),
             dtype=real_t,
+            max_picard_iter=(int(sim_cfg['max_picard_iter'])
+                             if sim_cfg.get('max_picard_iter') is not None else None),
+            picard_tol=(float(sim_cfg['picard_tol'])
+                        if sim_cfg.get('picard_tol') is not None else None),
+            picard_omega=(float(sim_cfg['picard_omega'])
+                          if sim_cfg.get('picard_omega') is not None else None),
         )
 
         geom_params = GeomParams(
@@ -382,7 +432,11 @@ class SimulationContext:
         laser_params = LaserParams(
             radius=real_t(_get_value(laser_cfg['radius'])),
             absorptivity=real_t(_get_value(laser_cfg['absorptivity'])),
-            power=real_t(_get_value(laser_cfg.get('power_nominal')))
+            power=real_t(_get_value(laser_cfg.get('power_nominal'))),
+            profile=str(laser_cfg.get('profile', 'gaussian')),
+            r_x=real_t(_get_value(laser_cfg.get('r_x', 0.0))),
+            r_y=real_t(_get_value(laser_cfg.get('r_y', 0.0))),
+            super_gaussian_order=float(_get_value(laser_cfg.get('super_gaussian_order', 2.0))),
         )
         
         # Laser Path
