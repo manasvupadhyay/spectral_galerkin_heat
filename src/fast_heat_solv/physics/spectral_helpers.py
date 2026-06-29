@@ -229,15 +229,17 @@ def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
     ndarray
         Array of shape N with temperature values at each queried point.
     """
+    # Validate the query shape before touching any solver state.
+    coords = np.asarray(coords)
+    if coords.ndim != 2 or coords.shape[1] != 3:
+        raise ValueError("coords must be of shape (N, 3)")
+
     # Bring modal/spectral coefficients to host to avoid mixed NumPy/CuPy
     # arithmetic in these CPU-based helpers.
     grid = SsState.grid
     a_np = to_host(a)
     out_dtype = a_np.dtype  # precision-transparent: follow the modes array
-
-    coords = np.asarray(coords, dtype=out_dtype)
-    if coords.ndim != 2 or coords.shape[1] != 3:
-        raise ValueError("coords must be of shape (N, 3)")
+    coords = coords.astype(out_dtype)
 
     x_vals = np.clip(coords[:, 0], 0.0, geom.size.x)
     y_vals = np.clip(coords[:, 1], 0.0, geom.size.y)

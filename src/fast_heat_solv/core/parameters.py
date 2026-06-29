@@ -487,7 +487,7 @@ class SimulationContext:
         laser_params = LaserParams(
             radius=real_t(_get_value(laser_cfg['radius'])),
             absorptivity=real_t(_get_value(laser_cfg['absorptivity'])),
-            power=real_t(_get_value(laser_cfg.get('power_nominal'))),
+            power=real_t(_get_value(laser_cfg['power_nominal'])),
             profile=str(laser_cfg.get('profile', 'gaussian')),
             r_x=real_t(_get_value(laser_cfg.get('r_x', 0.0))),
             r_y=real_t(_get_value(laser_cfg.get('r_y', 0.0))),
