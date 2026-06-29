@@ -313,18 +313,11 @@ def compute_latent_heat_source(Q_buffer, phys, num, SsState):
 
     model = getattr(phys, "model", None)
     if model is not None and not model.is_constant:
-        # Temperature-dependent density: evaluate rho(T) per cell and form the
-        # clamped liquid-fraction increment directly (clamping f_l also captures
-        # cells that cross the whole mushy band in one step, which the indicator
-        # kernel below drops). Backend-agnostic via SsState.xp.
-        xp = SsState.xp
-        T_S = xp.float32(phys.T_solidus)
-        inv_band = xp.float32(1.0 / (phys.T_liquidus - phys.T_solidus))
-        fl_curr = xp.clip((T_box - T_S) * inv_band, xp.float32(0.0), xp.float32(1.0))
-        fl_prev = xp.clip((fm.T_prev - T_S) * inv_band, xp.float32(0.0), xp.float32(1.0))
-        rho_eff = model.rho(T_box)
-        Q_buffer[:] = (-rho_eff * xp.float32(phys.L_f) * (fl_curr - fl_prev)
-                       / xp.float32(num.dt)).astype(xp.float32)
+        # Blended-rho latent sink for temperature-dependent materials. 
+        model.latent_heat_source(
+            T_box, fm.T_prev, float(phys.T_solidus), float(phys.T_liquidus),
+            float(phys.L_f), float(num.dt), Q_buffer,
+        )
         return
 
     SsState.hooks.source_term(

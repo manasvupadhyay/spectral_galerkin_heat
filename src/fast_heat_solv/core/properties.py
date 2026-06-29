@@ -228,6 +228,71 @@ class MaterialModel:
         self._kp_ap_kernel = kern
         return kern
 
+    def latent_heat_source(self, T, T_prev, T_S, T_L, L_f, dt, out):
+        """Latent-heat sink ``Q = -rho(T) L_f (f_l(T)-f_l(T_prev))/dt`` into *out*.
+
+        Backend-agnostic like :meth:`k_prime_a_prime`: a fused ``ElementwiseKernel``
+        on GPU (avoiding ~5 box-sized temporaries)
+        """
+        xp = _xp(T)
+        if T_L > T_S:
+            inv_band = 1.0 / (T_L - T_S)
+        else:  # degenerate mushy band -> step at the solidus
+            inv_band = -1.0
+        if xp is np:
+            f32 = np.float32
+            if inv_band < 0.0:
+                fl_curr = (T >= T_S).astype(f32)
+                fl_prev = (T_prev >= T_S).astype(f32)
+            else:
+                Ts, inv = f32(T_S), f32(inv_band)
+                fl_curr = np.clip((T - Ts) * inv, f32(0.0), f32(1.0))
+                fl_prev = np.clip((T_prev - Ts) * inv, f32(0.0), f32(1.0))
+            rho_eff = self.rho(T)
+            out[:] = (-rho_eff * f32(L_f) * (fl_curr - fl_prev)
+                      / f32(dt)).astype(f32)
+            return
+        import cupy
+        kern = self._latent_source_kernel()
+        kern(T.astype(cupy.float32, copy=False),
+             T_prev.astype(cupy.float32, copy=False),
+             cupy.float32(T_S), cupy.float32(inv_band),
+             cupy.float32(L_f), cupy.float32(dt), out)
+
+    def _latent_source_kernel(self):
+        """Build (and cache) the fused CuPy latent-heat-source kernel."""
+        kern = getattr(self, "_lh_kernel", None)
+        if kern is not None:
+            return kern
+        import cupy
+
+        def horner(coeffs):
+            c = [float(v) for v in coeffs]
+            expr = f"{c[-1]:.9e}f"
+            for v in reversed(c[:-1]):
+                expr = f"({v:.9e}f + T*{expr})"
+            return expr
+
+        # Mushy band (Ts, inv) passed at call time; inv < 0 flags the degenerate
+        # no-band case (step at the solidus). Only the rho branches are baked.
+        clc = ("flc = inv<0.0f ? (T>=Ts?1.0f:0.0f) "
+               ": fminf(fmaxf((T-Ts)*inv,0.0f),1.0f);")
+        clp = ("flp = inv<0.0f ? (Tp>=Ts?1.0f:0.0f) "
+               ": fminf(fmaxf((Tp-Ts)*inv,0.0f),1.0f);")
+        body = f"""
+        float flc, flp;
+        {clc}
+        {clp}
+        float omfl = 1.0f - flc;
+        float rho = omfl*{horner(self.rho.solid)} + flc*{horner(self.rho.liquid)};
+        out = -rho * Lf * (flc - flp) / dt;
+        """
+        kern = cupy.ElementwiseKernel(
+            "float32 T, float32 Tp, float32 Ts, float32 inv, float32 Lf, float32 dt",
+            "float32 out", body, "latent_heat_source")
+        self._lh_kernel = kern
+        return kern
+
     @property
     def is_constant(self) -> bool:
         """True when every property is a single constant (null-correction path)."""

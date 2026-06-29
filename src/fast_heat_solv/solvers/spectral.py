@@ -273,10 +273,9 @@ class SpectralSolver(HeatSolver):
         )
         S_top = grid.dct_scale * kernels.DCT_II(q_las - q_evap_shifted)
 
-        # Latent heat: warm-start with shifted Q from previous step
-        Q_latent = xp.zeros_like(buffers.Q_latent_buffer)
-        if fm.Q_prev is not None:
-            Q_latent[:] = fm.Q_prev
+        # Latent heat: warm-start with shifted Q from previous step. Use the
+        # stored buffer directly 
+        Q_latent = fm.Q_prev
 
         # Bottom convection
         h_conv = mat.h_conv
