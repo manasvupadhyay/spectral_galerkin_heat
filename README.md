@@ -111,5 +111,5 @@ If you use this code in your research, please cite:
 This project is licensed under the Apache License, Version 2.0. 
 See the [LICENSE](LICENSE) file for the full text.
 
-Copyright © 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique.
+Copyright © 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, Route de Saclay, Palaiseau, 91128, France.
 

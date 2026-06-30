@@ -9,9 +9,11 @@ Operations that differ between backends — FFT (``DCT_II`` / ``IDCT_II``),
 source-term kernel — stay in the per-backend kernel modules.
 """
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Route de Saclay, Palaiseau, 91128, France.
 #
-# Author: Théo Andrieux
+# Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,8 +28,8 @@ source-term kernel — stay in the per-backend kernel modules.
 # limitations under the License.
 
 
-__author__ = "Théo Andrieux"
-__copyright__ = "Copyright 2026, LMS, École Polytechnique"
+__author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
+__copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
 
 __all__ = [
     "project_box_to_modes",

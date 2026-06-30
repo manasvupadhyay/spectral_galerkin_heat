@@ -1,8 +1,10 @@
 """fast_heat_solv — spectral heat solver for additive manufacturing.
 
-Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique
+Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
+Route de Saclay, Palaiseau, 91128, France.
 
-Author: Théo Andrieux
+Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

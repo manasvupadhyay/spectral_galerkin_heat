@@ -6,9 +6,11 @@ solver code that consumes them. New backends register themselves with the
 adding one never requires editing :func:`get_backend`.
 """
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Route de Saclay, Palaiseau, 91128, France.
 #
-# Author: Théo Andrieux
+# Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,8 +25,8 @@ adding one never requires editing :func:`get_backend`.
 # limitations under the License.
 
 
-__author__ = "Théo Andrieux"
-__copyright__ = "Copyright 2026, LMS, École Polytechnique"
+__author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
+__copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
 
 from collections.abc import Callable
 from typing import TypeVar

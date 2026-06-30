@@ -1,10 +1,3 @@
-# Temperature-dependent 316L — mirrors the FE reference
-# (andreas_heat_solv/simulations/2_comparison_FE/Theo_cuboid_FE_temp_dep.py).
-# Property branches are the Chadwick polynomials (ascending powers of T, SI).
-# Intended for the GPU FE-comparison run (property_correction.tex §8.3); the
-# global property correction makes a 3-D transform a per-iteration cost, so this
-# production-grid case should run on GPU (backend: gpu).
-
 simulation:
   name: "temp_dep_316L"
   method: "spectral"
@@ -21,10 +14,6 @@ simulation:
   max_picard_iter: 80
   # Picard relaxation. (contraction ≈1−ω)
   picard_omega: 0.31
-  # Property correction via Green's first identity (property_correction.tex):
-  # faster than the sine weak form and more boundary-faithful — the sine
-  # projection weights the faces by zero and discards the near-surface gradient;
-  # the divergence form keeps it (warmer, FE-ward laser peak).
   correction_mode: "divergence"
 
 domain:

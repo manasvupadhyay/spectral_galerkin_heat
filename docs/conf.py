@@ -11,8 +11,8 @@ sys.path.insert(0, os.path.abspath('../src'))
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'fastHeatSolv'
-copyright = '2026, Laboratoire de Mécanique des Solides (LMS), École Polytechnique'
-author = 'Théo Andrieux'
+copyright = '2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, Route de Saclay, Palaiseau, 91128, France'
+author = 'Théo Andrieux, Jules Dichamp, Manas V. Upadhyay'
 
 version = '0.1.0'
 release = '0.1.0'
