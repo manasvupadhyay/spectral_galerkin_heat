@@ -55,6 +55,43 @@ def super_gaussian_flux(xp, x, y, x0, y0, r_x, r_y, order, peak_intensity):
     return (peak_intensity * shape).astype(x.dtype)
 
 
+def _erf(xp, z):
+    """Backend-agnostic error function (numpy → SciPy, cupy → cupyx.scipy)."""
+    if xp.__name__ == "cupy":
+        from cupyx.scipy.special import erf as _e
+    else:
+        from scipy.special import erf as _e
+    return _e(z)
+
+
+def gaussian_cell_integrated_flux(xp, x, y, x0, y0, r_x, r_y, hx, hy, peak_intensity):
+    """Cell-mean Gaussian flux — exact analytic integral over each cell.
+
+    Each node ``(x_i, y_j)`` stores the *mean* of ``q = I₀·exp(-2 ρ²)`` over its
+    cell ``[x_i ± hx/2] × [y_j ± hy/2]`` instead of the point sample. The integral
+    separates into 1-D factors
+
+        ∫_a^b exp(-2 u²/r²) du = r·√(π/8)·[erf(√2·b/r) − erf(√2·a/r)].
+
+    Done so a beam narrower than the grid (``r ≪ h``) still deposits its full power.
+
+    ``hx``/``hy`` are the cell sizes (``geom.d.x``/``geom.d.y``). Gaussian only;
+    other-order super-Gaussians have no elementary integral.
+    """
+    s2 = math.sqrt(2.0)
+    norm_x = r_x * math.sqrt(math.pi / 8.0)
+    norm_y = r_y * math.sqrt(math.pi / 8.0)
+    # 1-D cell-mean factors (per unit length): integral over the cell / cell width.
+    ax = (x - x0 - hx / 2.0) * s2 / r_x
+    bx = (x - x0 + hx / 2.0) * s2 / r_x
+    ay = (y - y0 - hy / 2.0) * s2 / r_y
+    by = (y - y0 + hy / 2.0) * s2 / r_y
+    mean_x = norm_x * (_erf(xp, bx) - _erf(xp, ax)) / hx   # (NX,)
+    mean_y = norm_y * (_erf(xp, by) - _erf(xp, ay)) / hy   # (NY,)
+    flux = peak_intensity * (mean_y[:, None] * mean_x[None, :])  # (NY, NX)
+    return flux.astype(x.dtype)
+
+
 @dataclass(frozen=True)
 class LaserProfile:
     """A beam profile: spatial shape and its energy-conserving normalization.
@@ -64,6 +101,9 @@ class LaserProfile:
     """
     name: str
     order: float
+    # When True, the Gaussian flux is integrated analytically over each cell
+    # Gaussian (order 2) only.
+    cell_integrated: bool = False
 
     @property
     def area_factor(self) -> float:
@@ -74,8 +114,25 @@ class LaserProfile:
         """Energy-conserving peak ``I₀ = A·P / (f · ref_area)`` (``ref_area = r_x·r_y``)."""
         return absorptivity * power / (self.area_factor * ref_area)
 
-    def flux(self, xp, x, y, x0, y0, r_x, r_y, peak_intensity):
-        """Spatial flux field ``I₀ · s(x, y)`` for this profile."""
+    def flux(self, xp, x, y, x0, y0, r_x, r_y, peak_intensity, hx=None, hy=None):
+        """Spatial flux field ``I₀ · s(x, y)`` for this profile.
+
+        With ``cell_integrated`` set (Gaussian only) and the cell sizes
+        ``hx``/``hy`` supplied, returns the exact cell-averaged flux so the total
+        deposited power equals ``A·P`` independent of beam position; otherwise
+        point-samples the shape at the cell centres.
+        """
+        if self.cell_integrated:
+            if self.order != 2.0:
+                raise ValueError(
+                    "cell_integrated flux is only defined for the Gaussian "
+                    f"(order 2), got order {self.order}."
+                )
+            if hx is None or hy is None:
+                raise ValueError("cell_integrated flux requires cell sizes hx, hy.")
+            return gaussian_cell_integrated_flux(
+                xp, x, y, x0, y0, r_x, r_y, hx, hy, peak_intensity
+            )
         return super_gaussian_flux(
             xp, x, y, x0, y0, r_x, r_y, self.order, peak_intensity
         )
@@ -91,9 +148,13 @@ _PROFILE_ORDERS: Dict[str, Optional[float]] = {
 }
 
 
-def build_laser_profile(name: str, order: float = 2.0) -> LaserProfile:
+def build_laser_profile(name: str, order: float = 2.0,
+                        cell_integrated: bool = False) -> LaserProfile:
     """Resolve a profile name to a :class:`LaserProfile`. ``order`` is used only
-    for ``"super_gaussian"``; raises ``ValueError`` on an unknown name."""
+    for ``"super_gaussian"``; raises ``ValueError`` on an unknown name.
+
+    ``cell_integrated`` enables exact analytic cell-averaging of the Gaussian
+    flux (see :func:`gaussian_cell_integrated_flux`)."""
     key = str(name).lower()
     try:
         canonical = _PROFILE_ORDERS[key]
@@ -103,7 +164,8 @@ def build_laser_profile(name: str, order: float = 2.0) -> LaserProfile:
             f"Unknown laser profile: {name!r}. Choose one of: {choices}."
         ) from None
     resolved_order = float(order) if canonical is None else canonical
-    return LaserProfile(name=key, order=resolved_order)
+    return LaserProfile(name=key, order=resolved_order,
+                        cell_integrated=bool(cell_integrated))
 
 
 @dataclass

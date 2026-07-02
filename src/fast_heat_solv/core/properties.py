@@ -156,6 +156,87 @@ class TempProperty:
                    is_constant=True)
 
 
+# ---------------------------------------------------------------------------
+# Numba-accelerated CPU fast path for the property fluctuations.
+#
+# The plain NumPy evaluator allocates ~25 full-volume temporaries and runs
+# single-threaded; on the CPU backend (used when a case is too large for GPU
+# memory) that single op dominates the per-Picard-iteration cost (~2 s per call
+# on a 34M-cell volume). We evaluate ``k' = k(T)-k̄`` and ``a' = rho·c-ā`` in one
+# fused, ``prange``-parallel pass — in float32, matching the weak-scalar-promotion
+# arithmetic of the GPU ``ElementwiseKernel``. ~100× faster on a many-core node.
+# numba is a hard dependency, so this is the only CPU path.
+# ---------------------------------------------------------------------------
+from numba import njit as _njit, prange as _prange
+
+
+@_njit(fastmath=True, cache=True)
+def _horner32(coeffs, x):
+    """Horner evaluation of an ascending-power float32 polynomial at ``x``."""
+    acc = coeffs[coeffs.shape[0] - 1]
+    for idx in range(coeffs.shape[0] - 2, -1, -1):
+        acc = acc * x + coeffs[idx]
+    return acc
+
+
+@_njit(parallel=True, fastmath=True, cache=True)
+def _kp_ap_cpu(T, ks, kl, rs, rl, cs, cl,
+               t_sol, inv_band, degenerate, k_bar, a_bar, kp_out, ap_out):
+    """Fused ``k'(T), a'(T)`` over the volume (float32, prange-parallel)."""
+    nz, ny, nx = T.shape
+    one = np.float32(1.0)
+    zero = np.float32(0.0)
+    for kk in _prange(nz):
+        for j in range(ny):
+            for i in range(nx):
+                x = T[kk, j, i]
+                if degenerate:
+                    fl = one if x >= t_sol else zero
+                else:
+                    fl = (x - t_sol) * inv_band
+                    if fl < zero:
+                        fl = zero
+                    elif fl > one:
+                        fl = one
+                om = one - fl
+                kv = om * _horner32(ks, x) + fl * _horner32(kl, x)
+                rv = om * _horner32(rs, x) + fl * _horner32(rl, x)
+                cv = om * _horner32(cs, x) + fl * _horner32(cl, x)
+                kp_out[kk, j, i] = kv - k_bar
+                ap_out[kk, j, i] = rv * cv - a_bar
+
+
+@_njit(parallel=True, fastmath=True, cache=True)
+def _latent_src_cpu(T, Tprev, rs, rl, t_sol, inv_band, degenerate,
+                    Lf, inv_dt, out):
+    """Latent-heat sink ``Q = -rho(T) L_f (f_l(T)-f_l(T_prev))/dt`` (float32)."""
+    nz, ny, nx = T.shape
+    one = np.float32(1.0)
+    zero = np.float32(0.0)
+    for kk in _prange(nz):
+        for j in range(ny):
+            for i in range(nx):
+                x = T[kk, j, i]
+                xp_prev = Tprev[kk, j, i]
+                if degenerate:
+                    flc = one if x >= t_sol else zero
+                    flp = one if xp_prev >= t_sol else zero
+                else:
+                    flc = (x - t_sol) * inv_band
+                    if flc < zero:
+                        flc = zero
+                    elif flc > one:
+                        flc = one
+                    flp = (xp_prev - t_sol) * inv_band
+                    if flp < zero:
+                        flp = zero
+                    elif flp > one:
+                        flp = one
+                om = one - flc
+                rho = om * _horner32(rs, x) + flc * _horner32(rl, x)
+                out[kk, j, i] = -rho * Lf * (flc - flp) * inv_dt
+
+
 @dataclass
 class MaterialModel:
     """Aggregate of the temperature-dependent thermophysical properties.
@@ -173,19 +254,59 @@ class MaterialModel:
         """Volumetric sensible heat capacity ``a(T) = rho(T) * c(T)``."""
         return self.rho(T) * self.c(T)
 
+    def _cpu_kp_ap_coeffs(self):
+        """Cached float32 coefficients for the numba CPU ``k',a'`` kernel.
+
+        The fused kernel blends all three properties with one liquid fraction, so
+        they must share a single mushy band (guaranteed by ``from_config``, which
+        builds them from the same solidus/liquidus).
+        """
+        cache = getattr(self, "_cpu_coeffs_cache", None)
+        if cache is not None:
+            return cache
+        bands = {(p.T_solidus, p.T_liquidus) for p in (self.k, self.rho, self.c)}
+        if len(bands) != 1:
+            raise ValueError(
+                "k, rho and c must share one mushy band for the fused CPU "
+                f"property kernel; got bands {bands}.")
+        t_sol, t_liq = self.k.T_solidus, self.k.T_liquidus
+        degenerate = t_liq <= t_sol
+        inv_band = np.float32(0.0 if degenerate else 1.0 / (t_liq - t_sol))
+        f32 = lambda arr: np.ascontiguousarray(arr, dtype=np.float32)
+        cache = (f32(self.k.solid), f32(self.k.liquid),
+                 f32(self.rho.solid), f32(self.rho.liquid),
+                 f32(self.c.solid), f32(self.c.liquid),
+                 np.float32(t_sol), inv_band, bool(degenerate))
+        object.__setattr__(self, "_cpu_coeffs_cache", cache)
+        return cache
+
+    def _cpu_rho_coeffs(self):
+        """Cached float32 rho branch coefficients for the numba latent kernel."""
+        cache = getattr(self, "_cpu_rho_cache", None)
+        if cache is None:
+            cache = (np.ascontiguousarray(self.rho.solid, dtype=np.float32),
+                     np.ascontiguousarray(self.rho.liquid, dtype=np.float32))
+            object.__setattr__(self, "_cpu_rho_cache", cache)
+        return cache
+
     def k_prime_a_prime(self, T, k_bar, a_bar):
         """Fluctuations ``(k(T) - k_bar, a(T) - a_bar)`` in a single fused pass.
 
         The straightforward ``k(T)``/``a(T)`` evaluation allocates ~25 temporary
         full-volume arrays (Horner + liquid-fraction blend, twice for ``a=rho*c``);
         on GPU that is ~140 ms per Picard iteration. This fuses the whole thing
-        into one ``ElementwiseKernel`` (built once from the model's coefficients),
-        cutting it to a few ms. The NumPy path keeps the readable evaluator.
+        into one kernel (built once from the model's coefficients), cutting it to a
+        few ms: a numba ``prange`` pass on CPU, an ``ElementwiseKernel`` on GPU.
         """
         xp = _xp(T)
         if xp is np:
-            return ((self.k(T) - k_bar).astype(np.float32),
-                    (self.a(T) - a_bar).astype(np.float32))
+            ks, kl, rs, rl, cs, cl, t_sol, inv_band, degenerate = self._cpu_kp_ap_coeffs()
+            Tf = np.ascontiguousarray(T, dtype=np.float32)
+            kp = np.empty(Tf.shape, dtype=np.float32)
+            ap = np.empty(Tf.shape, dtype=np.float32)
+            _kp_ap_cpu(Tf, ks, kl, rs, rl, cs, cl, t_sol, inv_band,
+                       degenerate, np.float32(k_bar), np.float32(a_bar), kp, ap)
+            return kp, ap
         import cupy
         kern = self._fused_gpu_kernel()
         kp = cupy.empty(T.shape, dtype=cupy.float32)
@@ -243,16 +364,13 @@ class MaterialModel:
             inv_band = -1.0
         if xp is np:
             f32 = np.float32
-            if inv_band < 0.0:
-                fl_curr = (T >= T_S).astype(f32)
-                fl_prev = (T_prev >= T_S).astype(f32)
-            else:
-                Ts, inv = f32(T_S), f32(inv_band)
-                fl_curr = np.clip((T - Ts) * inv, f32(0.0), f32(1.0))
-                fl_prev = np.clip((T_prev - Ts) * inv, f32(0.0), f32(1.0))
-            rho_eff = self.rho(T)
-            out[:] = (-rho_eff * f32(L_f) * (fl_curr - fl_prev)
-                      / f32(dt)).astype(f32)
+            degenerate = inv_band < 0.0
+            rs, rl = self._cpu_rho_coeffs()
+            _latent_src_cpu(np.ascontiguousarray(T, dtype=f32),
+                            np.ascontiguousarray(T_prev, dtype=f32),
+                            rs, rl, f32(T_S),
+                            f32(0.0 if degenerate else inv_band),
+                            bool(degenerate), f32(L_f), f32(1.0 / dt), out)
             return
         import cupy
         kern = self._latent_source_kernel()

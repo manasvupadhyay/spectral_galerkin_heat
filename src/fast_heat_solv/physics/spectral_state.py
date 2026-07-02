@@ -294,24 +294,16 @@ class BackendHooks:
     dct : callable, optional
         Forward (type-II, ortho) DCT over **all** axes — ``DCT_II`` in the kernel
         modules. Used by the property-correction volume projection.
-    dct_axis : callable, optional
-        ``(arr, axis) -> arr`` one-axis forward DCT-II (ortho). Used to assemble
-        the mixed sine/cosine transforms for the conductivity correction.
-    dst_axis : callable, optional
-        ``(arr, axis) -> arr`` one-axis forward DST-II (ortho). The differentiated
-        axis of the conductivity correction (see ``property_correction.tex`` §6.3).
     corr_source : callable, optional
-        ``(T, k', a', T_prev, dt, dx, dy, dz) -> f`` fused divergence-form
-        correction forcing ``f = ∇·(k'∇T) - a'∂_tT``. GPU fast path replacing the
-        six ``xp.gradient`` calls; ``None`` falls back to the ``xp`` finite
+        ``(T, k', a', T_prev, dt, dx, dy, dz) -> f`` fused property-correction
+        forcing ``f = ∇·(k'∇T) - a'∂_tT``. CPU/GPU fast path replacing the six
+        ``xp.gradient`` calls; ``None`` falls back to the ``xp`` finite
         differences in :func:`spectral_ops.assemble_property_correction`.
     """
     idct: Callable
     ndshift: Callable
     source_term: Callable
     dct: Callable = None
-    dct_axis: Callable = None
-    dst_axis: Callable = None
     corr_source: Callable = None
 
 

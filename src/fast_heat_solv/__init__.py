@@ -61,8 +61,8 @@ from .backends import (
     register_backend,
 )
 
-# Solver and runner imports are deferred — they pull in numba/pyfftw which
-# are expensive to compile. Use __getattr__ so `from fast_heat_solv import
+# Solver and runner imports are deferred — they pull in numba which is
+# expensive to compile. Use __getattr__ so `from fast_heat_solv import
 # SpectralSolver` still works but only loads the solvers on first access.
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "HeatSolver":           (".solvers.base",    "HeatSolver"),

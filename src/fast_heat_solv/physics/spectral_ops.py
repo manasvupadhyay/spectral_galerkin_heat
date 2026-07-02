@@ -42,7 +42,6 @@ __all__ = [
     "shift_latent_heat_history",
     "reconstruct_volume",
     "project_volume",
-    "conductivity_correction_modes",
     "assemble_property_correction",
 ]
 
@@ -83,70 +82,29 @@ def project_volume(field, SsState):
     return (SsState.hooks.dct(field) * SsState.grid.sqrt_dV).astype(xp.float32, copy=False)
 
 
-def _mixed_sine_transform(g, axis, SsState):
-    """Project *g* onto the basis differentiated along ``axis``.
-
-    Computes ``S_d{g}`` (``property_correction.tex`` eq. Ck): a DST-II along
-    ``axis`` and a DCT-II along the other two, ortho, scaled by ``sqrt(dV)``,
-    with the DST-II mode-index shift applied — output cosine-mode ``m`` reads
-    ``DST[m-1]`` and ``m = 0`` is set to zero (``∂`` annihilates the constant
-    mode). The highest DST mode (the orthonormal special case) maps to ``m = N``,
-    which is outside the kept mode range and is simply dropped.
-    """
-    xp = SsState.xp
-    hooks = SsState.hooks
-    out = g
-    for ax in range(3):
-        out = hooks.dst_axis(out, ax) if ax == axis else hooks.dct_axis(out, ax)
-
-    shifted = xp.zeros_like(out)
-    src = [slice(None)] * 3
-    dst = [slice(None)] * 3
-    src[axis] = slice(0, -1)   # DST indices 0 .. N-2  (frequencies 1 .. N-1)
-    dst[axis] = slice(1, None)  # cosine modes  1 .. N-1
-    shifted[tuple(dst)] = out[tuple(src)]
-    return shifted * SsState.grid.sqrt_dV
-
-
-def conductivity_correction_modes(g_x, g_y, g_z, SsState):
-    """Assemble the conductivity correction modes ``C^k_mnp`` from ``g = k' ∇T``.
-
-    ``C^k = (mπ/Lx) S_x{g_x} + (nπ/Ly) S_y{g_y} + (pπ/Lz) S_z{g_z}`` — three
-    mixed transforms scaled by their modal multipliers (axis order: x=2, y=1,
-    z=0 in the ``(nz, ny, nx)`` layout).
-    """
-    grid = SsState.grid
-    Sx = _mixed_sine_transform(g_x, 2, SsState)
-    Sy = _mixed_sine_transform(g_y, 1, SsState)
-    Sz = _mixed_sine_transform(g_z, 0, SsState)
-    return (grid.kx[None, None, :] * Sx
-            + grid.ky[None, :, None] * Sy
-            + grid.kz[:, None, None] * Sz)
-
-
 def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
-                                 k_bar, a_bar, mode="mixed"):
+                                 k_bar, a_bar):
     """Assemble the temperature-dependent property correction modes ``C_mnp``.
 
     Implements the forcing-assembly recipe of ``property_correction.tex`` §5/§7:
     reconstruct ``T`` over Ω from the current trial modes, read the property
     fluctuations ``k'(T)=k(T)-k̄`` and ``a'(T)=a(T)-ā`` from the tabulated model,
-    form ``g = k' ∇T`` (finite-difference gradient) and ``s_a = -a' ∂_t T``, then
-    project. Both projections return only the **volume** modes; the boundary
-    contribution of the conductivity correction is handled by the solver as a
-    rescaling of the prescribed surface flux (see the divergence branch below and
-    ``SpectralSolver.step``). Two projections are available:
+    form the real-space forcing ``f = ∇·(k'∇T) - a'∂_tT`` and project it to modes.
+    The projection returns only the **volume** modes; the boundary contribution of
+    the conductivity correction is handled by the solver as a rescaling of the
+    prescribed surface flux (see below and ``SpectralSolver.step``).
 
-    - ``mode="mixed"`` (reference): the weak form of ``property_correction.tex``
-      Eq.(Ck), three mixed sine/cosine transforms for ``C^k`` plus one DCT for
-      ``C^a`` — 15 full-volume FFT axis-passes. The sine basis vanishes on the
-      faces, so the boundary content is carried entirely by the (unscaled) base
-      forcing ``F^Γ``.
-    - ``mode="divergence"`` (``property_correction.tex``): integrate ``C^k`` by
-      parts so the volume term merges with ``C^a`` into a single DCT of
-      ``f = -a'∂_tT + ∇·(k'∇T)`` — ~4 passes. The boundary term it generates is
-      not assembled here; using the Neumann BC it merges with ``F^Γ`` into a
-      single rescaled-flux integral ``-∮ (k̄/k) q Φ dS`` applied in the solver.
+    The conductivity volume term is integrated by parts (Green's first identity):
+    it becomes a DCT of ``∇·(k'∇T)``, merged with the capacity source into a
+    single DCT of ``f`` — ~4 FFT axis-passes.
+
+    The boundary term ``-∮ k'∂_nT Φ dS`` is NOT assembled here. With the imposed
+    Neumann flux ``-k ∂_nT = q`` it equals ``+∮ (k'/k) q Φ dS``, which combines
+    with the base boundary forcing ``F^Γ = -∮ q Φ dS`` into a single rescaled-flux
+    integral ``-∮ (k̄/k) q Φ dS``. The solver therefore applies the boundary part
+    of the correction simply by scaling the prescribed surface flux by
+    ``k̄/k(T_surface)`` (see ``SpectralSolver.step``); this is exact (uses the BC,
+    not a finite-difference boundary gradient) and needs no face transforms.
 
     Parameters
     ----------
@@ -160,8 +118,6 @@ def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
         Temperature-dependent property model.
     k_bar, a_bar : float
         Reference constants baked into the ETD1 propagators (k̄, ā).
-    mode : {"mixed", "divergence"}
-        Projection scheme (default "mixed", the validated reference).
 
     Returns
     -------
@@ -177,50 +133,24 @@ def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
     # Horner/blend evaluation on GPU; see MaterialModel.k_prime_a_prime).
     k_prime, a_prime = model.k_prime_a_prime(T, k_bar, a_bar)
 
-    if mode == "divergence":
-        # Move the derivative off Φ (property_correction.tex eq. Ckdiv): the conductivity
-        # volume term becomes a DCT of ∇·(k'∇T), merged with the capacity source.
-        #
-        # The boundary term -∮ k'∂_nT Φ dS is NOT assembled here. With the imposed
-        # Neumann flux -k ∂_nT = q it equals +∮ (k'/k) q Φ dS, which combines with
-        # the base boundary forcing F^Γ = -∮ q Φ dS into a single rescaled-flux
-        # integral  -∮ (k̄/k) q Φ dS . The solver therefore applies the property
-        # correction at the boundary simply by scaling the prescribed surface flux
-        # by k̄/k(T_surface) (see SpectralSolver.step); this is exact (uses the BC,
-        # not a finite-difference boundary gradient) and needs no face transforms.
-        #
-        # The real-space forcing f = ∇·(k'∇T) - a'∂_tT is assembled by a fused
-        # backend kernel when available (GPU: two stencil passes replacing six
-        # xp.gradient calls); otherwise fall back to xp finite differences.
-        corr_source = getattr(SsState.hooks, "corr_source", None)
-        if corr_source is not None:
-            f = corr_source(T, k_prime, a_prime, T_prev_full, float(dt),
-                            grid.dx, grid.dy, grid.dz)
-            return project_volume(f, SsState).astype(xp.float32, copy=False)
+    # The real-space forcing f = ∇·(k'∇T) - a'∂_tT is assembled by a fused backend
+    # kernel when available (GPU/CPU: two stencil passes replacing six xp.gradient
+    # calls); otherwise fall back to xp finite differences.
+    corr_source = getattr(SsState.hooks, "corr_source", None)
+    if corr_source is not None:
+        f = corr_source(T, k_prime, a_prime, T_prev_full, float(dt),
+                        grid.dx, grid.dy, grid.dz)
+        return project_volume(f, SsState).astype(xp.float32, copy=False)
 
-        dT_dz, dT_dy, dT_dx = xp.gradient(T, grid.dz, grid.dy, grid.dx)
-        g_x = k_prime * dT_dx
-        g_y = k_prime * dT_dy
-        g_z = k_prime * dT_dz
-        s_a = -a_prime * ((T - T_prev_full) / xp.float32(dt))
-        div_g = (xp.gradient(g_x, grid.dx, axis=2)
-                 + xp.gradient(g_y, grid.dy, axis=1)
-                 + xp.gradient(g_z, grid.dz, axis=0))
-        return project_volume(s_a + div_g, SsState).astype(xp.float32, copy=False)
-
-    # Gradient by central differences on the reconstructed field (cheaper default
-    # per tex §6.3); xp.gradient returns [∂z, ∂y, ∂x] for the (nz, ny, nx) layout.
     dT_dz, dT_dy, dT_dx = xp.gradient(T, grid.dz, grid.dy, grid.dx)
     g_x = k_prime * dT_dx
     g_y = k_prime * dT_dy
     g_z = k_prime * dT_dz
-
-    dT_dt = (T - T_prev_full) / xp.float32(dt)
-    s_a = -a_prime * dT_dt
-
-    C_a = project_volume(s_a, SsState)
-    C_k = conductivity_correction_modes(g_x, g_y, g_z, SsState)
-    return (C_a + C_k).astype(xp.float32, copy=False)
+    s_a = -a_prime * ((T - T_prev_full) / xp.float32(dt))
+    div_g = (xp.gradient(g_x, grid.dx, axis=2)
+             + xp.gradient(g_y, grid.dy, axis=1)
+             + xp.gradient(g_z, grid.dz, axis=0))
+    return project_volume(s_a + div_g, SsState).astype(xp.float32, copy=False)
 
 
 def reconstruct_temperature_box(a, SsState):

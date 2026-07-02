@@ -1,9 +1,8 @@
 """Tests for the property-correction global transforms (spectral_ops).
 
-These pin the two things easiest to get wrong (property_correction.tex §6, §10):
-the DCT-II/IDCT-II volume normalisation and the mixed sine/cosine transform
-(including the DST-II mode-index shift), validated against an explicit
-brute-force modal sum.
+These pin the DCT-II/IDCT-II volume normalisation (property_correction.tex §6,
+§10), validated against an explicit brute-force modal sum, and the assembly of
+the property correction ``C = P{∇·(k'∇T) - a'∂_tT}``.
 """
 
 import numpy as np
@@ -69,51 +68,6 @@ def test_reconstruct_volume_matches_modal_sum():
 
 
 # ---------------------------------------------------------------------------
-# Mixed sine/cosine transform vs the brute-force -∫ g ∂_d Φ dV
-# ---------------------------------------------------------------------------
-
-def _brute_force_Ck_x(g, st):
-    """Explicit  C^k_x[m,n,p] = (mπ/Lx) ∫ g · C_m sin(mπx/Lx) C_n cos C_p cos dV."""
-    nz, ny, nx = g.shape
-    x, y, z = _grid_coords(st)
-    Cx, Cy, Cz = (np.asarray(c) for c in st.grid.C)
-    Lx, Ly, Lz = 1.0e-3, 0.7e-3, 0.4e-3
-    dV = float(st.grid.sqrt_dV) ** 2
-    sin_x = Cx[:, None] * np.sin(np.pi * np.arange(nx)[:, None] * x[None, :] / Lx)
-    cos_y = Cy[:, None] * np.cos(np.pi * np.arange(ny)[:, None] * y[None, :] / Ly)
-    cos_z = Cz[:, None] * np.cos(np.pi * np.arange(nz)[:, None] * z[None, :] / Lz)
-    # S_x{g}[p,n,m] = sum_kji g[k,j,i] sin_x[m,i] cos_y[n,j] cos_z[p,k] dV
-    Sx = np.einsum('kji,mi,nj,pk->pnm', g, sin_x, cos_y, cos_z) * dV
-    kx = (np.pi * np.arange(nx) / Lx)
-    return kx[None, None, :] * Sx
-
-
-def test_mixed_transform_x_matches_brute_force():
-    from fast_heat_solv.physics.spectral_ops import _mixed_sine_transform
-
-    st = _state(6, 5, 4)
-    rng = np.random.default_rng(2)
-    g = rng.standard_normal((4, 5, 6)).astype(np.float32)
-
-    Sx = _mixed_sine_transform(g, 2, st)
-    kx = (np.pi * np.arange(6) / 1.0e-3)
-    Ck_x = kx[None, None, :] * Sx
-    np.testing.assert_allclose(Ck_x, _brute_force_Ck_x(g, st), rtol=1e-3, atol=1e-2)
-
-
-def test_mixed_transform_zeroes_constant_mode():
-    """The differentiated axis annihilates its m=0 (constant) mode."""
-    from fast_heat_solv.physics.spectral_ops import _mixed_sine_transform
-
-    st = _state(6, 5, 4)
-    g = np.random.default_rng(3).standard_normal((4, 5, 6)).astype(np.float32)
-    Sx = _mixed_sine_transform(g, 2, st)
-    np.testing.assert_allclose(Sx[:, :, 0], 0.0, atol=1e-6)
-    Sz = _mixed_sine_transform(g, 0, st)
-    np.testing.assert_allclose(Sz[0, :, :], 0.0, atol=1e-6)
-
-
-# ---------------------------------------------------------------------------
 # assemble_property_correction — null behaviour (tex §8.1)
 # ---------------------------------------------------------------------------
 
@@ -154,7 +108,7 @@ def test_capacity_correction_zero_for_steady_field():
     """Uniform-in-time field ⇒ ∂_t T = 0 ⇒ no capacity correction contribution."""
     from fast_heat_solv.physics.spectral_ops import (
         assemble_property_correction,
-        conductivity_correction_modes,
+        project_volume,
         reconstruct_volume,
     )
     from fast_heat_solv.core.properties import MaterialModel
@@ -173,15 +127,19 @@ def test_capacity_correction_zero_for_steady_field():
     T = reconstruct_volume(a_trial, st)
 
     C = assemble_property_correction(st, a_trial, T, 1e-6, model, k_bar, a_bar)
-    # With ∂_t T = 0 the whole correction is the conductivity term.
-    T_grad = np.gradient(T, st.grid.dz, st.grid.dy, st.grid.dx)
-    kp = (model.k(T) - k_bar).astype(np.float32)
-    Ck = conductivity_correction_modes(kp * T_grad[2], kp * T_grad[1], kp * T_grad[0], st)
-    np.testing.assert_allclose(C, Ck, rtol=1e-4, atol=1e-4)
+    # With ∂_t T = 0 the whole correction is the conductivity term ∇·(k'∇T).
+    gz, gy, gx = (((model.k(T) - k_bar).astype(np.float32)) * d
+                  for d in np.gradient(T, st.grid.dz, st.grid.dy, st.grid.dx))
+    div_g = (np.gradient(gx, st.grid.dx, axis=2)
+             + np.gradient(gy, st.grid.dy, axis=1)
+             + np.gradient(gz, st.grid.dz, axis=0))
+    C_ref = project_volume(div_g.astype(np.float32), st)
+    np.testing.assert_allclose(C, C_ref, rtol=1e-4,
+                               atol=1e-5 * float(np.abs(C_ref).max()))
 
 
 # ---------------------------------------------------------------------------
-# Divergence form (Green's first identity, property_correction.tex) vs the mixed reference
+# Property correction (Green's first identity, property_correction.tex)
 # ---------------------------------------------------------------------------
 
 def _kdep_model():
@@ -193,8 +151,8 @@ def _kdep_model():
     )
 
 
-def test_divergence_mode_null_is_exact():
-    """k'=a'=0 ⇒ the divergence form (volume + faces) is exactly zero too."""
+def test_correction_null_is_exact():
+    """k'=a'=0 ⇒ the correction (volume + faces) is exactly zero too."""
     from fast_heat_solv.physics.spectral_ops import (
         assemble_property_correction, reconstruct_volume)
 
@@ -205,18 +163,17 @@ def test_divergence_mode_null_is_exact():
     a[0, 0, 0] += 1.0e4
     T_prev = reconstruct_volume(a, st)
     C = assemble_property_correction(st, a, T_prev, 1e-6, model,
-                                     15.0, 7900.0 * 500.0, mode="divergence")
+                                     15.0, 7900.0 * 500.0)
     assert float(np.max(np.abs(C))) == 0.0
 
 
-def test_divergence_assembles_volume_only():
-    """The divergence correction is the volume projection of ``s_a + ∇·(k'∇T)``.
+def test_correction_assembles_volume_only():
+    """The correction is the volume projection of ``s_a + ∇·(k'∇T)``.
 
-    The conductivity boundary term ``-∮k'∂_nT Φ dS`` is no longer assembled inside
-    the correction: using the Neumann BC it is folded into the prescribed surface
-    flux (rescaled by ``k̄/k``) by the solver. So ``assemble_property_correction``
-    in divergence mode must return exactly the merged volume DCT, with no face
-    contribution.
+    The conductivity boundary term ``-∮k'∂_nT Φ dS`` is not assembled inside the
+    correction: using the Neumann BC it is folded into the prescribed surface flux
+    (rescaled by ``k̄/k``) by the solver. So ``assemble_property_correction`` must
+    return exactly the merged volume DCT, with no face contribution.
     """
     from fast_heat_solv.physics.spectral_ops import (
         assemble_property_correction, project_volume, reconstruct_volume)
@@ -234,8 +191,7 @@ def test_divergence_assembles_volume_only():
     T_prev = reconstruct_volume(a, st)
     dt = 1e-6
 
-    C = assemble_property_correction(st, a, T_prev, dt, model, k_bar, a_bar,
-                                     mode="divergence")
+    C = assemble_property_correction(st, a, T_prev, dt, model, k_bar, a_bar)
 
     # Reference: volume projection of f = -a' ∂_t T + ∇·(k' ∇T), no face terms.
     T = reconstruct_volume(a, st)
@@ -248,24 +204,5 @@ def test_divergence_assembles_volume_only():
     s_a = -ap * (T - T_prev) / np.float32(dt)
     C_ref = project_volume((s_a + div_g).astype(np.float32), st)
 
-    np.testing.assert_allclose(C, C_ref, rtol=1e-5, atol=1e-4)
-
-
-def test_conductivity_correction_sums_three_axes():
-    from fast_heat_solv.physics.spectral_ops import (
-        _mixed_sine_transform,
-        conductivity_correction_modes,
-    )
-
-    st = _state(6, 5, 4)
-    rng = np.random.default_rng(4)
-    gx = rng.standard_normal((4, 5, 6)).astype(np.float32)
-    gy = rng.standard_normal((4, 5, 6)).astype(np.float32)
-    gz = rng.standard_normal((4, 5, 6)).astype(np.float32)
-
-    Ck = conductivity_correction_modes(gx, gy, gz, st)
-    grid = st.grid
-    expect = (np.asarray(grid.kx)[None, None, :] * _mixed_sine_transform(gx, 2, st)
-              + np.asarray(grid.ky)[None, :, None] * _mixed_sine_transform(gy, 1, st)
-              + np.asarray(grid.kz)[:, None, None] * _mixed_sine_transform(gz, 0, st))
-    np.testing.assert_allclose(Ck, expect, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(C, C_ref, rtol=1e-4,
+                               atol=1e-5 * float(np.abs(C_ref).max()))

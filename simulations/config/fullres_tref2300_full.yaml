@@ -20,11 +20,8 @@ simulation:
   max_picard_iter: 80
   # Picard relaxation. (contraction ≈1−ω)
   picard_omega: 0.31
-  # Property correction via Green's first identity (property_correction.tex):
-  # faster than the sine weak form and more boundary-faithful — the sine
-  # projection weights the faces by zero and discards the near-surface gradient;
-  # the divergence form keeps it (warmer, FE-ward laser peak).
-  correction_mode: "divergence"
+  # The temperature-dependent property correction (property_correction.tex) turns
+  # on automatically whenever k/rho/Cp are given as non-constant branches below.
 
 domain:
   size: [2.0e-3, 1.0e-3, 0.5e-3]   # [Lx, Ly, Lz] in m (FE: 2 × 1 × 0.5 mm)

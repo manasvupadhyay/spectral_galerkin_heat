@@ -134,9 +134,6 @@ class NumParams:
     max_picard_iter: Optional[int] = None
     picard_tol: Optional[float] = None
     picard_omega: Optional[float] = None
-    # Property-correction projection: "mixed" (sine weak form) or "divergence"
-    # (Green's first identity — faster and more boundary-faithful). None -> solver default.
-    correction_mode: Optional[str] = None
     dtype: Any = np.float32
 
 @dataclass
@@ -291,6 +288,11 @@ class LaserParams:
         Super-Gaussian order ``n`` used when ``profile == "super_gaussian"``
         (``2`` = Gaussian, large = flat-top), by default 2.0. Set via
         ``laser.super_gaussian_order``.
+    cell_integrated : bool, optional
+        When True, the Gaussian flux is integrated analytically over each grid
+        cell (exact power deposition even for a beam narrower than the grid)
+        instead of being point-sampled at the cell centre. Gaussian only.
+        Default False. Set via ``laser.cell_integrated``.
     """
     radius: float
     absorptivity: float
@@ -299,6 +301,7 @@ class LaserParams:
     r_x: float = 0.0
     r_y: float = 0.0
     super_gaussian_order: float = 2.0
+    cell_integrated: bool = False
 
     def __post_init__(self):
         # Default to a circular beam (r_x = r_y = radius) when axes are unset.
@@ -425,7 +428,6 @@ class SimulationContext:
                         if sim_cfg.get('picard_tol') is not None else None),
             picard_omega=(float(sim_cfg['picard_omega'])
                           if sim_cfg.get('picard_omega') is not None else None),
-            correction_mode=sim_cfg.get('correction_mode'),
             dtype=real_t,
         )
 
@@ -494,6 +496,7 @@ class SimulationContext:
             r_x=real_t(_get_value(laser_cfg.get('r_x', 0.0))),
             r_y=real_t(_get_value(laser_cfg.get('r_y', 0.0))),
             super_gaussian_order=float(_get_value(laser_cfg.get('super_gaussian_order', 2.0))),
+            cell_integrated=bool(laser_cfg.get('cell_integrated', False)),
         )
         
         # Laser Path

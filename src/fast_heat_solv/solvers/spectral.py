@@ -72,9 +72,6 @@ class SpectralSolver(HeatSolver):
         self.max_picard_iter: int = 30
         self.track_picard_history: bool = False
         self.picard_history = []
-        # Projection scheme for the property correction: "mixed" (sine weak form,
-        # the validated reference) or "divergence" (Green's first identity).
-        self._correction_mode: str = "mixed"
 
         # Temperature-dependent property correction (property_correction.tex).
         # Enabled in ``initialize`` when the material carries a non-constant model.
@@ -121,23 +118,16 @@ class SpectralSolver(HeatSolver):
         num = self.context.num
         mat = self.context.mat
 
-        # Property-correction projection scheme from the config. The Picard
-        # controls (cap/tol/omega) are applied below at the configured precision
-        # once the solver state exists.
-        if getattr(num, "correction_mode", None) is not None:
-            mode = str(num.correction_mode).lower()
-            if mode not in ("mixed", "divergence"):
-                raise ValueError(
-                    f"correction_mode must be 'mixed' or 'divergence', got {mode!r}")
-            self._correction_mode = mode
-
         # Initialize spectral solver state
         self.state = kernels.SpectralSolverState(mat, geom, num, self.context.fine)
         dtype = self.state.dtype
 
         # Resolve the beam profile (shape + normalization) from the config.
         laser = self.context.laser
-        self._profile = build_laser_profile(laser.profile, laser.super_gaussian_order)
+        self._profile = build_laser_profile(
+            laser.profile, laser.super_gaussian_order,
+            cell_integrated=laser.cell_integrated,
+        )
 
         # Mixing/convergence scalars at the configured precision.
         self.mixing_omega = dtype(0.1)
@@ -247,6 +237,7 @@ class SpectralSolver(HeatSolver):
         q_las = self._profile.flux(
             xp, grid.x, grid.y, laser_state.x, laser_state.y,
             laser_params.r_x, laser_params.r_y, laser_coef,
+            hx=geom.d.x, hy=geom.d.y,
         )
         P_laser = xp.sum(q_las) * geom.d.x * geom.d.y
 
@@ -314,15 +305,12 @@ class SpectralSolver(HeatSolver):
         # ================================================================
         S_las = grid.dct_scale * kernels.DCT_II(q_las)
 
-        # Divergence-mode property correction handles the conductivity boundary
-        # term by rescaling the prescribed surface flux by k̄/k(T_surface): using
-        # the Neumann BC (-k ∂_nT = q), the boundary piece -∮k'∂_nT Φ dS merges
-        # with F^Γ = -∮qΦ dS into -∮(k̄/k)qΦ dS (property_correction.tex). This is
-        # exact and replaces the finite-difference face term (mixed mode keeps the
-        # plain flux and carries the conductivity correction purely in the volume).
-        rescale_flux = (
-            self._property_correction and self._correction_mode == "divergence"
-        )
+        # The property correction handles the conductivity boundary term by
+        # rescaling the prescribed surface flux by k̄/k(T_surface): using the
+        # Neumann BC (-k ∂_nT = q), the boundary piece -∮k'∂_nT Φ dS merges with
+        # F^Γ = -∮qΦ dS into -∮(k̄/k)qΦ dS (property_correction.tex). This is exact
+        # and replaces the finite-difference face term.
+        rescale_flux = self._property_correction
 
         S_bot_raw = None
         if h_conv > 0:
@@ -384,7 +372,6 @@ class SpectralSolver(HeatSolver):
                 C_corr = kernels.assemble_property_correction(
                     SsState, buffers.a_temp, self._T_prev_full,
                     num.dt, mat.model, self._kbar, self._abar,
-                    mode=self._correction_mode,
                 )
                 kernels.add_source_term_modes(buffers.a_temp, SsState.KK, C_corr)
 
