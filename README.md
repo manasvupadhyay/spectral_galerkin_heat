@@ -7,7 +7,7 @@
 
 ---
 
-fastHeatSolv is a modular framework designed for simulating heat transfer in additive manufacturing. It uses semi-analytical spectral methods to achieve high performance on both CPU and GPU hardware, and fully supports complex laser trajectories.
+fastHeatSolv is a modular framework designed for efficiently simulating fully non-linear heat transfer in laser scanning based processing conditions such as laser surface treatments, additive manufacturing, etc. It uses semi-analytical spectral methods to achieve high performance on both CPU and GPU hardware, and fully supports complex laser trajectories.
 
 ## Usage
 
