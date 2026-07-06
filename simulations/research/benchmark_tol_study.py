@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]   # repo root (…/simulations/research/<file>)
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
@@ -296,7 +296,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--config",
-        default="simulations/config/standard_test.yaml",
+        default="simulations/examples/03_nonlinear_tdep.yaml",
         help="Path to the YAML config.",
     )
     parser.add_argument("--tol-min", type=float, default=1e-6,

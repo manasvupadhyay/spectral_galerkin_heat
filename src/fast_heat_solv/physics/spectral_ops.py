@@ -89,22 +89,16 @@ def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
     Implements the forcing-assembly recipe of ``property_correction.tex`` §5/§7:
     reconstruct ``T`` over Ω from the current trial modes, read the property
     fluctuations ``k'(T)=k(T)-k̄`` and ``a'(T)=a(T)-ā`` from the tabulated model,
-    form the real-space forcing ``f = ∇·(k'∇T) - a'∂_tT`` and project it to modes.
-    The projection returns only the **volume** modes; the boundary contribution of
-    the conductivity correction is handled by the solver as a rescaling of the
-    prescribed surface flux (see below and ``SpectralSolver.step``).
+    form ``g = k' ∇T`` (finite-difference gradient) and ``s_a = -a' ∂_t T``, then
+    project. The projection returns only the **volume** modes; the boundary
+    contribution of the conductivity correction is handled by the solver as a
+    rescaling of the prescribed surface flux (see below and ``SpectralSolver.step``).
 
-    The conductivity volume term is integrated by parts (Green's first identity):
-    it becomes a DCT of ``∇·(k'∇T)``, merged with the capacity source into a
-    single DCT of ``f`` — ~4 FFT axis-passes.
-
-    The boundary term ``-∮ k'∂_nT Φ dS`` is NOT assembled here. With the imposed
-    Neumann flux ``-k ∂_nT = q`` it equals ``+∮ (k'/k) q Φ dS``, which combines
-    with the base boundary forcing ``F^Γ = -∮ q Φ dS`` into a single rescaled-flux
-    integral ``-∮ (k̄/k) q Φ dS``. The solver therefore applies the boundary part
-    of the correction simply by scaling the prescribed surface flux by
-    ``k̄/k(T_surface)`` (see ``SpectralSolver.step``); this is exact (uses the BC,
-    not a finite-difference boundary gradient) and needs no face transforms.
+    The conductivity term ``C^k`` is integrated by parts (``property_correction.tex``
+    eq. Ckdiv) so the volume term merges with ``C^a`` into a single DCT of
+    ``f = -a'∂_tT + ∇·(k'∇T)``. The boundary term it generates is not assembled
+    here; using the Neumann BC it merges with the base forcing ``F^Γ`` into a
+    single rescaled-flux integral ``-∮ (k̄/k) q Φ dS`` applied in the solver.
 
     Parameters
     ----------

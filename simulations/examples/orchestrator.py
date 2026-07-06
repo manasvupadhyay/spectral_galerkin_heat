@@ -1,49 +1,53 @@
 #!/usr/bin/env python
-"""
-example_orchestrator.py – Demonstrates using fastHeatSolv as a library.
+"""Using fastHeatSolv as a library.
 
-This script shows how an external "master" orchestrator can drive the heat solver frame-by-frame
-without any disk I/O or IOManager involvement.
+Builds a SimulationContext from a Python dictionary and advances the solver step
+by step, without any disk I/O or IOManager involvement.
 
 Usage:
-    python example_orchestrator.py
+    uv run python simulations/examples/orchestrator.py
 """
 
 import sys
 import os
 
-# Ensure the package root is importable when running the script directly.
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))); sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# This file lives in simulations/examples/; the repo root is two levels up.
+EXAMPLE_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(EXAMPLE_DIR, "..", ".."))
+
+# Ensure the package is importable when running the script directly.
+sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
+sys.path.insert(0, REPO_ROOT)
 
 from fast_heat_solv.core.parameters import SimulationContext
 
 # ---------------------------------------------------------------------------
-# 1. Define configuration as a plain Python dictionary
-#    (An orchestrator would typically parse its own master YAML and extract
-#     the heat-solver section into a dict like this one.)
+# 1. Define the configuration as a plain Python dictionary. An external driver
+#    would typically extract this from its own configuration.
 # ---------------------------------------------------------------------------
 config = {
     "simulation": {
         "method": "spectral",
         "backend": "cpu",
-        "duration": 6e-5,      # very short run for demo
+        "duration": 6e-5,      # short run for demonstration
         "dt": 6e-6,
         "update_interval": 1,
     },
     "domain": {
         "size": [0.01, 0.005, 0.0025],   # Lx, Ly, Lz  [m]
-        "mesh": [64, 32, 16],             # coarse mesh for speed
+        "mesh": [64, 32, 16],             # coarse mesh
     },
     "material": {
+        # Constant Chadwick 316L properties at T0 = 293 K (as in example 01).
         "name": "316L",
-        "rho": 7850.0,
-        "k": 15.0,
-        "Cp": 500.0,
-        "L_f": 267700.0,
-        "T_solidus": 1700.0,
-        "T_liquidus": 1800.0,
+        "rho": 7957.5,
+        "k": 13.851,
+        "Cp": 497.89,
+        "L_f": 0.0,
+        "T_solidus": 1674.15,
+        "T_liquidus": 1697.15,
         "T0": 293.0,
-        "DeltaH_LV": 7.41e6,
+        "DeltaH_LV": 7.416e6,
         "R_v": 150.774,
         "Pa": 101325.0,
         "T_boil": 3090.0,
@@ -54,28 +58,30 @@ config = {
         "power_nominal": 200.0,
         "path": {
             "type": "gcode",
-            "file": "linear_track.gcode",   # resolved relative to config/paths/
+            "file": "linear_track.gcode",   # resolved from <config_dir>/paths/ (see below)
         },
     },
-    "io": {},   # empty – we don't use the IOManager at all
+    "io": {},   # empty: the IOManager is not used
 }
 
 # ---------------------------------------------------------------------------
 # 2. Build SimulationContext from the dictionary
+#    Passing config_dir lets the solver resolve the G-code path relative to
+#    this example's own paths/ folder, regardless of the current directory.
 # ---------------------------------------------------------------------------
-context = SimulationContext.from_dict(config)
+context = SimulationContext.from_dict(config, config_dir=EXAMPLE_DIR)
 
 # ---------------------------------------------------------------------------
-# 3. Instantiate the solver (bypass the factory if you want, or use it)
+# 3. Instantiate and initialize the solver
 # ---------------------------------------------------------------------------
 from fast_heat_solv.solvers.spectral import SpectralSolver
 from fast_heat_solv.backends import NumpyBackend
 
 solver = SpectralSolver(NumpyBackend())  # use get_backend("cupy") for GPU
-state = solver.initialize(context)       # context injected here
+state = solver.initialize(context)
 
 # ---------------------------------------------------------------------------
-# 4. Custom time loop – pure physics, no I/O
+# 4. Time loop
 # ---------------------------------------------------------------------------
 t = 0.0
 dt = context.num.dt
@@ -91,10 +97,10 @@ while t < t_end:
     t += dt
     step += 1
 
-    # Extract whatever diagnostics you need from the metrics dict
+    # Read diagnostics from the metrics dict returned by each step.
     T_max = metrics.get("T_surface_max", float("nan"))
     P_laser = metrics.get("P_laser", 0.0)
     print(f"  step {step:>4d} | t = {t:.4e} s | T_max = {T_max:.1f} K | P_laser = {P_laser:.2f} W")
 
 print("-" * 60)
-print("Orchestrator finished – no files were written to disk.")
+print("Orchestrator finished: no files were written to disk.")

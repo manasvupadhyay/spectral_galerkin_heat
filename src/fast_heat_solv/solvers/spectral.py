@@ -72,7 +72,6 @@ class SpectralSolver(HeatSolver):
         self.max_picard_iter: int = 30
         self.track_picard_history: bool = False
         self.picard_history = []
-
         # Temperature-dependent property correction (property_correction.tex).
         # Enabled in ``initialize`` when the material carries a non-constant model.
         self._property_correction: bool = False
@@ -305,11 +304,11 @@ class SpectralSolver(HeatSolver):
         # ================================================================
         S_las = grid.dct_scale * kernels.DCT_II(q_las)
 
-        # The property correction handles the conductivity boundary term by
-        # rescaling the prescribed surface flux by k̄/k(T_surface): using the
-        # Neumann BC (-k ∂_nT = q), the boundary piece -∮k'∂_nT Φ dS merges with
-        # F^Γ = -∮qΦ dS into -∮(k̄/k)qΦ dS (property_correction.tex). This is exact
-        # and replaces the finite-difference face term.
+        # Divergence-mode property correction handles the conductivity boundary
+        # term by rescaling the prescribed surface flux by k̄/k(T_surface): using
+        # the Neumann BC (-k ∂_nT = q), the boundary piece -∮k'∂_nT Φ dS merges
+        # with F^Γ = -∮qΦ dS into -∮(k̄/k)qΦ dS (property_correction.tex). This is
+        # exact and replaces the finite-difference face term.
         rescale_flux = self._property_correction
 
         S_bot_raw = None

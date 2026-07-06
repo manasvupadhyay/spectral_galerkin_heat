@@ -1,0 +1,122 @@
+# Example 01: Quickstart
+#
+# The simplest case: a single laser track on a small 316L cuboid at coarse
+# resolution with CONSTANT material properties. Latent heat of fusion and
+# surface convection are switched off (L_f = 0, h_conv = 0); only evaporative
+# ("boiling") cooling is active at the surface. Example 02 adds latent heat and
+# convection; example 03 makes the properties temperature-dependent.
+#
+# This file is annotated field by field and lists every accepted key, so it
+# doubles as the configuration reference. Optional keys are shown commented out
+# with their default value.
+#
+# Run:    uv run python simulations/main.py simulations/examples/01_quickstart.yaml
+# Output: out/<timestamp>_quickstart/ (final volume field, slices and profiles)
+
+simulation:
+  name: "quickstart"          # Free-form label for the run.
+  method: "spectral"          # Solver family: "spectral" (semi-analytic) or "fem".
+  backend: "cpu"              # "cpu" (default), "gpu" (needs CUDA + `uv sync --group gpu`),
+                              #   or "cpu_linear" (constant-property fast path).
+  # dtype: "float32"          # Working precision: "float32" (default) or "float64".
+  duration:                   # Total simulated physical time.
+    value: 4.0e-4             #   0.4 ms; at 0.8 m/s the beam travels ~0.32 mm.
+    unit: "s"
+  dt:                         # Fixed time step.
+    value: 5.0e-6             #   => 80 steps (duration / dt).
+    unit: "s"
+  update_interval: 5          # Steps between progress/ETA log lines.
+
+  # --- Non-linear solve controls (only used with temperature-dependent
+  #     properties; see example 03). Omit them for constant properties. ---
+  # max_picard_iter: 80       # Picard iteration cap per step.
+  # picard_omega: 0.31        # Picard relaxation factor (contraction ~ 1 - omega).
+  # picard_tol: 1.0e-4        # Picard convergence tolerance.
+
+domain:
+  size: [0.003, 0.0025, 0.0005]  # [Lx, Ly, Lz] in metres (3 x 2.5 x 0.5 mm).
+  mesh: [64, 48, 24]             # [nx, ny, nz], coarse resolution.
+
+# Moving, laser-following refined sub-box for the non-linear/latent-heat terms.
+# Optional; defaults shown. Matters mainly once latent heat is active (example 02+).
+# fine_mesh:
+#   refinement: 4                        # Fine cells per coarse cell, per axis.
+#   box_size: [0.9e-3, 0.9e-3, 0.04e-3]  # [Lx, Ly, Lz] of the box, in metres.
+
+material:
+  name: "316L"
+  # Constant thermophysical properties: the Chadwick et al. 316L solid-branch
+  # polynomials evaluated at T0 = 293 K. Example 03 instead supplies the full
+  # temperature-dependent polynomial branches.
+  rho:                        # rho(293) = 8084.2 - 0.42086*293 - 3.8942e-5*293^2
+    value: 7957.5
+    unit: "kg/m3"
+  k:                          # k(293)   = 9.248 + 0.01571*293
+    value: 13.851
+    unit: "W/(m.K)"
+  Cp:                         # Cp(293)  = 458.98 + 0.1328*293
+    value: 497.89
+    unit: "J/(kg.K)"
+  L_f:                        # Latent heat of fusion. 0 here: no phase-change sink.
+    value: 0.0
+    unit: "J/kg"
+  T_solidus:                  # Solidus / liquidus (Chadwick). Used for the melt
+    value: 1674.15            #   contour and, when L_f > 0, the latent-heat band.
+    unit: "K"
+  T_liquidus:
+    value: 1697.15
+    unit: "K"
+  T0:                         # Initial / ambient temperature.
+    value: 293.0
+    unit: "K"
+  # T_ref:                    # Property-correction reference T (defaults to T0).
+  #   value: 293.0
+  #   unit: "K"
+  h_conv:                     # Convective surface loss. 0 here: convection off.
+    value: 0.0
+    unit: "W/(m2.K)"
+  # Evaporative ("boiling") cooling — active in this example.
+  DeltaH_LV:                  # Latent heat of vaporization.
+    value: 7.416e6
+    unit: "J/kg"
+  R_v:                        # Specific gas constant of the vapour.
+    value: 150.774
+    unit: "J/(kg.K)"
+  Pa:                         # Ambient pressure.
+    value: 101325.0
+    unit: "Pa"
+  T_boil:                     # Boiling temperature.
+    value: 3090.0
+    unit: "K"
+
+laser:
+  radius:                     # Gaussian beam 1/e^2 radius.
+    value: 60.0e-6
+    unit: "m"
+  absorptivity: 0.30          # Absorbed power fraction (0-1, dimensionless scalar).
+  power_nominal:              # Nominal beam power (G-code S-values scale this).
+    value: 200.0
+    unit: "W"
+  # profile: "gaussian"       # Beam shape: "gaussian" (default) or "super_gaussian".
+  # r_x: 0.0                  # Elliptical beam radii [m]; 0 => circular using `radius`.
+  # r_y: 0.0
+  # super_gaussian_order: 2.0 # Super-Gaussian exponent (2.0 == Gaussian).
+  path:
+    type: "gcode"             # Path source. "gcode" reads an RS-274 toolpath file.
+    file: "linear_track.gcode"  # Resolved from simulations/examples/paths/.
+    # initial_position: [0.0, 0.0]  # Beam position before the path starts [m].
+
+io:
+  run_tag: "quickstart"       # Run dir is out/<timestamp>_<run_tag>/.
+  # output_root: "out"        # Base directory for run folders (default "out").
+  output_interval: null       # Steps between periodic volume dumps; null disables them.
+  outputs: [full_volume]      # Periodic output types: full_volume, modes, profiles, slices.
+  at_end: [full_volume, slices, profiles]  # Output types saved once, at the end.
+  # save_full_fields: false   # Also keep every intermediate full field (large).
+  profiles_locations:         # Where 1-D profiles are sampled.
+    - 'laser'                 #   'laser', 'hotspot', or an explicit [x, y] in metres.
+  slice_planes:               # Cut planes for the 2-D slice images. A plane names its
+    - xz                      #   two in-plane axes; the normal is the remaining axis.
+                              #   'xz' => normal y: the longitudinal melt-pool section.
+  slice_width: 0.5e-3         # Slice extent along the horizontal (scanning) axis [m].
+  slice_height: 0.08e-3       # Slice extent along the vertical (build) axis [m].

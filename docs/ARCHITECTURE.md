@@ -42,8 +42,9 @@ fastHeatSolv/
 |           ...
 ├── simulations/
 │   ├── main.py                     # CLI entry point: parses YAML, builds solver, runs simulation
-│   ├── example_orchestrator.py     # Library usage example (no I/O, frame-by-frame)
-│   └── config/                     # YAML configuration files + G-code paths
+│   ├── examples/                   # Example YAML configs (increasing complexity) + orchestrator.py
+│   │   └── paths/                  # G-code laser paths for the examples
+│   └── research/                   # Author's production/GPU configs + study drivers
 └── docs/
     └── ARCHITECTURE.md
 ```

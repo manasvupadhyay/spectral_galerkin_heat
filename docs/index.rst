@@ -20,8 +20,9 @@ running on both CPU and GPU backends.
    :class: tip
 
    Start with the :doc:`theory` (how the method works) and the :doc:`validation`
-   (how it compares against analytical, finite-element, and published references). The code is
-   not yet public — see :doc:`status` for access.
+   (how it compares against analytical, finite-element, and published references). Once you have
+   the code, the :doc:`examples` proceed from a short quickstart to a full non-linear run. The
+   code is not yet public; see :doc:`status` for access.
 
 .. toctree::
    :maxdepth: 2

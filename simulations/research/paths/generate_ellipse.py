@@ -39,5 +39,5 @@ def generate_ellipse_gcode(filename, cx, cy, rx, ry, num_points=300, feed_rate=4
         f.write("M5 ; Laser off\n")
 
 if __name__ == '__main__':
-    generate_ellipse_gcode('simulations/config/paths/ellipse.gcode', cx=1.25, cy=1.25, rx=0.9, ry=0.5, num_points=100)
+    generate_ellipse_gcode('simulations/research/paths/ellipse.gcode', cx=1.25, cy=1.25, rx=0.9, ry=0.5, num_points=100)
     print("Generated ellipse.gcode")

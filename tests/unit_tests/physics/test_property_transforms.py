@@ -1,8 +1,8 @@
 """Tests for the property-correction global transforms (spectral_ops).
 
 These pin the DCT-II/IDCT-II volume normalisation (property_correction.tex §6,
-§10), validated against an explicit brute-force modal sum, and the assembly of
-the property correction ``C = P{∇·(k'∇T) - a'∂_tT}``.
+§10) and the divergence-form assembly of the temperature-dependent property
+correction, validated against an explicit modal / finite-difference reference.
 """
 
 import numpy as np
@@ -105,7 +105,11 @@ def test_correction_zero_when_fluctuations_vanish():
 
 
 def test_capacity_correction_zero_for_steady_field():
-    """Uniform-in-time field ⇒ ∂_t T = 0 ⇒ no capacity correction contribution."""
+    """Uniform-in-time field ⇒ ∂_t T = 0 ⇒ no capacity correction contribution.
+
+    With ∂_t T = 0 the whole (divergence-form) correction reduces to the volume
+    projection of the conductivity term ∇·(k' ∇T).
+    """
     from fast_heat_solv.physics.spectral_ops import (
         assemble_property_correction,
         project_volume,
@@ -127,19 +131,18 @@ def test_capacity_correction_zero_for_steady_field():
     T = reconstruct_volume(a_trial, st)
 
     C = assemble_property_correction(st, a_trial, T, 1e-6, model, k_bar, a_bar)
-    # With ∂_t T = 0 the whole correction is the conductivity term ∇·(k'∇T).
-    gz, gy, gx = (((model.k(T) - k_bar).astype(np.float32)) * d
-                  for d in np.gradient(T, st.grid.dz, st.grid.dy, st.grid.dx))
+    # Reference: volume projection of ∇·(k' ∇T) only (s_a = 0 for a steady field).
+    kp = (model.k(T) - k_bar).astype(np.float32)
+    gz, gy, gx = (kp * d for d in np.gradient(T, st.grid.dz, st.grid.dy, st.grid.dx))
     div_g = (np.gradient(gx, st.grid.dx, axis=2)
              + np.gradient(gy, st.grid.dy, axis=1)
              + np.gradient(gz, st.grid.dz, axis=0))
     C_ref = project_volume(div_g.astype(np.float32), st)
-    np.testing.assert_allclose(C, C_ref, rtol=1e-4,
-                               atol=1e-5 * float(np.abs(C_ref).max()))
+    np.testing.assert_allclose(C, C_ref, rtol=1e-4, atol=1e-4)
 
 
 # ---------------------------------------------------------------------------
-# Property correction (Green's first identity, property_correction.tex)
+# Divergence form (Green's first identity, property_correction.tex)
 # ---------------------------------------------------------------------------
 
 def _kdep_model():
@@ -163,6 +166,7 @@ def test_correction_null_is_exact():
     a[0, 0, 0] += 1.0e4
     T_prev = reconstruct_volume(a, st)
     C = assemble_property_correction(st, a, T_prev, 1e-6, model,
+                                     15.0, 7900.0 * 500.0)
                                      15.0, 7900.0 * 500.0)
     assert float(np.max(np.abs(C))) == 0.0
 
@@ -191,6 +195,7 @@ def test_correction_assembles_volume_only():
     T_prev = reconstruct_volume(a, st)
     dt = 1e-6
 
+    C = assemble_property_correction(st, a, T_prev, dt, model, k_bar, a_bar)
     C = assemble_property_correction(st, a, T_prev, dt, model, k_bar, a_bar)
 
     # Reference: volume projection of f = -a' ∂_t T + ∇·(k' ∇T), no face terms.

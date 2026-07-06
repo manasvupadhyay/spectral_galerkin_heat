@@ -3,6 +3,7 @@ import logging
 import h5py
 import numpy as np
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from fast_heat_solv.backends.base import to_host
@@ -55,6 +56,13 @@ class LocalFSIOManager:
         self._at_end = io_cfg.get('at_end') or []
         self._profiles_locations = io_cfg.get('profiles_locations') or []
         self._slice_planes = io_cfg.get('slice_planes') or []
+        # Slice-image geometry (metres). width -> in-plane horizontal axis,
+        # height -> in-plane vertical (build) axis. Centred on the laser spot.
+        self._slice_width = io_cfg.get('slice_width', 0.6e-3)
+        self._slice_height = io_cfg.get('slice_height', 0.2e-3)
+        # Visualisation-only upward offset (K) applied to the plotted liquidus
+        # contour, to separate it from the solidus in the thin 316L mushy zone.
+        self._slice_liquidus_offset = float(io_cfg.get('slice_liquidus_offset', 0.0))
 
         if self._interval is None:
             logger.info("io.output_interval is None: periodic outputs disabled; only 'at_end' outputs will be saved.")
@@ -230,9 +238,10 @@ class LocalFSIOManager:
         """Ensure the step's XDMF exists, then render a cut-plane image per plane."""
         from fast_heat_solv.physics.spectral_helpers import reconstruct_temperature_DCT
 
-        # 1. Ensure XDMF exists for this step
+        # 1. Ensure XDMF exists for this step. load_xdmf expects a Path, so build
+        #    one here rather than passing a bare string down the slice pipeline.
         filename_base = self.get_output_path(f"field_step{step:06d}", subdir='fields')
-        xdmf_path = f"{filename_base}.xmf"
+        xdmf_path = Path(f"{filename_base}.xmf")
 
         # Check if file exists; if not, we must reconstruct and save it
         if not os.path.exists(xdmf_path):
@@ -249,22 +258,39 @@ class LocalFSIOManager:
         # 2. Generate slices for each plane
         from fast_heat_solv.io_utils.slices import generate_plots
         slices_dir = self.get_output_path('', subdir='slices')
+        width = self._slice_width
+        height = self._slice_height
+        mat = self.context.mat
+        # The mushy zone (T_solidus..T_liquidus) is only ~23 K wide for 316L, so
+        # the two contours nearly coincide. Offset the plotted liquidus upward by
+        # `slice_liquidus_offset` K (visualisation only) to separate the lines.
+        liq_plot = float(mat.T_liquidus) + self._slice_liquidus_offset
         for plane in slice_planes:
-            logger.warning("You may want to set parameters for center, width, height, etc.")
+            # A plane names the two in-plane axes (e.g. 'xz'); the slice normal is
+            # the remaining axis. A single letter ('y') is taken as the normal
+            # directly. So 'xz' -> normal 'y' (scanning x by build z, the
+            # longitudinal melt-pool section).
+            axes = [c for c in str(plane).lower() if c in 'xyz']
+            if len(axes) == 1:
+                normal = axes[0]
+            else:
+                normal = next((a for a in 'xyz' if a not in axes), axes[0])
             output_file = os.path.join(slices_dir, f"slice_{plane}_step{step:06d}.png")
-            # Determine center based on laser position
+            # Centre the cut on the laser spot; align its top with the surface.
             laser_state = laser_path.get_state(time, 0.0)
-            height = 0.0002
-            center = (float(laser_state.x), float(laser_state.y), self.context.geom.size.z - height / 2)
+            center = (float(laser_state.x), float(laser_state.y),
+                      self.context.geom.size.z - height / 2)
             generate_plots(
                 xdmf_path=xdmf_path,
                 output_dir=slices_dir,
                 show_ui=False,
                 save_images=True,
-                normal=plane[0],  # e.g., 'x', 'y', or 'z'
+                normal=normal,
                 center=center,
-                width=0.0006,  # 0.6 mm
-                height=height,  # 0.2 mm
+                width=width,
+                height=height,
+                liquidus=liq_plot,
+                solidus=float(mat.T_solidus),
                 specific_output_filename=output_file
             )
             logger.info(f"Saved slice {plane} for step {step} to {output_file}")

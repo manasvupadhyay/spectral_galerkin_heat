@@ -15,30 +15,30 @@ domain:
   mesh: [256, 260, 300]            # [nx, ny, nz]
 
 material:
-  name: "GenericSteel"
+  name: "316L"
   rho:
-    value: 7850.0
+    value: 7957.544888242
     unit: "kg/m3"
   k:
-    value: 15.0
+    value: 13.851029999999998
     unit: "W/(m.K)"
   Cp:
-    value: 500.0
+    value: 497.8904
     unit: "J/(kg.K)"
   L_f:
-    value: 267700.0
+    value: 2.677e5
     unit: "J/kg"
   T_solidus:
-    value: 1658.0
+    value: 1674.15
     unit: "K"
   T_liquidus:
-    value: 1723.0
+    value: 1697.15
     unit: "K"
   T0:
     value: 293.0
     unit: "K"
   DeltaH_LV:
-    value: 7.41e6
+    value: 7.416e6
     unit: "J/kg"
   R_v:
     value: 150.774

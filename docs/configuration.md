@@ -1,8 +1,9 @@
 # Configuration Guide
 
 Simulations are configured with YAML files that map the physical properties and runtime
-settings. Example configurations live under `simulations/config/`; this page mirrors
-{download}`standard_test.yaml <../simulations/config/standard_test.yaml>`.
+settings. Example configurations live under `simulations/examples/`; this page mirrors
+{download}`02_single_track.yaml <../simulations/examples/02_single_track.yaml>`. For a
+walkthrough of the examples, see {doc}`examples`.
 
 :::{note}
 Physical quantities are written as a `{value, unit}` mapping, for example:
@@ -28,6 +29,15 @@ Declares the run and solver behavior.
 * **dt**: Time step size (`s`).
 * **update_interval**: Steps between ETA prints to the terminal (`int`).
 
+The following keys control the non-linear (temperature-dependent property) solve. They are only
+needed when the material properties are given as temperature-dependent branches (see `material`
+below); with constant scalar properties they can be omitted.
+
+* **max_picard_iter**: Maximum Picard fixed-point iterations per time step (`int`). The property
+  correction typically needs ~80; ~30 is too low to converge.
+* **picard_omega**: Picard relaxation factor (`float`); the iteration contracts at a rate of about
+  `1 - picard_omega`.
+
 ### `domain`
 Dimensions and grid resolution.
 * **size**: Box dimensions `[Lx, Ly, Lz]` in metres.
@@ -49,6 +59,23 @@ Physical material parameters.
 * **Pa**: Ambient pressure (`Pa`)
 * **T_boil**: Boiling temperature (`K`)
 
+**Temperature-dependent properties.** `k`, `rho` and `Cp` may instead be given as
+temperature-dependent polynomials with separate solid and liquid branches, blended by the liquid
+fraction. Each branch is a list of coefficients in *ascending* powers of `T` (SI units):
+
+```yaml
+k:
+  solid:  [9.248, 0.01571]     # k_s = 9.248 + 0.01571*T
+  liquid: [12.41, 0.003279]    # k_l = 12.41 + 0.003279*T
+Cp:
+  solid:  [458.98, 0.1328]
+  liquid: [769.86]             # constant branch (single coefficient)
+```
+
+Using this form makes the solve non-linear; set the Picard keys under `simulation`
+(`max_picard_iter`, `picard_omega`, `picard_tol`). See example
+`simulations/examples/03_nonlinear_tdep.yaml`.
+
 ### `laser`
 * **radius**: Beam radius (`m`).
 * **absorptivity**: Power fraction absorbed (dimensionless, 0–1; a plain scalar).
@@ -64,7 +91,15 @@ Export settings controlling what is saved and when.
 - **at_end**: Output types saved once at the end (e.g. `profiles`, `slices`). See
   {ref}`output-types`.
 - **profiles_locations**: Optional. `'laser'`, `'hotspot'`, or an explicit `[x, y]` in metres.
-- **slice_planes**: Optional. Planes for 2D slices (`xy`, `yz`, `xz`).
+- **run_tag**: Optional. Suffix for the run directory `out/<timestamp>_<run_tag>/` (default `sim`).
+- **output_root**: Optional. Base directory for run folders (default `out`).
+- **slice_planes**: Optional. Planes for the 2-D slice images. A plane names its two in-plane axes
+  (`xz`, `yz`, `xy`); the slice normal is the remaining axis (so `xz` → normal `y`, the
+  longitudinal melt-pool section). A single letter is taken as the normal directly.
+- **slice_width**, **slice_height**: Optional. In-plane extent of the slice image in metres
+  (horizontal and vertical, centred on the laser spot).
+- **slice_liquidus_offset**: Optional. Visualisation-only offset (`K`) added to the plotted
+  liquidus contour so the narrow mushy zone is legible (default `0`).
 
 ### Global Dataclass `SimulationContext`
 

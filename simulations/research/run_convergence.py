@@ -62,7 +62,7 @@ def run_simulation_and_get_error(param_name, param_val, nx, ny, nz, template_yam
     config['domain']['mesh'] = [nx, ny, nz]
     
     # 3. Create a temporary yaml config
-    tmp_yaml = "simulations/config/tmp_convergence.yaml"
+    tmp_yaml = "simulations/research/tmp_convergence.yaml"
     with open(tmp_yaml, 'w') as f:
         yaml.dump(config, f)
         
@@ -120,7 +120,7 @@ def run_simulation_and_get_error(param_name, param_val, nx, ny, nz, template_yam
     print("  -> Cleanup done.\n")
 
 def main():
-    base_yaml = "simulations/config/standard_test.yaml"
+    base_yaml = "simulations/examples/02_single_track.yaml"
     csv_file_path = "validation_results/convergence_results_FE.csv"
     
     # Base configuration

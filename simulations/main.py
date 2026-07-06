@@ -50,7 +50,7 @@ def load_config(path: str) -> Dict[str, Any]:
 
 def main():
     parser = argparse.ArgumentParser(description="FastHeatSolv: Spectral Heat Equation Solver")
-    parser.add_argument("config",default='config/standard_test.yaml', help="Path to YAML configuration file")
+    parser.add_argument("config",default='examples/01_quickstart.yaml', help="Path to YAML configuration file")
     parser.add_argument("--backend", default=None, choices=["cpu", "gpu", "cpu_linear"], help="Override backend (cpu/gpu/cpu_linear)")
     parser.add_argument("--viz", action="store_true", help="Force visualization after simulation")
     parser.add_argument("--no-viz", action="store_true", help="Disable automatic visualization")

@@ -9,95 +9,84 @@
 
 fastHeatSolv is a modular framework designed for simulating heat transfer in additive manufacturing. It uses semi-analytical spectral methods to achieve high performance on both CPU and GPU hardware, and fully supports complex laser trajectories.
 
-## Usage
+## Quickstart
 
-`fastHeatSolv` can be used in two main ways: as a standalone simulation runner via CLI, or as an imported Python library.
-
-### 1. CLI Pipeline (Standalone)
-
-When interacting via the CLI, the solver uses `simulations/main.py` and is fully driven by a `.yaml` configuration file.
-
-This project uses [`uv`](https://uv.io) for fast environment management.
-
-```yaml
-# Example snippet: standard_test.yaml
-geom: {Lx: 0.01, Ly: 0.01, Lz: 0.005}
-num: {dt: 1.0e-4, nx: 32, ny: 32, nz: 16, t_end: 0.01}
-mat: {name: "Ti6Al4V", rho: 4420.0, k: 25.0, Cp: 650.0}
-laser: {radius: 60.0e-6, absorptivity: 0.30, power_nominal: 200.0, path: {type: "gcode", file: "track.gcode"}}
-io: {interval: 0.001, outputs: [full_volume]}
-```
+fastHeatSolv is installed from source; it is not published on PyPI. The recommended path uses
+[`uv`](https://github.com/astral-sh/uv), which creates an isolated environment and installs the
+dependencies:
 
 ```bash
-# Clone the repository
+# 1. Get the code
 git clone https://github.com/TheoADX/fastHeatSolv.git
 cd fastHeatSolv
 
-# Install the standard CPU environment
-uv sync
+# 2. Install the environment (creates .venv/ and installs dependencies)
+uv sync             # CPU only
+uv sync --group gpu # GPU, requires CUDA 13.x
 
-# Run the standard test simulation
-uv run python simulations/main.py simulations/config/standard_test.yaml
+# 3. Run the smallest example
+uv run python simulations/main.py simulations/examples/01_quickstart.yaml
 ```
 
-*Results are automatically saved to `out/<timestamp>_<tag>/` with HDF5/XDMF formats.*
+`uv sync` makes `fast_heat_solv` importable and `uv run` executes inside the managed environment,
+so no separate package-install step is required. Results are saved to `out/<timestamp>_<name>/` in
+HDF5/XDMF format.
 
-### 2. Library Integration
+If `uv` is not installed, install it with `curl -LsSf https://astral.sh/uv/install.sh | sh`; see
+the [uv documentation](https://docs.astral.sh/uv/getting-started/installation/) for other
+platforms.
 
-You can import `fastHeatSolv` as a library. 
+## Usage
 
-In this mode, you pass a dictionary into `SimulationContext.from_dict(...)` and drive the steps directly.
+`fastHeatSolv` can be used either as a standalone CLI runner (`simulations/main.py` driven by a
+`.yaml` config) or as an imported Python library (building a `SimulationContext` and calling
+`solver.step(...)` directly). Both are covered by the examples, ordered from a short run to a full
+non-linear case and then library mode:
 
-Here is a brief demonstration (see `simulations/example_orchestrator.py` for the full script):
+- **Examples**: [`simulations/examples/`](simulations/examples/), runnable configurations and the
+  library-mode `orchestrator.py`.
+- **Tutorial & configuration reference**: see the
+  [documentation](https://theoadx.github.io/hsg-docs/) (`examples` and `configuration` pages).
 
-```python
-from fast_heat_solv.core.parameters import SimulationContext
-from fast_heat_solv.solvers.spectral import SpectralSolver
-from fast_heat_solv.backends import NumpyBackend
-
-config = {
-    "simulation": { "method": "spectral", "backend": "cpu", "dt": 6e-6, "duration": 6e-5 },
-    "domain": { "size": [0.01, 0.005, 0.0025], "mesh": [64, 32, 16] },
-    "material": { "rho": 7850.0, "k": 15.0, "Cp": 500.0, "name": "316L" },
-    "laser": { "radius": 60.0e-6, "absorptivity": 0.30, "power_nominal": 200.0, 
-               "path": { "type": "gcode", "file": "linear_track.gcode" } },
-    "io": {}, # Empty: No I/O involvement
-}
-
-# 1. Build the context
-context = SimulationContext.from_dict(config)
-
-# 2. Instantiate and initialize the solver
-solver = SpectralSolver(NumpyBackend())   # use get_backend("cupy") for GPU
-state = solver.initialize(context)
-
-# 3. Time loop
-t, dt = 0.0, context.num.dt
-while t < context.num.t_end:
-    state, metrics = solver.step(t, dt)
-    t += dt
-```
+Production and GPU configurations and the study drivers are in `simulations/research/`.
 
 ## Installation & Environments
 
-Depending on your hardware, you can request `uv` to install different dependency groups:
+### Prerequisites
 
-- **CPU Core (Recommended)**: `uv sync`
-- **GPU Backend**: `uv sync --group gpu` *(Requires CUDA 12.x)*
-- **Visualization**: `uv sync --group viz`
-- **Docs**: `uv sync --group docs`
-- **Everything**: `uv sync --all-groups`
+- **Python 3.12 or newer.**
+- **[`uv`](https://github.com/astral-sh/uv)** (recommended): manages the virtual environment and
+  dependencies. Plain `pip` also works (see below).
+- **For the GPU backend only:** an NVIDIA GPU with the **CUDA 13.x** toolkit installed
+  system-wide (the CPU backend needs nothing extra).
 
-To build the documentation locally:
+### Optional dependency groups
+
+`uv sync` installs the CPU core. Add hardware- or task-specific extras with `--group`:
+
+| Command | Adds |
+| --- | --- |
+| `uv sync` | CPU core (default; sufficient to run the examples) |
+| `uv sync --group gpu` | CuPy GPU backend *(requires system CUDA 13.x)* |
+| `uv sync --group viz` | Plotting / visualization helpers |
+| `uv sync --group docs` | Sphinx toolchain to build the docs |
+| `uv sync --group dev` | Test + lint tooling (`pytest`, `black`, …) |
+| `uv sync --all-groups` | Everything above |
+
+Build the documentation locally:
 ```bash
-uv run make -C docs html
-# Output: docs/_build/html/index.html
+uv sync --group docs
+uv run make -C docs html      # Output: docs/_build/html/index.html
 ```
 
-Alternatively, you can install the package in editable mode using standard `pip`:
+### Installing with pip instead of uv
+
+If you prefer a manually managed environment, install the package in editable mode from the repo
+root:
 ```bash
-python -m pip install -e .
-python -m pip install -e ".[gpu]"  # With GPU support
+python -m pip install -e .            # CPU core
+python -m pip install -e ".[gpu]"     # + GPU backend (needs system CUDA 13.x)
+python -m pip install -e ".[docs]"    # + docs toolchain
 ```
 
 ## Citation

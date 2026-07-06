@@ -49,9 +49,11 @@ The project is driven by YAML configuration files.
 # General invocation
 uv run python simulations/main.py <path_to_config.yaml>
 
-# Run the standard test simulation
-uv run python simulations/main.py simulations/config/standard_test.yaml
+# Run the quickstart example (finishes in seconds)
+uv run python simulations/main.py simulations/examples/01_quickstart.yaml
 ```
+
+See {doc}`examples` for the full walkthrough of the examples.
 
 ## Building the Documentation
 

@@ -148,6 +148,25 @@ def test_save_modes_appends_across_calls(tmp_path, monkeypatch, tiny_context, li
         assert list(f["step"][:]) == [0, 1]
 
 
+def test_save_slices_writes_png(tmp_path, monkeypatch, tiny_context, linear_state):
+    # _save_slices must hand load_xdmf a Path, not a bare string. A string
+    # reached _resolve_h5's `.resolve()` and raised AttributeError, which
+    # generate_plots swallowed -> the slice image was silently never written.
+    monkeypatch.chdir(tmp_path)
+
+    class _Laser:
+        # slices need the beam position to centre the cut plane.
+        def get_state(self, t, dt):
+            return type("S", (), {"x": 0.0, "y": 0.0})()
+
+    m = LocalFSIOManager()
+    m.initialize(tiny_context)
+    m._save_slices(0.0, 0, linear_state, laser_path=_Laser(), slice_planes=["xy"])
+
+    png = tmp_path / m.get_output_path("slice_xy_step000000.png", "slices")
+    assert png.exists() and png.stat().st_size > 0
+
+
 def test_profiles_roundtrip_through_loader(tmp_path, monkeypatch, tiny_context, linear_state):
     # Pofiles written by the manager must be discoverable by SimulationResult.
     from fast_heat_solv.io_utils.loader import SimulationResult

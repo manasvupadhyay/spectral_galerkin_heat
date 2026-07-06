@@ -512,7 +512,7 @@ class SimulationContext:
                         # Standardize on config_dir / paths / gcode_file
                         gcode_file = os.path.abspath(os.path.join(config_dir, 'paths', gcode_file))
                     else:
-                        gcode_file = os.path.abspath(os.path.join(os.getcwd(), 'simulations', 'config', 'paths', gcode_file))
+                        gcode_file = os.path.abspath(os.path.join(os.getcwd(), 'simulations', 'examples', 'paths', gcode_file))
                 
                 # Write absolute path back to config so runner.py can access it
                 cfg['laser']['path']['file'] = gcode_file

@@ -28,3 +28,6 @@ docs/api/
 # Files from packaging/build metadata
 *.egg-info/_build/
 *.egg-info
+
+# Scratch config written by simulations/research/run_convergence.py
+simulations/research/tmp_convergence.yaml
