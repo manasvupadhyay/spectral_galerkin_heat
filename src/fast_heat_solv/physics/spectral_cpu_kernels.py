@@ -42,6 +42,7 @@ __all__ = [
     "add_source_term_modes",
     "add_bottom_surface_source",
     "compute_latent_heat_source",
+    "compute_latent_heat_source_grid",
     "reconstruct_surface_temperature",
     "reconstruct_bottom_temperature",
 ]
@@ -273,6 +274,7 @@ update_latent_heat_history = _ops.update_latent_heat_history
 reconstruct_surface_temperature = _ops.reconstruct_surface_temperature
 reconstruct_bottom_temperature = _ops.reconstruct_bottom_temperature
 compute_latent_heat_source = _ops.compute_latent_heat_source
+compute_latent_heat_source_grid = _ops.compute_latent_heat_source_grid
 shift_latent_heat_history = _ops.shift_latent_heat_history
 reconstruct_volume = _ops.reconstruct_volume
 project_volume = _ops.project_volume

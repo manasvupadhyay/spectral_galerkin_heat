@@ -432,15 +432,21 @@ class SimulationContext:
             n=Vec3(int(nx), int(ny), int(nz)),
         )
 
-        # Fine mesh — the refined, laser-following sub-box (optional; defaults
-        # reproduce the previous hardcoded box).
-        fine_cfg = cfg.get('fine_mesh', {})
-        default_box = (0.9e-3, 0.9e-3, 0.04e-3)
-        box = fine_cfg.get('box_size', default_box)
-        fine_params = FineMeshParams(
-            refinement=int(fine_cfg.get('refinement', 4)),
-            box_size=Vec3(float(box[0]), float(box[1]), float(box[2])),
-        )
+        # Fine mesh — the refined, laser-following sub-box (optional). When the
+        # ``fine_mesh`` section is absent, ``fine`` is None and the latent heat is
+        # evaluated on the main (coarse) grid: lower memory and faster for small
+        # runs. Providing the section switches on the localized fine-box path
+        # (needed to resolve the mushy zone on large production grids).
+        fine_cfg = cfg.get('fine_mesh', None)
+        if fine_cfg is None:
+            fine_params = None
+        else:
+            default_box = (0.9e-3, 0.9e-3, 0.04e-3)
+            box = fine_cfg.get('box_size', default_box)
+            fine_params = FineMeshParams(
+                refinement=int(fine_cfg.get('refinement', 4)),
+                box_size=Vec3(float(box[0]), float(box[1]), float(box[2])),
+            )
 
         mat_cfg = cfg.get('material', {})
         T_solidus = real_t(_get_value(mat_cfg.get('T_solidus', 0.0)))

@@ -254,6 +254,32 @@ def compute_latent_heat_source(Q_buffer, phys, num, SsState):
     )
 
 
+def compute_latent_heat_source_grid(Q_buffer, T_full, T_prev_full, phys, num, SsState):
+    """Compute the volumetric latent-heat source Q (W/m^3) on the **full grid**.
+
+    Grid-mode counterpart of :func:`compute_latent_heat_source` used when no fine
+    sub-box is configured. Reuses the same element-wise source kernels (they are
+    shape-agnostic) but over the coarse full-volume arrays ``T_full`` and the
+    previous converged field ``T_prev_full`` — no box reconstruction, no moving
+    window. The result is projected to modes by the standard full-volume DCT
+    (:func:`project_volume`) rather than the localized box contraction.
+    """
+    model = getattr(phys, "model", None)
+    if model is not None and not model.is_constant:
+        model.latent_heat_source(
+            T_full, T_prev_full, float(phys.T_solidus), float(phys.T_liquidus),
+            float(phys.L_f), float(num.dt), Q_buffer,
+        )
+        return
+
+    SsState.hooks.source_term(
+        T_full, T_prev_full,
+        phys.T_solidus, phys.T_liquidus,
+        phys.rho, phys.L_f, num.dt,
+        Q_buffer,
+    )
+
+
 def shift_latent_heat_history(SsState, laser_state, num):
     """Shift T_prev and Q_prev to align with the current laser position.
 

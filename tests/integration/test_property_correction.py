@@ -36,8 +36,8 @@ _X_START = _LX / 4
 _T_TOTAL = 1.0e-3
 
 
-def _cfg(material, mesh=(48, 24, 32), n_steps=20, backend="cpu"):
-    return {
+def _cfg(material, mesh=(48, 24, 32), n_steps=20, backend="cpu", fine=None):
+    cfg = {
         "simulation": {"backend": backend,
                        "duration": _T_TOTAL, "dt": _T_TOTAL / n_steps},
         "domain": {"size": [_LX, _LY, _LZ], "mesh": list(mesh)},
@@ -45,6 +45,9 @@ def _cfg(material, mesh=(48, 24, 32), n_steps=20, backend="cpu"):
         "laser": {"radius": _R_B, "absorptivity": _A, "power_nominal": _P},
         "io": {},
     }
+    if fine is not None:
+        cfg["fine_mesh"] = fine
+    return cfg
 
 
 def _base_material(**over):
@@ -121,8 +124,14 @@ def test_null_constant_branches_match_scalar(constant_velocity_laser):
 @pytest.mark.integration
 @pytest.mark.slow
 def test_temperature_dependent_run_is_physical(constant_velocity_laser):
-    """T-dependent 316L run stays finite, physical, bounded, and converges."""
-    cfg = _cfg(_base_material(k=_K_BR, rho=_RHO_BR, Cp=_CP_BR))
+    """T-dependent 316L run stays finite, physical, bounded, and converges.
+
+    Uses a fine box (box mode), as every production T-dependent config does: the
+    correction resolves a sharp mushy-zone source that the coarse main grid
+    (grid mode) under-resolves into ringing at this resolution.
+    """
+    cfg = _cfg(_base_material(k=_K_BR, rho=_RHO_BR, Cp=_CP_BR),
+               fine={"refinement": 2, "box_size": [0.4e-3, 0.3e-3, 0.06e-3]})
     laser = constant_velocity_laser(_X_START, _LY / 2, _V, 0.0, _P)
     ctx = _context(cfg, laser)
 

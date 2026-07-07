@@ -8,9 +8,12 @@ from fast_heat_solv.physics import spectral_cpu_kernels as k
 
 @pytest.fixture
 def state(tiny_context):
-    # Building the state is pure NumPy (einsum/precompute).
+    # Building the state is pure NumPy (einsum/precompute). These tests exercise
+    # the fine-box path, so build an explicit box (the default config is now
+    # grid mode, i.e. fine is None).
+    from fast_heat_solv.core.parameters import FineMeshParams
     c = tiny_context
-    return k.SpectralSolverState(c.mat, c.geom, c.num, c.fine)
+    return k.SpectralSolverState(c.mat, c.geom, c.num, FineMeshParams())
 
 
 def test_project_box_requires_fine_mesh(state):

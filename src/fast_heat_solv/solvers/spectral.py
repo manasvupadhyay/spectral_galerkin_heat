@@ -78,7 +78,11 @@ class SpectralSolver(HeatSolver):
         # Temperature-dependent property correction (property_correction.tex).
         # Enabled in ``initialize`` when the material carries a non-constant model.
         self._property_correction: bool = False
-        self._T_prev_full = None   # previous converged full-volume field (∂_t T)
+        # Grid mode: no fine sub-box, latent heat evaluated on the coarse grid
+        # (set in ``initialize`` from ``fine is None`` and ``L_f > 0``).
+        self._grid_latent: bool = False
+        self._T_prev_full = None   # previous converged full-volume field (∂_t T; shared
+                                   # by the property correction and grid-mode latent heat)
         self._kbar = None          # reference conductivity k̄ (= propagator const)
         self._abar = None          # reference volumetric capacity ā
         self._latent_truncation_warned = False  # fine-box truncation warned once
@@ -152,6 +156,12 @@ class SpectralSolver(HeatSolver):
             T0 * math.sqrt(geom.size.x * geom.size.y * geom.size.z)
         )
 
+        # Grid mode: no fine sub-box configured -> evaluate latent heat on the
+        # coarse grid (lower memory / faster for small runs). Only needed when
+        # latent heat is active (L_f > 0).
+        self._grid_latent = (self.state.fine_mesh is None
+                             and float(getattr(mat, "L_f", 0.0)) > 0.0)
+
         # --- Temperature-dependent property correction setup ----------------
         model = getattr(mat, "model", None)
         self._property_correction = model is not None and not model.is_constant
@@ -176,9 +186,26 @@ class SpectralSolver(HeatSolver):
                     f"model={k_bar:.6g}; ā propagator={prop_abar:.6g} vs "
                     f"model={a_bar:.6g}. (property_correction.tex §6.1)"
                 )
-            # Previous full-volume field for ∂_t T; starts at uniform T0.
+
+        # Previous converged full-volume field, shared by the property correction
+        # (∂_t T) and grid-mode latent heat (f_l(T_prev)); starts at uniform T0.
+        if self._property_correction or self._grid_latent:
             self._T_prev_full = xp.full(
                 (num.nz, num.ny, num.nx), xp.float32(T0), dtype=xp.float32
+            )
+
+        # Guardrail: in grid mode the sharp mushy-zone latent source is projected
+        # by the full-volume DCT, which on a coarse grid excites high-frequency
+        # ringing; combined with the (always full-volume) property correction it
+        # can destabilise the Picard iteration. Production T-dependent runs use a
+        # fine box, which projects the latent source locally and smoothly.
+        if self._property_correction and self._grid_latent:
+            logger.warning(
+                "Temperature-dependent run in grid mode (no fine_mesh): the sharp "
+                "latent-heat source is projected on the coarse grid and can ring, "
+                "destabilising the Picard iteration together with the property "
+                "correction. Add a fine_mesh section (box mode) if you see NaNs or "
+                "ringing."
             )
 
         return self.state
@@ -252,7 +279,10 @@ class SpectralSolver(HeatSolver):
         # ================================================================
         # 3. Prepare latent-heat history (once per step)
         # ================================================================
-        fm.update(laser_state)
+        # Box mode only: reposition the fine sub-box and shift its history to
+        # follow the laser. In grid mode (fm is None) these are no-ops.
+        if fm is not None:
+            fm.update(laser_state)
         buffers.a_temp[:] = SsState.a
         kernels.initialize_latent_heat_if_needed(SsState)
         kernels.shift_latent_heat_history(SsState, laser_state, num)
@@ -269,9 +299,9 @@ class SpectralSolver(HeatSolver):
         )
         S_top = grid.dct_scale * kernels.DCT_II(q_las - q_evap_shifted)
 
-        # Latent heat: warm-start with shifted Q from previous step. Use the
-        # stored buffer directly 
-        Q_latent = fm.Q_prev
+        # Latent heat: box mode warm-starts with the shifted Q from the previous
+        # step; grid mode recomputes it each iteration (no stored box history).
+        Q_latent = fm.Q_prev if fm is not None else None
 
         # Bottom convection
         h_conv = mat.h_conv
@@ -282,7 +312,7 @@ class SpectralSolver(HeatSolver):
         kernels.update_modes_etd1(
             SsState.a, SsState.KK, grid.Cp32_broadcast, S_top, buffers.a_temp
         )
-        if fm.T_prev is not None and Q_latent is not None:
+        if fm is not None and fm.T_prev is not None and Q_latent is not None:
             kernels.add_source_term_modes(
                 buffers.a_temp, SsState.KK,
                 kernels.project_box_to_modes(Q_latent, SsState),
@@ -344,23 +374,35 @@ class SpectralSolver(HeatSolver):
                 S_evap = grid.dct_scale * kernels.DCT_II(buffers.q_evap_buffer)
                 S_top_raw = S_las - S_evap
 
+            # Latent-heat source at the current iterate a_old, projected to modes.
+            # Box mode: reconstruct on the fine sub-box and contract against the
+            # box basis. Grid mode: reconstruct on the coarse grid and project by
+            # the full-volume DCT (reuses the previous converged _T_prev_full).
             Q_latent_raw = None
-            if fm.T_prev is not None:
+            Q_latent_modes = None
+            if fm is not None and fm.T_prev is not None:
                 xp.copyto(buffers.a_temp, a_old)
                 buffers.Q_latent_buffer.fill(0.0)
                 kernels.compute_latent_heat_source(
                     buffers.Q_latent_buffer, mat, num, SsState
                 )
                 Q_latent_raw = buffers.Q_latent_buffer
+                Q_latent_modes = kernels.project_box_to_modes(Q_latent_raw, SsState)
+            elif self._grid_latent:
+                T_full = kernels.reconstruct_volume(a_old, SsState)
+                buffers.Q_latent_buffer.fill(0.0)
+                kernels.compute_latent_heat_source_grid(
+                    buffers.Q_latent_buffer, T_full, self._T_prev_full, mat, num, SsState
+                )
+                Q_latent_modes = kernels.project_volume(buffers.Q_latent_buffer, SsState)
 
             kernels.update_modes_etd1(
                 SsState.a, SsState.KK, grid.Cp32_broadcast,
                 S_top_raw, buffers.a_temp,
             )
-            if Q_latent_raw is not None:
+            if Q_latent_modes is not None:
                 kernels.add_source_term_modes(
-                    buffers.a_temp, SsState.KK,
-                    kernels.project_box_to_modes(Q_latent_raw, SsState),
+                    buffers.a_temp, SsState.KK, Q_latent_modes,
                 )
             if S_bot_raw is not None:
                 kernels.add_bottom_surface_source(
@@ -417,19 +459,23 @@ class SpectralSolver(HeatSolver):
         buffers.q_evap_old[:] = buffers.q_evap_buffer
         SsState.a = buffers.a_temp.copy()
 
-        # Store the converged full-volume field for the next step's ∂_t T.
-        if self._property_correction:
+        # Store the converged full-volume field for the next step's ∂_t T (used
+        # by both the property correction and grid-mode latent heat).
+        if self._property_correction or self._grid_latent:
             self._T_prev_full[:] = kernels.reconstruct_volume(SsState.a, SsState)
 
         # ================================================================
         # 7. Update latent-heat history with converged temperature
         # ================================================================
-        kernels.update_latent_heat_history(SsState)
-        if fm.Q_prev is None:
-            fm.Q_prev = xp.zeros_like(buffers.Q_latent_buffer)
-        if Q_latent is not None:
-            fm.Q_prev[:] = Q_latent[:]
-            self._check_latent_box_truncation(Q_latent, fm)
+        # Box mode keeps its own moving-window history; grid mode reuses
+        # _T_prev_full (updated above), so nothing more to do here.
+        if fm is not None:
+            kernels.update_latent_heat_history(SsState)
+            if fm.Q_prev is None:
+                fm.Q_prev = xp.zeros_like(buffers.Q_latent_buffer)
+            if Q_latent is not None:
+                fm.Q_prev[:] = Q_latent[:]
+                self._check_latent_box_truncation(Q_latent, fm)
 
         metrics = {
             'T_surface_max': xp.max(T_temp),

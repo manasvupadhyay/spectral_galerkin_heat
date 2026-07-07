@@ -29,10 +29,12 @@ domain:
     value: [80, 48, 120]              # dz ~ 1.25 um resolves the mushy zone.
     unit: ""
 
-# Laser-following refined sub-box; latent heat is resolved on this finer grid.
-# The box is centred on the laser path, and its size is chosen to contain the
-# the mushy zone. The refinement factor is the number of fine cells per coarse
-# cell, per axis. Used for acceleration of the solver. 
+# OPTIONAL. Laser-following refined sub-box; latent heat is resolved on this
+# finer grid to sharpen the mushy-zone gradients. Omit the whole `fine_mesh`
+# section to evaluate latent heat on the coarse main grid instead (the default:
+# lower memory and faster, at coarser mushy-zone resolution). The box is centred
+# on the laser path; refinement is the number of fine cells per coarse cell per
+# axis, and box_size must enclose the melt pool.
 fine_mesh:
   refinement: 2                          # fine cells per coarse cell, per axis.
   box_size: [0.6e-3, 0.6e-3, 0.07e-3]   # [Lx, Ly, Lz] of the box, in metres.

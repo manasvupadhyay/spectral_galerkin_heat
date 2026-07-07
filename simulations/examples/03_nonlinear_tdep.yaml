@@ -36,7 +36,9 @@ domain:
     value: [100, 60, 96]              # dz ~ 1.25 um resolves the mushy zone.
     unit: ""
 
-# Moving fine-mesh ROI that resolves the sharp mushy-zone gradients under the beam.
+# OPTIONAL moving fine-mesh ROI that resolves the sharp mushy-zone gradients
+# under the beam. Omit the whole `fine_mesh` section to evaluate latent heat on
+# the coarse main grid (the default: lower memory, faster, coarser mushy zone).
 fine_mesh:
   refinement: 2                          # Fine cells per coarse cell, per axis.
   box_size: [0.2e-3, 0.15e-3, 0.04e-3]   # [Lx_box, Ly_box, Lz_box] in m.

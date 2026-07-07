@@ -57,19 +57,26 @@ domain:
 * **mesh**: Grid resolution `[nx, ny, nz]` (integers; dimensionless).
 
 ### `fine_mesh`
-Optional. A refined, laser-following sub-box on which the latent-heat source is resolved, since
-the coarse spectral grid cannot capture the sharp mushy-zone gradients. It only matters when
-latent heat is active (`L_f > 0`); omit it otherwise.
+Optional; controls where the latent-heat source is evaluated (relevant only when `L_f > 0`).
+
+- **Omitted (default): grid mode.** The latent-heat source is evaluated on the coarse main grid.
+  This is lower-memory and faster for small/quick runs. 
+- **Present: box mode.** A refined, laser-following sub-box resolves the sharp mushy-zone
+  gradients that the coarse grid cannot. Use it on large production grids where a fine mushy
+  zone matters and the melt pool is a small fraction of the domain (so the localized projection
+  is cheaper than a full-grid transform).
+
+Box-mode keys:
 
 * **refinement**: Fine cells per coarse cell, per axis (`int`, default `4`). The fine spacing is
   the coarse spacing divided by this factor.
 * **box_size**: Extent `[Lx, Ly, Lz]` of the box in metres (default `[0.9e-3, 0.9e-3, 0.04e-3]`).
   The x/y extents form a window that tracks the laser; the z extent is the near-surface depth.
 
-The box must enclose the melt pool: the latent-heat source is projected onto the modal basis
-only from inside it, so any melting beyond the box (deeper than its z extent, or outside the x/y
-window) is silently dropped. The solver checks this each step and logs a warning once if the
-latent-heat source reaches a box boundary — enlarge `box_size` if you see it.
+In box mode the box must enclose the melt pool: the latent-heat source is projected onto the
+modal basis only from inside it, so any melting beyond the box (deeper than its z extent, or
+outside the x/y window) is silently dropped. The solver checks this each step and logs a warning
+once if the latent-heat source reaches a box boundary — enlarge `box_size` if you see it.
 
 ### `material`
 Physical material parameters.

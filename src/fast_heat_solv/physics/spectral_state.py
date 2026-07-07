@@ -261,7 +261,13 @@ class SolverBuffers:
         self.a_temp = xp.empty((nz, ny, nx), dtype=dtype)
         self.q_evap_old = xp.zeros((ny, nx), dtype=dtype)
         self.q_evap_buffer = xp.zeros((ny, nx), dtype=dtype)
-        self.Q_latent_buffer = xp.zeros((fine_mesh.nz_box, fine_mesh.ny_box, fine_mesh.nx_box), dtype=dtype)
+        # Latent-heat source buffer. Box mode: sized to the fine sub-box. Grid
+        # mode (no fine_mesh): sized to the full coarse grid, reusing the
+        # existing full-volume DCT for the projection.
+        if fine_mesh is None:
+            self.Q_latent_buffer = xp.zeros((nz, ny, nx), dtype=dtype)
+        else:
+            self.Q_latent_buffer = xp.zeros((fine_mesh.nz_box, fine_mesh.ny_box, fine_mesh.nx_box), dtype=dtype)
 
         # Per-iteration Picard scratch — same shape as a_temp, never resized.
         self.a_old = xp.empty((nz, ny, nx), dtype=dtype)
@@ -349,9 +355,11 @@ class SpectralSolverState:
         # Precision for all solver arrays; defaults to float32 if ``num`` has
         # no ``dtype`` (e.g. a hand-built NumParams from before this field).
         self.dtype = getattr(num, "dtype", np.float32)
-        # Initialize sub-components
+        # Initialize sub-components. ``fine is None`` selects grid mode: no
+        # fine sub-box, latent heat evaluated on the coarse grid (spectral.py).
         self.grid = SpectralGrid(geom, xp, self.dtype)
-        self.fine_mesh = FineMeshState(geom, self.grid, fine, xp, self.dtype)
+        self.fine_mesh = (FineMeshState(geom, self.grid, fine, xp, self.dtype)
+                          if fine is not None else None)
         self.buffers = SolverBuffers(num, self.fine_mesh, xp, self.dtype)
 
         # Precompute propagators
