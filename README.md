@@ -1,40 +1,37 @@
 # fastHeatSolv
 
-**A semi-analytical, modular solution for the heat equation with support for CPU/GPU backends and G-code-driven laser paths.**
+**A semi-analytical, uncoupled, modal solution for the fully nonlinear heat equation with support for CPU/GPU backends and G-code-driven laser paths.**
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-[**Read the full Sphinx Documentation**](https://theoadx.github.io/hsg-docs/) (or build locally via `make -C docs html`)
+This README file contains only the essential information required to be operational with this code. A more comprehensive documentation is presented in the [**full Sphinx Documentation**](https://theoadx.github.io/hsg-docs/) (or build locally via `make -C docs html`)
 
 ---
 
-fastHeatSolv is a modular framework designed for simulating heat transfer in additive manufacturing. It uses semi-analytical spectral methods to achieve high performance on both CPU and GPU hardware, and fully supports complex laser trajectories.
+fastHeatSolv is a modal solver designed for efficiently simulating the fully nonlinear heat transfer problem on cuboid domains. It uses semi-analytical spectral methods to achieve significantly higher performance than finite element models on both CPU and GPU hardware, without losing accuracy.
 
 ## Quickstart
 
-fastHeatSolv is installed from source; it is not published on PyPI. The recommended path uses
-[`uv`](https://github.com/astral-sh/uv), which creates an isolated environment and installs the
-dependencies:
+fastHeatSolv is installed from source; it is not published on PyPI. The recommended path uses the package and project manager [`uv`](https://github.com/astral-sh/uv), which creates an isolated environment and installs the dependencies. If `uv` is not installed, you can install it with `curl -LsSf https://astral.sh/uv/install.sh | sh`; see the [uv documentation](https://docs.astral.sh/uv/getting-started/installation/) for other ways.
 
 ```bash
-# 1. Get the code
+# 1. Go to the local directory of your choice and download the code.
 git clone https://github.com/TheoADX/fastHeatSolv.git
+# This creates a local directory fastHeatSolv
+
+# Enter this directory
 cd fastHeatSolv
 
-# 2. Install the environment (creates .venv/ and installs dependencies)
+# 2. Install the virtual environment that contains all the libraries and dependencies needed to run the fastHeatSolv code (creates .venv/ and installs dependencies). The environment is also called "fastHeatSolv". Once this environment is installed, then the python compiler should recognize its existence. If it does not, then precede all your commands with 'uv' as shown below.
 uv sync             # CPU only
 uv sync --group gpu # GPU, requires CUDA 13.x
 
-# 3. Run the smallest example
+# 3. Run the test example
 uv run python simulations/main.py simulations/examples/01_quickstart.yaml
 ```
 
 `uv sync` makes `fast_heat_solv` importable and `uv run` executes inside the managed environment,
 so no separate package-install step is required. Results are saved to `out/<timestamp>_<name>/` in
 HDF5/XDMF format.
-
-If `uv` is not installed, install it with `curl -LsSf https://astral.sh/uv/install.sh | sh`; see
-the [uv documentation](https://docs.astral.sh/uv/getting-started/installation/) for other
-platforms.
 
 ## Usage
 
