@@ -1,25 +1,24 @@
 # Examples
 
-`fastHeatSolv` simulations are driven by `YAML` configuration files and run through
-`simulations/main.py`. The examples below are ordered by increasing complexity, from a short run
-with constant properties to a full non-linear case, followed by library-mode usage. Runs are intended 
-to be read and run in order.
+The examples are YAML configurations run through `simulations/main.py`. They are ordered by
+increasing complexity — constant properties, then latent heat, then temperature-dependent
+properties — and close with library-mode usage. Reading them in order is recommended.
 
-All commands are run from the repository root with [`uv`](https://github.com/astral-sh/uv):
+All commands are issued from the repository root with [`uv`](https://github.com/astral-sh/uv):
 
 ```bash
 uv sync   # one-time environment setup
 ```
 
-The example configurations are in `simulations/examples/`.
+The configurations are in `simulations/examples/`.
 
 (example-quickstart)=
 ## 1. Quickstart
 
-{download}`01_quickstart.yaml <../simulations/examples/01_quickstart.yaml>` runs a single laser
-track on a small, coarse cuboid with constant material properties. It is the simplest case:
-latent heat of fusion and surface convection are switched off, leaving only evaporative surface
-cooling. It completes in about a minute on a CPU and is annotated field by field, serving as the
+{download}`01_quickstart.yaml <../simulations/examples/01_quickstart.yaml>` scans a single laser
+track over a coarse cuboid with constant material properties. Latent heat and surface convection
+are disabled, leaving evaporative cooling as the only non-linear surface flux. The run takes
+about a minute on one CPU core. Its YAML is annotated field by field and serves as the
 configuration reference.
 
 ```bash
@@ -28,27 +27,31 @@ uv run python simulations/main.py simulations/examples/01_quickstart.yaml
 
 Results are written to `out/<timestamp>_quickstart/`:
 
-- `profiles/`: temperature along x, y and z through the laser spot (plain text).
-- `fields/`: the final volume field, readable in ParaView via the `.xmf` file.
-- `slices/`: the 2-D cut-plane image configured under `io.slice_planes`.
-- `logs/simulation.log`: per-step metrics (`T_surface_max`, laser power).
+- `profiles/` — temperature along $x$, $y$, $z$ through the laser spot (text).
+- `fields/` — the final volume field, readable in ParaView through the `.xmf` file.
+- `slices/` — the cross-section image configured by `io.slice_planes`.
+- `logs/simulation.log` — per-step metrics (`T_surface_max`, laser power).
 
 ```{figure} _images/example_01_meltpool.png
 :alt: Longitudinal melt-pool section, example 01
 :width: 100%
 
-Longitudinal (x–z, normal y) section through the laser spot at the end of the run. The double
-red line is the solidus/liquidus contour bounding the melt pool. This is the slice written to
-`slices/` with `slice_planes: [xz]`.
+Longitudinal ($xz$, normal $y$) section through the laser spot at the end of the run. The red
+contour marks the solidus/liquidus.
 ```
 
 (example-single-track)=
 ## 2. Single track with latent heat
 
 {download}`02_single_track.yaml <../simulations/examples/02_single_track.yaml>` adds the two
-effects that example 01 leaves off — latent heat of fusion (`L_f`) and surface convection
-(`h_conv`) — at a higher resolution. Material properties are still constant (the Chadwick 316L
-values evaluated at `T0 = 293 K`); example 03 makes them temperature-dependent.
+effects that example 1 omits — latent heat of fusion (`L_f`) and surface convection (`h_conv`).
+Properties remain constant (the reference 316L values used by the spectral-Galerkin solver).
+The domain is small with a fine $z$-grid ($\Delta z \approx 1.25\ \mu\text{m}$) so the narrow 316L
+mushy zone is resolved. The run takes a few minutes on one CPU core.
+
+<!-- TODO: cite the spectral-Galerkin solver paper for the 316L property values once published -->
+
+
 
 ```bash
 uv run python simulations/main.py simulations/examples/02_single_track.yaml
@@ -58,22 +61,20 @@ uv run python simulations/main.py simulations/examples/02_single_track.yaml
 :alt: Longitudinal melt-pool section, example 02
 :width: 100%
 
-Melt-pool section for the single track. The fine z-grid resolves the mushy zone: the two red
-contours are the solidus and the liquidus, the latter drawn +10 K (`io.slice_liquidus_offset`)
-so the narrow 23 K band is legible.
+Melt-pool section for the single track. The two red contours are the solidus and liquidus.
 ```
 
 (example-nonlinear)=
-## 3. Non-linear, temperature-dependent properties
+## 3. Temperature-dependent properties
 
 {download}`03_nonlinear_tdep.yaml <../simulations/examples/03_nonlinear_tdep.yaml>` lets the
 conductivity, density and specific heat vary with temperature (solid and liquid polynomial
-branches blended by the liquid fraction), making the diffusion problem non-linear. Each time step
-is solved with a Picard iteration and a global property correction:
+branches blended by the liquid fraction), making the problem non-linear. Each step is solved by a
+Picard iteration that also resolves the property correction (see {doc}`theory`):
 
-- `max_picard_iter`: iteration cap per step. This example uses `80`; the correction requires
-  about this many iterations to converge.
-- `picard_omega`: relaxation factor (contraction rate approximately `1 - omega`).
+- `max_picard_iter` — iteration cap per step (`80` here).
+- `picard_omega` — relaxation factor; larger values converge faster until the iteration
+  destabilises (`0.31` is near the limit for this case).
 
 ```bash
 uv run python simulations/main.py simulations/examples/03_nonlinear_tdep.yaml
@@ -83,22 +84,18 @@ uv run python simulations/main.py simulations/examples/03_nonlinear_tdep.yaml
 :alt: Conduction-mode melt pool, example 03
 :width: 100%
 
-Melt-pool section for the slow, low-power track. The pool is nearly symmetric (quasi-stationary
-conduction mode); the properties vary with temperature through the field. The two red contours are
-the solidus and the (+10 K) liquidus, resolved by the fine z-grid.
+Melt-pool section for the temperature-dependent run. The red line marks the solidus/liquidus.
 ```
 
-This is a reduced-grid version of the finite-element comparison case; the full-grid GPU
-configuration is `simulations/research/temp_dep_316L.yaml`.
+This is a reduced-grid version of the finite-element comparison case; the full GPU configuration
+is `simulations/research/temp_dep_316L.yaml`.
 
 (example-library)=
 ## 4. Library mode
 
-`fastHeatSolv` can also be used as a Python library. Instead of the CLI, an external driver builds
-a `SimulationContext` from a dictionary and calls `solver.step(...)` directly, which is useful
-when embedding the solver in a larger codebase. No data is written to disk.
-
-The complete script is in
+The solver can be driven directly from Python rather than the CLI. An external script builds a
+`SimulationContext` and calls `solver.step(...)` in a loop, which is useful when embedding the
+solver in a larger codebase. Nothing is written to disk. The full script is
 {download}`orchestrator.py <../simulations/examples/orchestrator.py>`:
 
 ```bash
@@ -110,21 +107,21 @@ from fast_heat_solv.core.parameters import SimulationContext
 from fast_heat_solv.solvers.spectral import SpectralSolver
 from fast_heat_solv.backends import NumpyBackend
 
-# 1. Define configuration as a plain Python dictionary
+# 1. Configuration as a plain dictionary
 config = {
     "simulation": {"method": "spectral", "backend": "cpu", "dt": 6e-6, "duration": 6e-5},
     "domain": {"size": [0.01, 0.005, 0.0025], "mesh": [64, 32, 16]},
-    "material": {"rho": 7957.5, "k": 13.851, "Cp": 497.89, "name": "316L"},  # Chadwick 316L at 293 K
+    "material": {"rho": 7957.5, "k": 13.851, "Cp": 497.89, "name": "316L"},  # reference 316L values
     "laser": {"radius": 60.0e-6, "absorptivity": 0.30, "power_nominal": 200.0,
               "path": {"type": "gcode", "file": "linear_track.gcode"}},
     "io": {},   # empty: the IOManager is not used
 }
 
-# 2. Build the context (config_dir resolves the G-code path to <dir>/paths/)
+# 2. Build the context (config_dir resolves the G-code path under <dir>/paths/)
 context = SimulationContext.from_dict(config, config_dir="simulations/examples")
 
-# 3. Instantiate and initialize the solver
-solver = SpectralSolver(NumpyBackend())   # use get_backend("cupy") for GPU
+# 3. Instantiate and initialise the solver
+solver = SpectralSolver(NumpyBackend())   # get_backend("cupy") for GPU
 state = solver.initialize(context)
 
 # 4. Time loop
@@ -135,8 +132,8 @@ while t < t_end:
     print(f"t = {t:.4e} s | T_max = {metrics.get('T_surface_max'):.1f} K")
 ```
 
-## Further material
+## Further reading
 
 Every configuration key is documented in {doc}`configuration`, and the output formats in
-{doc}`outputs`. Production and GPU configurations and the convergence and tolerance study drivers
+{doc}`outputs`. The GPU/production configurations and the convergence and tolerance study drivers
 are in `simulations/research/`.

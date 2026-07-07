@@ -60,9 +60,6 @@ class LocalFSIOManager:
         # height -> in-plane vertical (build) axis. Centred on the laser spot.
         self._slice_width = io_cfg.get('slice_width', 0.6e-3)
         self._slice_height = io_cfg.get('slice_height', 0.2e-3)
-        # Visualisation-only upward offset (K) applied to the plotted liquidus
-        # contour, to separate it from the solidus in the thin 316L mushy zone.
-        self._slice_liquidus_offset = float(io_cfg.get('slice_liquidus_offset', 0.0))
 
         if self._interval is None:
             logger.info("io.output_interval is None: periodic outputs disabled; only 'at_end' outputs will be saved.")
@@ -261,10 +258,6 @@ class LocalFSIOManager:
         width = self._slice_width
         height = self._slice_height
         mat = self.context.mat
-        # The mushy zone (T_solidus..T_liquidus) is only ~23 K wide for 316L, so
-        # the two contours nearly coincide. Offset the plotted liquidus upward by
-        # `slice_liquidus_offset` K (visualisation only) to separate the lines.
-        liq_plot = float(mat.T_liquidus) + self._slice_liquidus_offset
         for plane in slice_planes:
             # A plane names the two in-plane axes (e.g. 'xz'); the slice normal is
             # the remaining axis. A single letter ('y') is taken as the normal
@@ -289,7 +282,7 @@ class LocalFSIOManager:
                 center=center,
                 width=width,
                 height=height,
-                liquidus=liq_plot,
+                liquidus=float(mat.T_liquidus),
                 solidus=float(mat.T_solidus),
                 specific_output_filename=output_file
             )

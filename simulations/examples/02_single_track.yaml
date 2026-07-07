@@ -4,7 +4,7 @@
 # example 01 disabled:
 #   - latent heat of fusion (L_f > 0): energy absorbed/released on melting,
 #   - surface convection (h_conv > 0): convective heat loss at the top face.
-# Material properties are still CONSTANT (Chadwick 316L evaluated at T0 = 293 K);
+# Material properties are still CONSTANT (reference 316L evaluated at T0 = 293 K);
 # example 03 makes them temperature-dependent.
 #
 # The domain is deliberately SMALL with a fine z-grid (dz ~ 1.25 um) so the thin
@@ -36,7 +36,7 @@ fine_mesh:
 
 material:
   name: "316L"
-  # Constant Chadwick 316L properties at T0 = 293 K (same as example 01).
+  # Constant reference 316L properties at T0 = 293 K (same as example 01).
   rho:
     value: 7957.5
     unit: "kg/m3"
@@ -97,4 +97,3 @@ io:
     - xz                      # normal y: longitudinal melt-pool section.
   slice_width: 0.3e-3         # horizontal (scanning) extent [m].
   slice_height: 0.06e-3       # vertical (build) extent [m].
-  slice_liquidus_offset: 10.0 # plot the liquidus contour +10 K (visual separation).

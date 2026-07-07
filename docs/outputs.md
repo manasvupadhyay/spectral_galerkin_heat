@@ -29,9 +29,9 @@ Extracts 1D temperature profiles along each axis (x, y, z) through a chosen cent
 
 **Files produced**
 
-- `profiles/x_spectral_latent_heat.txt`
-- `profiles/y_spectral_latent_heat.txt`
-- `profiles/z_spectral_latent_heat.txt`
+- `profiles/x_step{N:06d}.txt`
+- `profiles/y_step{N:06d}.txt`
+- `profiles/z_step{N:06d}.txt`
 
 Each file contains two columns: coordinate (m) and temperature (K).
 
@@ -53,9 +53,9 @@ Renders 2D PNG slices of the temperature field on chosen cross-slice planes. The
 
 - `slices/slice_{plane}_step{N:06d}.png` for each plane in `slice_planes`
 
-**`slice_planes`** (required) — any subset of `xy`, `yz`, `xz`.
+**`slice_planes`** (required) — any subset of `xy`, `yz`, `xz`. A plane names its two in-plane axes; the slice normal is the remaining axis (so `xz` → normal `y`, the longitudinal melt-pool section).
 
-The slice center is always the laser position at the saved step (x, y) at a fixed depth near the top surface. Width and height of the slice are currently hardcoded (0.6 mm × 0.2 mm) and not configurable from the YAML.
+The slice is centred on the laser position at the saved step, with its top aligned to the surface. Its in-plane extent is set by `slice_width` and `slice_height` (metres), defaulting to 0.6 mm × 0.2 mm. See {doc}`configuration` for these keys.
 
 ---
 

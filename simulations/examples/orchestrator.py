@@ -38,7 +38,7 @@ config = {
         "mesh": [64, 32, 16],             # coarse mesh
     },
     "material": {
-        # Constant Chadwick 316L properties at T0 = 293 K (as in example 01).
+        # Constant reference 316L properties at T0 = 293 K (as in example 01).
         "name": "316L",
         "rho": 7957.5,
         "k": 13.851,

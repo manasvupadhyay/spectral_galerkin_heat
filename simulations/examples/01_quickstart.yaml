@@ -45,7 +45,7 @@ domain:
 
 material:
   name: "316L"
-  # Constant thermophysical properties: the Chadwick et al. 316L solid-branch
+  # Constant thermophysical properties: the reference 316L solid-branch
   # polynomials evaluated at T0 = 293 K. Example 03 instead supplies the full
   # temperature-dependent polynomial branches.
   rho:                        # rho(293) = 8084.2 - 0.42086*293 - 3.8942e-5*293^2
@@ -60,7 +60,7 @@ material:
   L_f:                        # Latent heat of fusion. 0 here: no phase-change sink.
     value: 0.0
     unit: "J/kg"
-  T_solidus:                  # Solidus / liquidus (Chadwick). Used for the melt
+  T_solidus:                  # Solidus / liquidus. Used for the melt
     value: 1674.15            #   contour and, when L_f > 0, the latent-heat band.
     unit: "K"
   T_liquidus:

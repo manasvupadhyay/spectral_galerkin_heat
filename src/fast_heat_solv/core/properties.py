@@ -6,7 +6,7 @@ liquid fraction ``f_l(T)`` between the solidus and liquidus temperatures::
 
     p(T) = (1 - f_l) * p_solid(T) + f_l * p_liquid(T)
 
-This matches the Chadwick 316L form used by the finite-element reference solver.
+This matches the reference 316L form used by the finite-element reference solver.
 The blended property is non-polynomial with slope kinks at ``T_S``/``T_L``; this
 never enters the spectral scheme, because the weak-form property correction
 samples ``k`` and ``a`` but never differentiates them in ``T``.

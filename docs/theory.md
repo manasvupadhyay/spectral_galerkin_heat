@@ -1,11 +1,14 @@
 # Theory & Physics
 
-fastHeatSolv solves the **non-linear transient heat equation** with a *spectral Galerkin*
-(SG) method. The idea is to represent the temperature field as a sum of global modes that
-satisfy the boundary conditions exactly, so that linear heat diffusion becomes a set of
-*decoupled* ordinary differential equations that can be integrated **exactly and
-unconditionally stably**. The non-linear sources, laser heating, evaporative cooling,
-convection and latent heat, are then handled by a fast, dimensionally-reduced projection.
+fastHeatSolv solves the **non-linear transient heat equation** with a *semi-analytical
+spectral Galerkin* (SG) method. Following reference-medium methods from computational
+mechanics, the problem is split into a linear, constant-coefficient reference operator and a
+collection of non-linear forcing terms. The reference operator is represented in an eigenbasis
+that satisfies the boundary conditions exactly, so linear diffusion becomes a set of
+*decoupled* ordinary differential equations integrated **exactly and unconditionally stably**.
+Everything else — temperature-dependent properties, latent heat, and the non-linear surface
+fluxes (laser, evaporation, convection) — is carried as a forcing term and resolved by a
+relaxed fixed-point iteration.
 
 This page summarises the method. For runnable examples see {doc}`examples`; for the full
 derivation and validation see the accompanying article (preprint forthcoming).
@@ -16,52 +19,61 @@ On a fixed cuboid domain $\Omega = [0, L_x] \times [0, L_y] \times [0, L_z]$, th
 equation reads
 
 $$
-\frac{\partial (\rho \, c_{\text{eff}} \, T)}{\partial t} = \nabla \cdot (k \nabla T),
+\rho \left[ c + \sum_j L_j \frac{\partial f_j}{\partial T} \right] \frac{\partial T}{\partial t}
+  = \nabla \cdot (\boldsymbol{K} \cdot \nabla T) + S,
 $$
 
-where $T$ is temperature, $\rho = \rho(T)$ the temperature-dependent mass density, and
-$k = k(T)$ the temperature-dependent thermal conductivity. Phase change enters through an
-**apparent heat capacity** $c_{\text{eff}}$ that bundles the sensible heat of each phase with
-the latent heat $L_j$ released across each transition:
-
-$$
-c_{\text{eff}}(T) = \frac{\partial h}{\partial T}
-  = \sum_i c_i \, \chi_i(T) + \sum_j L_j \frac{\partial f_j}{\partial T},
-$$
-
-with $\chi_i$ the mass fraction of phase $i$ and $f_j(T)$ the transformed fraction of the
+where $T$ is temperature, $\rho = \rho(T)$ the temperature-dependent mass density,
+$\boldsymbol{K} = \boldsymbol{K}(T)$ the (generally anisotropic) thermal conductivity tensor,
+and $c = \sum_i c_i \chi_i$ the sensible heat capacity summed over the phase mass fractions
+$\chi_i$. Phase change enters through the latent heat $L_j$ released across each transition,
+weighted by $\partial f_j / \partial T$, where $f_j(T)$ is the transformed fraction of the
 $j$-th transition (0 below the solidus $T_{s,j}$, 1 above the liquidus $T_{e,j}$, smoothly
-varying in between).
+varying in between). $S$ collects any additional volumetric source.
 
 The applied heat fluxes are prescribed as **non-linear Neumann boundary conditions** — the
 sum of all surface contributions (laser, evaporation, convection):
 
 $$
--k \, \frac{\partial T}{\partial n} = \sum_{m=1}^{N} q_m(\mathbf{x}, t, T) \quad \text{on } \Gamma .
+-(\boldsymbol{K} \cdot \nabla T) \cdot \boldsymbol{n} = \sum_{s=1}^{N_s} q_s(t, T)
+  \quad \text{on } \partial\Omega .
 $$
 
-## Model reduction
+## Reference-medium decomposition
 
-Two simplifications make the spectral treatment possible while preserving the physics that
-matter for melt-pool prediction:
-
-- **Constant thermophysical properties.** $\rho$, $k$ and the sensible $c$ are taken as
-  temperature-independent. This deliberately isolates the dominant non-linearity — the
-  *latent-heat stiffness* — which prior work identifies as the main source of error in
-  melt-pool geometry and cooling rates.
-- **Zeroth-order (volume-averaged) properties.** Each spatially varying coefficient is
-  replaced by its *zeroth-order term* — its volume average — discarding the fluctuation about
-  it. This gives the constants $\bar{c}$, $\bar{k}$, $\bar{\rho}$ for the sensible capacity,
-  conductivity and density, valid because the phase-changing melt pool occupies a small
-  fraction of the domain: the fluctuations are confined to that small region, so away from it
-  each property is dominated by its (effectively constant) solid-phase value. The latent heat
-  is *not* averaged away — it is retained as a localized volumetric source.
-
-The simplified equation is then
+The spectral treatment rests on a *reference-medium* splitting, standard in reference-medium
+methods for heterogeneous mechanics. Each temperature-dependent property is written as a
+constant reference value plus a fluctuation about it:
 
 $$
-\bar{\rho} \, c_{\text{eff}}(T) \, \frac{\partial T}{\partial t} = \bar{k} \, \Delta T .
+\rho(T) = \bar{\rho} + \tilde{\rho}(T), \qquad
+c(T) = \bar{c} + \tilde{c}(T), \qquad
+\boldsymbol{K}(T) = \bar{k}\,\mathbb{I} + \tilde{\boldsymbol{K}}(T).
 $$
+
+This defines a **linear, isotropic, constant-coefficient reference operator**
+$\mathcal{L} = \bar{\rho}\bar{c}\,\partial_t - \bar{k}\nabla^2$ whose eigensystem depends only
+on the geometry and the (homogeneous Neumann) boundaries. The heat equation is then rewritten
+*exactly* as this reference operator acting on $T$ equal to a bulk forcing $R(T)$, with a
+matching surface relation:
+
+$$
+R(T) = \nabla \cdot (\tilde{\boldsymbol{K}} \cdot \nabla T)
+  - \rho \sum_j L_j \frac{\partial f_j}{\partial T}\,\dot{T}
+  - \left( \bar{\rho}\,\tilde{c} + \tilde{\rho}\,\bar{c} + \tilde{\rho}\,\tilde{c} \right)\dot{T}
+  + S,
+\qquad
+R_s(T) = \sum_{s=1}^{N_s} q_s + (\tilde{\boldsymbol{K}} \cdot \nabla T) \cdot \boldsymbol{n}.
+$$
+
+No physics is discarded: the property fluctuations $\tilde{\boldsymbol{K}}$, $\tilde{\rho}$,
+$\tilde{c}$, the latent heat, and the boundary fluxes are all carried in $R$ and $R_s$. The
+reference constants $\bar{\rho}, \bar{c}, \bar{k}$ only set the operator that is integrated
+analytically; the fixed-point iteration that resolves the boundary and latent-heat
+non-linearities resolves the property fluctuation at the same time, so at convergence the
+**full variable-coefficient (temperature-dependent) solution** is recovered. In the code this
+fluctuation term is the *property correction*, applied whenever `k`, `rho` or `Cp` are given as
+temperature-dependent branches (see {doc}`examples`, example 3).
 
 ## Spectral (Galerkin) discretisation
 
@@ -85,10 +97,11 @@ $$
 T(\mathbf{x}, t) \approx \sum_{m,n,p} \Theta_{mnp}(t)\, \Phi_{mnp}(\mathbf{x}),
 $$
 
-and the governing equation is projected onto each $\Phi_{mnp}$ (the Galerkin step). Using
-orthonormality and Green's identity, diffusion reduces to $-\bar{k}\lambda_{mnp}\Theta_{mnp}$ and
-every source — boundary fluxes and the latent-heat volumetric term — collapses into a single
-**modal forcing** $F_{mnp}(t)$. The PDE becomes a *decoupled* ODE per mode:
+and the reference operator is projected onto each $\Phi_{mnp}$ (the Galerkin step). Using
+orthonormality and Green's identity, the reference diffusion reduces to
+$-\bar{k}\lambda_{mnp}\Theta_{mnp}$ and every forcing contribution — the boundary fluxes, the
+latent-heat volumetric term, and the property-fluctuation terms of $R$ and $R_s$ — collapses
+into a single **modal forcing** $F_{mnp}(t)$. The PDE becomes a *decoupled* ODE per mode:
 
 $$
 \bar{\rho} \bar{c} \, \dot{\Theta}_{mnp}(t) + \bar{k} \lambda_{mnp}\, \Theta_{mnp}(t) = F_{mnp}(t).
@@ -117,8 +130,10 @@ $$
 The propagators $E_{mnp}$ and $Q_{mnp}$ are **precomputed once**, so the time step reduces to
 an element-wise array multiply in spectral space — and is unconditionally stable regardless
 of $\Delta t$. The scheme extends to higher order (ETD2, ETD-RK4) at no structural cost. The
-non-linear fluxes within each step are resolved by a relaxed fixed-point iteration to a
-tolerance $\epsilon$.
+non-linear forcing within each step is resolved by a Picard fixed-point iteration: each pass
+reconstructs $T$, re-evaluates $F_{mnp}$, and blends the new modal iterate with the previous
+one through a relaxation factor $\omega \in (0,1]$ (config key `picard_omega`) until the
+relative change of the modes falls below a tolerance $\epsilon$ (`picard_tol`).
 
 ## Dimensional reduction — why it's fast
 
@@ -144,17 +159,18 @@ reported on the Validation page.
 :class: warning
 
 - **Domain:** cuboid only — the cosine eigenbasis requires boundaries aligned with the
-  Cartesian axes. (Other boundary types, e.g. Dirichlet → sine basis, are supported by the
-  framework but not used here.)
-- **Properties:** density, conductivity and sensible heat are reduced to constants — their
-  volume-averaged (zeroth-order) values $\bar{\rho}$, $\bar{k}$, $\bar{c}$ — which keeps their
-  bulk effect but discards the temperature and spatial variation about the average. This holds
-  while the melt pool stays a small fraction of the domain. Only the latent heat is kept as a
-  non-linear source.
-- **Captures:** transient conduction, latent heat of fusion, non-linear surface fluxes
-  (laser, evaporation, convection), finite-domain boundary effects.
-- **Does not capture:** fluid flow / Marangoni convection, vapour recoil mechanics, or the
-  in-domain variation of $k$ and $\rho$ about their averaged values.
+  Cartesian axes. (Other boundary types, e.g. Dirichlet → sine basis, follow the same
+  procedure but are not used here.)
+- **Reference constants:** the split into $\bar{\rho}, \bar{c}, \bar{k}$ plus a fluctuation is
+  exact; the constants only set the operator integrated analytically. Their choice affects the
+  *conditioning* of the fixed-point iteration (how large a fluctuation it must resolve), not
+  the converged solution. The iteration converges fastest when the melt pool, where the
+  fluctuation is largest, stays a modest fraction of the domain.
+- **Captures:** transient conduction, temperature-dependent $\rho$, $c$ and $k$, latent heat of
+  fusion, non-linear surface fluxes (laser, evaporation, convection), finite-domain boundary
+  effects.
+- **Does not capture:** fluid flow / Marangoni convection or vapour recoil mechanics — the
+  model is conduction-only.
 ```
 
 ## Notation & units
@@ -162,14 +178,15 @@ reported on the Validation page.
 | Symbol | Meaning | Units | Config key |
 |---|---|---|---|
 | $T$ | Temperature | K | — |
-| $\bar{\rho}$ | (Volume-averaged) density | kg·m⁻³ | `material.rho` |
-| $\bar{k}$ | (Volume-averaged) thermal conductivity | W·m⁻¹·K⁻¹ | `material.k` |
-| $\bar{c}$ | (Volume-averaged) sensible heat capacity | J·kg⁻¹·K⁻¹ | `material.Cp` |
+| $\bar{\rho}$ | Reference density | kg·m⁻³ | `material.rho` |
+| $\bar{k}$ | Reference thermal conductivity | W·m⁻¹·K⁻¹ | `material.k` |
+| $\bar{c}$ | Reference sensible heat capacity | J·kg⁻¹·K⁻¹ | `material.Cp` |
+| $\tilde{\rho},\tilde{c},\tilde{\boldsymbol{K}}$ | Property fluctuations about the reference | (as above) | — |
 | $L_j$ | Latent heat of fusion | J·kg⁻¹ | `material.L_f` |
 | $T_{s,j},\,T_{e,j}$ | Solidus / liquidus temperatures | K | `material.T_solidus`, `material.T_liquidus` |
-| $h$ | Specific enthalpy | J·kg⁻¹ | — |
-| $c_{\text{eff}}$ | Apparent (effective) heat capacity | J·kg⁻¹·K⁻¹ | — |
-| $q_m$ | Boundary heat flux ($m$-th contribution) | W·m⁻² | — |
+| $f_j$ | Transformed (liquid) fraction | — | — |
+| $q_s$ | Boundary heat flux ($s$-th contribution) | W·m⁻² | — |
+| $R,R_s$ | Bulk / surface forcing | — | — |
 | $L_x,L_y,L_z$ | Domain dimensions | m | `domain.size` |
 | $N_x,N_y,N_z$ | Grid resolution / number of modes per axis | — | `domain.mesh` |
 | $\Phi_{mnp}$ | Spatial eigenmode | — | — |
@@ -178,4 +195,5 @@ reported on the Validation page.
 | $F_{mnp}$ | Modal forcing (projected sources) | — | — |
 | $\Delta t$ | Time step | s | `simulation.dt` |
 | $\gamma_{mnp}$ | Modal decay rate | s⁻¹ | — |
-| $\epsilon$ | Fixed-point tolerance | — | — |
+| $\omega$ | Picard relaxation factor | — | `picard_omega` |
+| $\epsilon$ | Fixed-point tolerance | — | `picard_tol` |

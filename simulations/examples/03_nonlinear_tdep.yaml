@@ -40,7 +40,7 @@ fine_mesh:
 
 material:
   name: "316L"
-  # Temperature-dependent Chadwick et al. 316L properties. Each branch lists
+  # Temperature-dependent reference 316L properties. Each branch lists
   # polynomial coefficients [c0, c1, c2, ...] in ascending powers of T (SI units);
   # the solid and liquid branches are blended across the mushy zone by the liquid
   # fraction f_l(T). (Constant examples 01/02 use the solid branch at T0 = 293 K.)
@@ -107,4 +107,3 @@ io:
     - xz                      # normal y: longitudinal melt-pool section.
   slice_width: 0.16e-3        # horizontal (scanning) extent [m].
   slice_height: 0.035e-3      # vertical (build) extent [m].
-  slice_liquidus_offset: 10.0 # plot the liquidus contour +10 K (visual separation).

@@ -37,6 +37,8 @@ below); with constant scalar properties they can be omitted.
   correction typically needs ~80; ~30 is too low to converge.
 * **picard_omega**: Picard relaxation factor (`float`); the iteration contracts at a rate of about
   `1 - picard_omega`.
+* **picard_tol**: Relative convergence tolerance on the modes (`float`); the iteration stops once
+  the relative change falls below it.
 
 ### `domain`
 Dimensions and grid resolution.
@@ -98,8 +100,6 @@ Export settings controlling what is saved and when.
   longitudinal melt-pool section). A single letter is taken as the normal directly.
 - **slice_width**, **slice_height**: Optional. In-plane extent of the slice image in metres
   (horizontal and vertical, centred on the laser spot).
-- **slice_liquidus_offset**: Optional. Visualisation-only offset (`K`) added to the plotted
-  liquidus contour so the narrow mushy zone is legible (default `0`).
 
 ### Global Dataclass `SimulationContext`
 

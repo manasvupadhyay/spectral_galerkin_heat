@@ -1,6 +1,6 @@
 # Temperature-dependent 316L — mirrors the FE reference
 # (andreas_heat_solv/simulations/2_comparison_FE/Theo_cuboid_FE_temp_dep.py).
-# Property branches are the Chadwick polynomials (ascending powers of T, SI).
+# Property branches are the reference 316L polynomials (ascending powers of T, SI).
 # Intended for the GPU FE-comparison run (property_correction.tex §8.3); the
 # global property correction makes a 3-D transform a per-iteration cost, so this
 # production-grid case should run on GPU (backend: gpu).

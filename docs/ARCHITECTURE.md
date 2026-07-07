@@ -93,7 +93,7 @@ fastHeatSolv/
 The solver doesn't need a specific array library to run on. It only uses
 `backend.xp` (the array module) and `backend.kernels` (the math functions), and
 almost all the physics code already works with any NumPy-like `xp`. So a new
-backend is mostly plumbing — if needed an different backend, you need to supply four things:
+backend is mostly plumbing — supplying four things:
 
 **1. An array module `xp`.** It needs to behave like NumPy: `zeros`, `arange`,
 `exp`, `sum`, in-place writes (`multiply(..., out=)`, `a[0,0,0] = v`),
