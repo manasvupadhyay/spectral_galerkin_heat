@@ -161,7 +161,7 @@ def initialize_run_logging(config: Dict[str, Any], yaml_path: str, out_dir: str)
         "",
         "[SIMULATION PARAMETERS]",
         f"Name             : {sim.get('name', 'N/A')}",
-        f"Backend & Method : {sim.get('backend', 'N/A')} - {sim.get('method', 'N/A')}",
+        f"Backend          : {sim.get('backend', 'N/A')}",
         f"Duration         : {sim.get('duration', 'N/A')} s",
         f"Time Step (dt)   : {sim.get('dt', 'N/A')} s",
         f"Update Interval  : {sim.get('update_interval', 'N/A')}",

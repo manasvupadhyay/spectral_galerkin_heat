@@ -1,6 +1,5 @@
 simulation:
   name: "gpu_spectral_ellipse_run"
-  method: "spectral"
   backend: "cpu"
   duration:
     value: 0.01679
@@ -11,8 +10,12 @@ simulation:
   update_interval: 20         # steps
 
 domain:
-  size: [0.0025, 0.0025, 0.0005]  # [Lx, Ly, Lz] in m
-  mesh: [256, 260, 300]            # [nx, ny, nz]
+  size:
+    value: [0.0025, 0.0025, 0.0005]  # [Lx, Ly, Lz] in m
+    unit: "m"
+  mesh:
+    value: [256, 260, 300]            # [nx, ny, nz]
+    unit: ""
 
 material:
   name: "316L"

@@ -60,7 +60,7 @@ fastHeatSolv/
   all physics to the former and all I/O to the latter.
 
 - **Solver selector (`solvers/__init__.py`)**: `build_solver(context)` — a single
-  dispatch on `(method, backend)` that returns the configured `HeatSolver`. It
+  dispatch on `backend` that returns the configured `HeatSolver`. It
   replaces the former `SimulationFactory` hierarchy, which only ever differed in
   this one choice.
 

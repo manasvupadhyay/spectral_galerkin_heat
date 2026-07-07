@@ -11,16 +11,12 @@ __all__ = [
 
 
 def build_solver(context) -> HeatSolver:
-    """Select and construct the heat solver for *context* from its
-    ``(method, backend)``.
+    """Select and construct the spectral heat solver for *context* from its
+    ``backend``.
 
     Backends are imported lazily to keep CuPy/Numba off the import path until
     needed.
     """
-    if context.method != "spectral":
-        # Extension point: other methods (e.g. FEM) would dispatch here.
-        raise ValueError(f"Unknown simulation method: {context.method!r}")
-
     match context.backend:
         case "cpu":
             from fast_heat_solv.backends import NumpyBackend

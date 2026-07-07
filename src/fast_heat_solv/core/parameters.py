@@ -358,10 +358,8 @@ class SimulationContext:
         Laser trajectory and power evolution over time.
     io : dict
         I/O configuration (output intervals, visualization planes, etc.).
-    method : str, optional
-        Solver method ('spectral' or 'fem'), by default 'spectral'.
     backend : str, optional
-        Compute backend ('cpu' or 'gpu'), by default 'cpu'.
+        Compute backend ('cpu', 'gpu', or 'cpu_linear'), by default 'cpu'.
     fine : FineMeshParams, optional
         Moving fine-mesh parameters — the refined, laser-following sub-box
         (refinement, box extents). Defaults to
@@ -376,8 +374,7 @@ class SimulationContext:
     # Existing fields
     io: Dict[str, Any]  # Flat dict with new keys
     # Execution configuration
-    method: str = "spectral"  # "spectral" or "fem"
-    backend: str = "cpu"      # "cpu" or "gpu"
+    backend: str = "cpu"      # "cpu", "gpu", or "cpu_linear"
     fine: 'FineMeshParams' = field(default_factory=FineMeshParams)
 
     @classmethod
@@ -404,10 +401,9 @@ class SimulationContext:
         real_t = _resolve_dtype(cfg.get('simulation', {}).get('dtype', 'float32'))
         sim_cfg = cfg.get('simulation', {})
         domain_cfg = cfg.get('domain', {})
-        sim_method = sim_cfg.get('method', 'spectral').lower()
         sim_backend = sim_cfg.get('backend', 'cpu').lower()
-        Lx, Ly, Lz = domain_cfg['size']
-        nx, ny, nz = domain_cfg['mesh']
+        Lx, Ly, Lz = _get_value(domain_cfg['size'])
+        nx, ny, nz = _get_value(domain_cfg['mesh'])
         t_end = float(_get_value(sim_cfg.get('duration', 0.01)))
         dt_nominal = float(real_t(_get_value(sim_cfg['dt'])))
         n_steps = round(t_end / dt_nominal)
@@ -519,4 +515,4 @@ class SimulationContext:
                 laser_path = GCodeLaserPath(gcode_file, initial_position=initial_position)
                 
         io_cfg = cfg.get('io', {})
-        return cls(num=num_params, mat=mat_params, geom=geom_params, laser=laser_params, laser_path=laser_path, io=io_cfg, method=sim_method, backend=sim_backend, fine=fine_params)
+        return cls(num=num_params, mat=mat_params, geom=geom_params, laser=laser_params, laser_path=laser_path, io=io_cfg, backend=sim_backend, fine=fine_params)

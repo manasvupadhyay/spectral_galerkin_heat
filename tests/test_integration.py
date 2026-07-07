@@ -79,7 +79,6 @@ class FixedLaser(LaserPath):
 # with ~25 cells across the diameter.
 _CONFIG = {
     "simulation": {
-        "method": "spectral",
         "backend": "cpu",
         "duration": 6e-5,   # 10 time steps at dt = 6 μs
         "dt": 6e-6,

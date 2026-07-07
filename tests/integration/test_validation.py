@@ -47,7 +47,7 @@ _MAT = {
 
 def _config(power=_P, mesh=(_NX, _NY, _NZ), n_steps=_N_STEPS, backend="cpu_linear"):
     return {
-        "simulation": {"method": "spectral", "backend": backend,
+        "simulation": {"backend": backend,
                        "duration": _T_TOTAL, "dt": _T_TOTAL / n_steps},
         "domain": {"size": [_LX, _LY, _LZ], "mesh": list(mesh)},
         "material": copy.deepcopy(_MAT),

@@ -5,18 +5,16 @@
 # the diffusion problem non-linear. Each time step is solved with a Picard
 # iteration and a global property correction (Green's first identity).
 #
-# A small-box, CPU-sized cousin of simulations/research/temp_dep_316L.yaml (which
-# runs 512 x 256 x 350 on GPU). The domain is small with a fine z-grid so the thin
-# mushy zone is resolved. Runtime is on the order of minutes.
+# The domain is small with a fine z-grid so the thin mushy zone is resolved. 
+# Runtime is on the order of minutes.
 #
 # Run: uv run python simulations/main.py simulations/examples/03_nonlinear_tdep.yaml
 
 simulation:
   name: "nonlinear_tdep"
-  method: "spectral"
-  backend: "cpu"              # GPU recommended for the full research grid.
+  backend: "cpu"              
   duration:
-    value: 2.0e-4             # 50 steps at dt = 4e-6 s.
+    value: 2.0e-4
     unit: "s"
   dt:
     value: 4.0e-6
@@ -24,14 +22,19 @@ simulation:
   update_interval: 1
 
   # Non-linear solve controls.
-  max_picard_iter: 80         # Picard iteration cap per step. The property
-                              # correction requires about 80 to converge.
-  picard_omega: 0.31          # relaxation factor; 0.31 converges here, higher (0.45+) caps out.
+  max_picard_iter: 80         # Picard iteration cap per step. 
+  picard_omega: 0.31          # relaxation factor; 0.31 converges here, higher does not.
+                              # This value has to be tuned for each case as it is problem dependent.
+
   # picard_tol: 1.0e-4        # convergence tolerance (optional; default 1e-4).
 
 domain:
-  size: [0.5e-3, 0.3e-3, 0.12e-3]  # [Lx, Ly, Lz] in m (0.5 x 0.3 x 0.12 mm) — small box.
-  mesh: [100, 60, 96]              # dz ~ 1.25 um resolves the mushy zone.
+  size:
+    value: [0.5e-3, 0.3e-3, 0.12e-3]  # [Lx, Ly, Lz] in m (0.5 x 0.3 x 0.12 mm) — small box.
+    unit: "m"
+  mesh:
+    value: [100, 60, 96]              # dz ~ 1.25 um resolves the mushy zone.
+    unit: ""
 
 # Moving fine-mesh ROI that resolves the sharp mushy-zone gradients under the beam.
 fine_mesh:

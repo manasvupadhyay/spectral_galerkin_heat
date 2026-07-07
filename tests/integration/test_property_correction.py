@@ -38,7 +38,7 @@ _T_TOTAL = 1.0e-3
 
 def _cfg(material, mesh=(48, 24, 32), n_steps=20, backend="cpu"):
     return {
-        "simulation": {"method": "spectral", "backend": backend,
+        "simulation": {"backend": backend,
                        "duration": _T_TOTAL, "dt": _T_TOTAL / n_steps},
         "domain": {"size": [_LX, _LY, _LZ], "mesh": list(mesh)},
         "material": material,

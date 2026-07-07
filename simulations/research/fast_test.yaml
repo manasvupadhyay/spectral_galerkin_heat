@@ -1,6 +1,5 @@
 simulation:
   name: "spectral_test_run"
-  method: "spectral"          # Options: "spectral", "fem"
   backend: "cpu"       # Options: "cpu" (standard), "gpu" (if supported)
   duration:
     value: 0.0005
@@ -11,8 +10,12 @@ simulation:
   update_interval: 20         # steps (ETA update every 20 steps)
 
 domain:
-  size: [0.01, 0.005, 0.0025]  # [Lx, Ly, Lz] in m
-  mesh: [512, 256, 1024]        # [nx, ny, nz]
+  size:
+    value: [0.01, 0.005, 0.0025]  # [Lx, Ly, Lz] in m
+    unit: "m"
+  mesh:
+    value: [512, 256, 1024]        # [nx, ny, nz]
+    unit: ""
 
 material:
   name: "316L"

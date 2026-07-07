@@ -104,7 +104,7 @@ def main():
 
     # 3. Build solver & workflow
     try:
-        logger.info(f"Solver selector: method='{context.method}', backend='{context.backend}'")
+        logger.info(f"Solver selector: backend='{context.backend}'")
         solver = build_solver(context)
         workflow = StandaloneHeatRunner(context, solver, config=config, yaml_path=yaml_path)
 

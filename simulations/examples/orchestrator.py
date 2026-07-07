@@ -27,7 +27,6 @@ from fast_heat_solv.core.parameters import SimulationContext
 # ---------------------------------------------------------------------------
 config = {
     "simulation": {
-        "method": "spectral",
         "backend": "cpu",
         "duration": 6e-5,      # short run for demonstration
         "dt": 6e-6,

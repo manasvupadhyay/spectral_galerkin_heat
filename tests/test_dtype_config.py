@@ -13,7 +13,7 @@ from fast_heat_solv.core.parameters import SimulationContext, _resolve_dtype
 
 
 _BASE_CFG = {
-    "simulation": {"method": "spectral", "backend": "cpu",
+    "simulation": {"backend": "cpu",
                    "duration": 6e-5, "dt": 6e-6},
     "domain": {"size": [4e-4, 4e-4, 1e-4], "mesh": [8, 8, 4]},
     "material": {"name": "316L", "rho": 7850.0, "k": 15.0, "Cp": 500.0, "T0": 293.0},

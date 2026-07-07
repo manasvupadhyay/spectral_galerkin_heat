@@ -7,7 +7,6 @@
 
 simulation:
   name: "fullres_tref2300_full"
-  method: "spectral"
   backend: "gpu"
   duration:
     value: 1.2e-2                  # 3000 steps -> t=0.012, beam at x=1.8mm (FE hotspot)
@@ -24,8 +23,12 @@ simulation:
   # on automatically whenever k/rho/Cp are given as non-constant branches below.
 
 domain:
-  size: [2.0e-3, 1.0e-3, 0.5e-3]   # [Lx, Ly, Lz] in m (FE: 2 × 1 × 0.5 mm)
-  mesh: [512, 256, 450]            # [nx, ny, nz] — reconstructs to 513×257×351
+  size:
+    value: [2.0e-3, 1.0e-3, 0.5e-3]   # [Lx, Ly, Lz] in m (FE: 2 × 1 × 0.5 mm)
+    unit: "m"
+  mesh:
+    value: [512, 256, 450]            # [nx, ny, nz] — reconstructs to 513×257×351
+    unit: ""
 
 fine_mesh:
   refinement: 2

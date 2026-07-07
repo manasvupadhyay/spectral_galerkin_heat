@@ -112,7 +112,6 @@ def build_context(
     config_dir = os.path.dirname(os.path.abspath(config_path))
     context = SimulationContext.from_dict(config, config_dir=config_dir)
     context.backend = "cpu"
-    context.method = "spectral"
     context.laser_path = LaserPathFromX0(context, speed=laser_speed, x0=laser_x0)
     return context
 

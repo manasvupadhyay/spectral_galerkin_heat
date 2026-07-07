@@ -11,7 +11,6 @@
 
 simulation:
   name: "temp_indep_316L"
-  method: "spectral"
   backend: "cpu"
   duration:
     value: 6.0e-4
@@ -22,8 +21,12 @@ simulation:
   update_interval: 50
 
 domain:
-  size: [2.0e-3, 1.0e-3, 0.5e-3]   # [Lx, Ly, Lz] in m (FE: 2 × 1 × 0.5 mm)
-  mesh: [400, 200, 100]            # [nx, ny, nz]
+  size:
+    value: [2.0e-3, 1.0e-3, 0.5e-3]   # [Lx, Ly, Lz] in m (FE: 2 × 1 × 0.5 mm)
+    unit: "m"
+  mesh:
+    value: [400, 200, 100]            # [nx, ny, nz]
+    unit: ""
 
 fine_mesh:
   refinement: 4

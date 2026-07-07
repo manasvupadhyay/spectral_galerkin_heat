@@ -5,17 +5,13 @@
 #   - latent heat of fusion (L_f > 0): energy absorbed/released on melting,
 #   - surface convection (h_conv > 0): convective heat loss at the top face.
 # Material properties are still CONSTANT (reference 316L evaluated at T0 = 293 K);
-# example 03 makes them temperature-dependent.
-#
-# The domain is deliberately SMALL with a fine z-grid (dz ~ 1.25 um) so the thin
-# 316L mushy zone (T_solidus..T_liquidus is only ~23 K) is resolved without a
-# large cell count. Runs on CPU in a few minutes. Every accepted key is annotated
-# in example 01; here the comments focus on what differs. Run:
+# example 03 makes them temperature-dependent. Runs on CPU in a few minutes.
+# 
+# Run:
 #   uv run python simulations/main.py simulations/examples/02_single_track.yaml
 
 simulation:
   name: "single_track"
-  method: "spectral"
   backend: "cpu"
   duration:
     value: 7.0e-4             # 0.7 ms; beam travels ~0.28 mm at 0.4 m/s.
@@ -26,13 +22,20 @@ simulation:
   update_interval: 10
 
 domain:
-  size: [0.6e-3, 0.4e-3, 0.15e-3]  # [Lx, Ly, Lz] in m (0.6 x 0.4 x 0.15 mm) — small box.
-  mesh: [80, 48, 120]              # dz ~ 1.25 um resolves the mushy zone.
+  size:
+    value: [0.6e-3, 0.4e-3, 0.15e-3]  # [Lx, Ly, Lz] in m (0.6 x 0.4 x 0.15 mm) — small box.
+    unit: "m"
+  mesh:
+    value: [80, 48, 120]              # dz ~ 1.25 um resolves the mushy zone.
+    unit: ""
 
 # Laser-following refined sub-box; latent heat is resolved on this finer grid.
+# The box is centred on the laser path, and its size is chosen to contain the
+# the mushy zone. The refinement factor is the number of fine cells per coarse
+# cell, per axis. Used for acceleration of the solver. 
 fine_mesh:
   refinement: 2                          # fine cells per coarse cell, per axis.
-  box_size: [0.25e-3, 0.2e-3, 0.04e-3]   # [Lx, Ly, Lz] of the box, in metres.
+  box_size: [0.6e-3, 0.6e-3, 0.07e-3]   # [Lx, Ly, Lz] of the box, in metres.
 
 material:
   name: "316L"
@@ -84,7 +87,7 @@ laser:
     unit: "W"
   path:
     type: "gcode"
-    file: "example02_track.gcode"   # v_scan = 0.4 m/s, centred in the small box.
+    file: "example02_track.gcode"  
 
 io:
   run_tag: "single_track"
@@ -95,5 +98,5 @@ io:
     - 'laser'
   slice_planes:
     - xz                      # normal y: longitudinal melt-pool section.
-  slice_width: 0.3e-3         # horizontal (scanning) extent [m].
+  slice_width: 0.5e-3         # horizontal (scanning) extent [m].
   slice_height: 0.06e-3       # vertical (build) extent [m].

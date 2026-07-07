@@ -167,7 +167,6 @@ def test_correction_null_is_exact():
     T_prev = reconstruct_volume(a, st)
     C = assemble_property_correction(st, a, T_prev, 1e-6, model,
                                      15.0, 7900.0 * 500.0)
-                                     15.0, 7900.0 * 500.0)
     assert float(np.max(np.abs(C))) == 0.0
 
 

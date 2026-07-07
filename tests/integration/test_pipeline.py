@@ -35,7 +35,7 @@ from fast_heat_solv.core.parameters import SimulationContext
 # ~25 cells.  10 steps at dt = 6 µs keeps the surface below T_liquidus.
 _CONFIG = {
     "simulation": {
-        "method": "spectral", "backend": "cpu",
+        "backend": "cpu",
         "duration": 6e-5, "dt": 6e-6, "update_interval": 1e-3,
     },
     "domain": {"size": [4e-4, 4e-4, 1e-4], "mesh": [32, 32, 16]},

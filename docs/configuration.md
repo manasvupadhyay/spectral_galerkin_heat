@@ -23,8 +23,7 @@ below.
 ### `simulation`
 Declares the run and solver behavior.
 * **name**: Identifier tag for the run (`str`).
-* **method**: Solver type (`str`, e.g. `"spectral"`, `"fem"`).
-* **backend**: Execution device (`str`, `"cpu"` or `"gpu"`).
+* **backend**: Execution device (`str`, `"cpu"`, `"gpu"`, or `"cpu_linear"`).
 * **duration**: Total physical simulation time (`s`).
 * **dt**: Time step size (`s`).
 * **update_interval**: Steps between ETA prints to the terminal (`int`).
@@ -41,9 +40,36 @@ below); with constant scalar properties they can be omitted.
   the relative change falls below it.
 
 ### `domain`
-Dimensions and grid resolution.
+Dimensions and grid resolution. Both accept a plain list or the `{value, unit}` mapping form
+(the list goes under `value`):
+
+```yaml
+domain:
+  size:
+    value: [0.003, 0.0025, 0.0005]   # [Lx, Ly, Lz]
+    unit: "m"
+  mesh:
+    value: [64, 48, 24]              # [nx, ny, nz]
+    unit: ""
+```
+
 * **size**: Box dimensions `[Lx, Ly, Lz]` in metres.
-* **mesh**: Grid resolution `[nx, ny, nz]` (integers).
+* **mesh**: Grid resolution `[nx, ny, nz]` (integers; dimensionless).
+
+### `fine_mesh`
+Optional. A refined, laser-following sub-box on which the latent-heat source is resolved, since
+the coarse spectral grid cannot capture the sharp mushy-zone gradients. It only matters when
+latent heat is active (`L_f > 0`); omit it otherwise.
+
+* **refinement**: Fine cells per coarse cell, per axis (`int`, default `4`). The fine spacing is
+  the coarse spacing divided by this factor.
+* **box_size**: Extent `[Lx, Ly, Lz]` of the box in metres (default `[0.9e-3, 0.9e-3, 0.04e-3]`).
+  The x/y extents form a window that tracks the laser; the z extent is the near-surface depth.
+
+The box must enclose the melt pool: the latent-heat source is projected onto the modal basis
+only from inside it, so any melting beyond the box (deeper than its z extent, or outside the x/y
+window) is silently dropped. The solver checks this each step and logs a warning once if the
+latent-heat source reaches a box boundary — enlarge `box_size` if you see it.
 
 ### `material`
 Physical material parameters.
@@ -122,7 +148,6 @@ class SimulationContext:
     laser: LaserParams
     laser_path: LaserPath
     io: Dict[str, Any]                 # flat I/O config dict from YAML
-    method: str = "spectral"           # "spectral" or "fem"
     backend: str = "cpu"               # "cpu", "gpu", or "cpu_linear"
     fine: FineMeshParams = field(default_factory=FineMeshParams)
 ```

@@ -25,7 +25,6 @@ class LocalFSIOManager:
         self.output_root: str = "out"
         self.run_id: Optional[str] = None
         self.base_dir: Optional[str] = None
-        self.save_full_fields: bool = False
         self.format_version: str = "1.0"
         self._saved_xmf_steps = []
         
@@ -48,7 +47,6 @@ class LocalFSIOManager:
         io_cfg = context.io or {}
         self.output_root = io_cfg.get('output_root', 'out')
         run_tag = io_cfg.get('run_tag', 'sim')
-        self.save_full_fields = io_cfg.get('save_full_fields', False)
 
         # --- IO scheduling state ----
         self._interval = io_cfg.get('output_interval')

@@ -189,7 +189,7 @@ def _run_sg():
             return LaserState(x=_X_START + _V * t, y=_Y0, power=_P, is_on=True, v=(_V, 0.0))
 
     cfg = {
-        "simulation": {"method": "spectral", "backend": "cpu",
+        "simulation": {"backend": "cpu",
                        "duration": _N_STEPS * _DT, "dt": _DT},
         "domain": {"size": [_LX, _LY, _LZ], "mesh": [_SG_NX, _SG_NY, _SG_NZ]},
         "material": dict(_MAT),

@@ -102,7 +102,7 @@ def test_initialize_run_logging_header(tmp_path):
     out_dir = tmp_path / "run"
     out_dir.mkdir()
     config = {
-        "simulation": {"backend": "cpu", "method": "spectral"},
+        "simulation": {"backend": "cpu"},
         "laser": {"path": {"file": "missing.nc"}},
     }
     initialize_run_logging(config, str(yaml_path), str(out_dir))

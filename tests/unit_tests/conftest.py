@@ -22,7 +22,7 @@ class FixedLaser(LaserPath):
 # diameter), so the Gaussian's discrete integral matches A·P closely. Full 316L
 # values keep R_v / T_boil non-zero (the evaporation kernel divides by them).
 _TINY_CONFIG = {
-    "simulation": {"method": "spectral", "backend": "cpu", "duration": 6e-6, "dt": 6e-6},
+    "simulation": {"backend": "cpu", "duration": 6e-6, "dt": 6e-6},
     "domain": {"size": [4e-4, 4e-4, 1e-4], "mesh": [32, 32, 16]},
     "material": {
         "name": "316L", "rho": 7850.0, "k": 15.0, "Cp": 500.0, "L_f": 267700.0,

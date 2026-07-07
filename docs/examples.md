@@ -12,6 +12,56 @@ uv sync   # one-time environment setup
 
 The configurations are in `simulations/examples/`.
 
+## Key concepts
+
+### The configuration file
+
+Each example is one YAML file with five top-level sections:
+
+| Section | Describes |
+|---|---|
+| `simulation` | compute backend, time step `dt`, total `duration` |
+| `domain` | box size `[Lx, Ly, Lz]` and grid `[nx, ny, nz]` (the grid also sets the number of spectral modes) |
+| `material` | density, conductivity, heat capacity, latent heat, and phase-change temperatures |
+| `laser` | beam radius, absorptivity, power, and the path file |
+| `io` | which outputs to write, and where |
+
+A value is either a plain number (SI units assumed) or a `{value, unit}` pair:
+
+```yaml
+dt:
+  value: 4.0e-6
+  unit: "s"
+```
+
+`01_quickstart.yaml` is annotated field by field; {doc}`configuration` lists every key.
+
+### The laser path (G-code)
+
+The laser trajectory is a G-code file under `simulations/examples/paths/`, selected by
+`laser.path.file`. The parser reads the subset needed to drive a moving heat source:
+
+| Command | Meaning |
+|---|---|
+| `G21`, `G90` | millimetre units, absolute coordinates |
+| `G0 X.. Y..` | rapid move, laser off (positioning) |
+| `M3 S<p>` / `M5` | laser on at power `<p>` watts / laser off |
+| `G1 X.. Y.. F<f>` | linear move at feedrate `<f>` (mm/min); sets the scan speed |
+
+The quickstart path is a single track scanned at 0.8 m/s with a 200 W beam:
+
+```gcode
+G21 ; mm
+G90 ; absolute
+G0 X0.0 Y1.25        ; move to start, laser off
+M3 S200              ; laser on, 200 W
+G1 X9.7 Y1.25 F48000 ; scan +x at 48000 mm/min = 0.8 m/s
+M5                   ; laser off
+```
+
+The absorbed power is the beam power (`S`) times `laser.absorptivity`. Longer trajectories chain
+several `G0`/`G1` moves.
+
 (example-quickstart)=
 ## 1. Quickstart
 
@@ -95,7 +145,27 @@ is `simulations/research/temp_dep_316L.yaml`.
 
 The solver can be driven directly from Python rather than the CLI. An external script builds a
 `SimulationContext` and calls `solver.step(...)` in a loop, which is useful when embedding the
-solver in a larger codebase. Nothing is written to disk. The full script is
+solver in a larger codebase. Nothing is written to disk.
+
+**Installing as a library.** To import `fast_heat_solv` from a project outside this repository,
+install it as an editable package into your environment:
+
+```bash
+uv pip install -e /path/to/fastHeatSolv    # or: pip install -e /path/to/fastHeatSolv
+```
+
+Or declare it as an editable source in another `uv` project's `pyproject.toml`:
+
+```toml
+[project]
+dependencies = ["fastheatsolv"]
+
+[tool.uv.sources]
+fastheatsolv = { path = "/path/to/fastHeatSolv", editable = true }
+```
+
+Either way the import name is `fast_heat_solv`, and edits to the source take effect without
+reinstalling. The full runnable script is
 {download}`orchestrator.py <../simulations/examples/orchestrator.py>`:
 
 ```bash
@@ -109,7 +179,7 @@ from fast_heat_solv.backends import NumpyBackend
 
 # 1. Configuration as a plain dictionary
 config = {
-    "simulation": {"method": "spectral", "backend": "cpu", "dt": 6e-6, "duration": 6e-5},
+    "simulation": {"backend": "cpu", "dt": 6e-6, "duration": 6e-5},
     "domain": {"size": [0.01, 0.005, 0.0025], "mesh": [64, 32, 16]},
     "material": {"rho": 7957.5, "k": 13.851, "Cp": 497.89, "name": "316L"},  # reference 316L values
     "laser": {"radius": 60.0e-6, "absorptivity": 0.30, "power_nominal": 200.0,
@@ -117,7 +187,8 @@ config = {
     "io": {},   # empty: the IOManager is not used
 }
 
-# 2. Build the context (config_dir resolves the G-code path under <dir>/paths/)
+# 2. Build the context. config_dir must point to the directory holding the
+#    paths/ subfolder with the G-code (use an absolute path when running elsewhere).
 context = SimulationContext.from_dict(config, config_dir="simulations/examples")
 
 # 3. Instantiate and initialise the solver

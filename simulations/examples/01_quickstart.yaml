@@ -3,45 +3,31 @@
 # The simplest case: a single laser track on a small 316L cuboid at coarse
 # resolution with CONSTANT material properties. Latent heat of fusion and
 # surface convection are switched off (L_f = 0, h_conv = 0); only evaporative
-# ("boiling") cooling is active at the surface. Example 02 adds latent heat and
-# convection; example 03 makes the properties temperature-dependent.
-#
-# This file is annotated field by field and lists every accepted key, so it
-# doubles as the configuration reference. Optional keys are shown commented out
-# with their default value.
+# losses are active. The laser path is a straight line along the x-axis.
 #
 # Run:    uv run python simulations/main.py simulations/examples/01_quickstart.yaml
 # Output: out/<timestamp>_quickstart/ (final volume field, slices and profiles)
 
 simulation:
   name: "quickstart"          # Free-form label for the run.
-  method: "spectral"          # Solver family: "spectral" (semi-analytic) or "fem".
   backend: "cpu"              # "cpu" (default), "gpu" (needs CUDA + `uv sync --group gpu`),
-                              #   or "cpu_linear" (constant-property fast path).
+                              #   or "cpu_linear" (constant-property path).
   # dtype: "float32"          # Working precision: "float32" (default) or "float64".
   duration:                   # Total simulated physical time.
-    value: 4.0e-4             #   0.4 ms; at 0.8 m/s the beam travels ~0.32 mm.
+    value: 4.0e-4             
     unit: "s"
   dt:                         # Fixed time step.
-    value: 5.0e-6             #   => 80 steps (duration / dt).
+    value: 5.0e-6             
     unit: "s"
   update_interval: 5          # Steps between progress/ETA log lines.
 
-  # --- Non-linear solve controls (only used with temperature-dependent
-  #     properties; see example 03). Omit them for constant properties. ---
-  # max_picard_iter: 80       # Picard iteration cap per step.
-  # picard_omega: 0.31        # Picard relaxation factor (contraction ~ 1 - omega).
-  # picard_tol: 1.0e-4        # Picard convergence tolerance.
-
 domain:
-  size: [0.003, 0.0025, 0.0005]  # [Lx, Ly, Lz] in metres (3 x 2.5 x 0.5 mm).
-  mesh: [64, 48, 24]             # [nx, ny, nz], coarse resolution.
-
-# Moving, laser-following refined sub-box for the non-linear/latent-heat terms.
-# Optional; defaults shown. Matters mainly once latent heat is active (example 02+).
-# fine_mesh:
-#   refinement: 4                        # Fine cells per coarse cell, per axis.
-#   box_size: [0.9e-3, 0.9e-3, 0.04e-3]  # [Lx, Ly, Lz] of the box, in metres.
+  size:
+    value: [0.003, 0.0025, 0.0005]  # [Lx, Ly, Lz] in metres (3 x 2.5 x 0.5 mm).
+    unit: "m"
+  mesh:
+    value: [64, 48, 24]             # [nx, ny, nz], coarse resolution.
+    unit: ""
 
 material:
   name: "316L"
@@ -57,7 +43,7 @@ material:
   Cp:                         # Cp(293)  = 458.98 + 0.1328*293
     value: 497.89
     unit: "J/(kg.K)"
-  L_f:                        # Latent heat of fusion. 0 here: no phase-change sink.
+  L_f:                        # Latent heat of fusion. 0 here: no phase-change
     value: 0.0
     unit: "J/kg"
   T_solidus:                  # Solidus / liquidus. Used for the melt
@@ -69,13 +55,10 @@ material:
   T0:                         # Initial / ambient temperature.
     value: 293.0
     unit: "K"
-  # T_ref:                    # Property-correction reference T (defaults to T0).
-  #   value: 293.0
-  #   unit: "K"
   h_conv:                     # Convective surface loss. 0 here: convection off.
     value: 0.0
     unit: "W/(m2.K)"
-  # Evaporative ("boiling") cooling — active in this example.
+# Evaporation constants
   DeltaH_LV:                  # Latent heat of vaporization.
     value: 7.416e6
     unit: "J/kg"
@@ -102,7 +85,7 @@ laser:
   # r_y: 0.0
   # super_gaussian_order: 2.0 # Super-Gaussian exponent (2.0 == Gaussian).
   path:
-    type: "gcode"             # Path source. "gcode" reads an RS-274 toolpath file.
+    type: "gcode"             # Path source. 
     file: "linear_track.gcode"  # Resolved from simulations/examples/paths/.
     # initial_position: [0.0, 0.0]  # Beam position before the path starts [m].
 
@@ -112,7 +95,6 @@ io:
   output_interval: null       # Steps between periodic volume dumps; null disables them.
   outputs: [full_volume]      # Periodic output types: full_volume, modes, profiles, slices.
   at_end: [full_volume, slices, profiles]  # Output types saved once, at the end.
-  # save_full_fields: false   # Also keep every intermediate full field (large).
   profiles_locations:         # Where 1-D profiles are sampled.
     - 'laser'                 #   'laser', 'hotspot', or an explicit [x, y] in metres.
   slice_planes:               # Cut planes for the 2-D slice images. A plane names its

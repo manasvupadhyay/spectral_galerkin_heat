@@ -23,6 +23,7 @@ Unified Spectral Solver (CPU and GPU).
 __author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
 __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
 
+import logging
 import math
 from typing import Optional, Any, Tuple, Dict
 
@@ -30,6 +31,8 @@ from fast_heat_solv.backends.base import MathBackend
 from fast_heat_solv.core.parameters import SimulationContext
 from fast_heat_solv.core.laser import LaserState, LaserPath, build_laser_profile
 from fast_heat_solv.solvers.base import HeatSolver
+
+logger = logging.getLogger(__name__)
 
 
 class SpectralSolver(HeatSolver):
@@ -78,6 +81,7 @@ class SpectralSolver(HeatSolver):
         self._T_prev_full = None   # previous converged full-volume field (∂_t T)
         self._kbar = None          # reference conductivity k̄ (= propagator const)
         self._abar = None          # reference volumetric capacity ā
+        self._latent_truncation_warned = False  # fine-box truncation warned once
 
         # Beam profile (shape + energy-conserving normalization); resolved from
         # the config in initialize(). Default keeps a usable solver before then.
@@ -425,6 +429,7 @@ class SpectralSolver(HeatSolver):
             fm.Q_prev = xp.zeros_like(buffers.Q_latent_buffer)
         if Q_latent is not None:
             fm.Q_prev[:] = Q_latent[:]
+            self._check_latent_box_truncation(Q_latent, fm)
 
         metrics = {
             'T_surface_max': xp.max(T_temp),
@@ -432,6 +437,49 @@ class SpectralSolver(HeatSolver):
             'n_evap_iter': iter_k + 1,
         }
         return SsState, metrics
+
+    def _check_latent_box_truncation(self, Q_latent, fm) -> None:
+        """Warn (once per run) if the latent-heat source reaches a boundary of
+        the refined sub-box.
+
+        The latent-heat source is projected onto the modal basis only from
+        within the laser-following fine box (``project_box_to_modes``). If the
+        melt front reaches the box floor (the deepest fine layer, at depth
+        ``Lz - Lz_box``) or a moving x/y window edge, the latent heat beyond it
+        is silently dropped. A non-negligible source on such a face signals that
+        the box no longer encloses the pool and ``fine_mesh.box_size`` should be
+        enlarged. Faces clamped to the domain boundary are not flagged (there is
+        nothing beyond them to truncate).
+        """
+        if self._latent_truncation_warned or Q_latent is None:
+            return
+        xp = self.backend.xp
+        peak = float(xp.max(xp.abs(Q_latent)))
+        if peak <= 0.0:
+            return
+        rel = 1e-2  # fraction of the peak source treated as non-negligible
+
+        faces = {"floor (depth)": Q_latent[0, :, :]}            # z: always the box floor
+        if fm.nx_box < fm.n_fine_totals[0]:                     # x: real moving window
+            faces["x window edge"] = Q_latent[:, :, (0, -1)]
+        if fm.ny_box < fm.n_fine_totals[1]:                     # y: real moving window
+            faces["y window edge"] = Q_latent[:, (0, -1), :]
+
+        hit = [name for name, face in faces.items()
+               if float(xp.max(xp.abs(face))) > rel * peak]
+        if not hit:
+            return
+        box_mm = (fm.nx_box * fm.dx_fine * 1e3,
+                  fm.ny_box * fm.dy_fine * 1e3,
+                  fm.nz_box * fm.dz_fine * 1e3)
+        logger.warning(
+            "Latent-heat source reaches the fine-mesh box boundary (%s): the melt "
+            "pool extends beyond the refined sub-box, so its latent heat is "
+            "truncated. Enlarge fine_mesh.box_size (currently %.3g x %.3g x %.3g mm) "
+            "to enclose the pool.",
+            ", ".join(hit), *box_mm,
+        )
+        self._latent_truncation_warned = True
 
     def set_state(self, temperature_field) -> None:
         """

@@ -8,7 +8,7 @@ from fast_heat_solv.core.parameters import SimulationContext
 
 # ---------- tiny config --------------------------------------------------
 config = {
-    "simulation": {"method": "spectral", "backend": "cpu_linear",
+    "simulation": {"backend": "cpu_linear",
                    "duration": 6e-6, "dt": 6e-6, "update_interval": 1},
     "domain": {"size": [0.005, 0.0025, 0.00125], "mesh": [512, 256, 1024]},
     "material": {"name": "316L", "rho": 7850.0, "k": 15.0, "Cp": 500.0,

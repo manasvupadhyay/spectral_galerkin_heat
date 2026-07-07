@@ -15,7 +15,7 @@ import pytest
 from fast_heat_solv.core.parameters import SimulationContext
 
 _CONFIG = {
-    "simulation": {"method": "spectral", "backend": "cpu", "duration": 3e-5, "dt": 6e-6},
+    "simulation": {"backend": "cpu", "duration": 3e-5, "dt": 6e-6},
     "domain": {"size": [4e-4, 4e-4, 1e-4], "mesh": [24, 24, 12]},
     "material": {
         "name": "316L", "rho": 7850.0, "k": 15.0, "Cp": 500.0, "L_f": 267700.0,

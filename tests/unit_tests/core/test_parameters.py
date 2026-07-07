@@ -33,15 +33,14 @@ def test_from_dict_minimal_defaults():
     ctx = SimulationContext.from_dict(_cfg())
     assert isinstance(ctx.num, NumParams)
     assert isinstance(ctx.geom, GeomParams)
-    assert ctx.method == "spectral"  # default
     assert ctx.backend == "cpu"      # default
     assert ctx.mat.name == "Material"  # default applied
     assert ctx.laser_path is None      # no gcode block
 
 
-def test_method_backend_lowercased():
-    ctx = SimulationContext.from_dict(_cfg(simulation={"method": "Spectral", "backend": "GPU"}))
-    assert (ctx.method, ctx.backend) == ("spectral", "gpu")
+def test_backend_lowercased():
+    ctx = SimulationContext.from_dict(_cfg(simulation={"backend": "GPU"}))
+    assert ctx.backend == "gpu"
 
 
 def test_dt_correction_makes_steps_tile_t_end():
