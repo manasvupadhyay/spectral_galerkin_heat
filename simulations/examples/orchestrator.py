@@ -51,7 +51,7 @@ config = {
         "Pa": 101325.0,
         "T_boil": 3090.0,
     },
-    "laser": {
+    "laser": {   # TODO modify to provide an exampe how to provide a laserPAth it is defined as ABC, would be better to provide a full example how to provide a laser path
         "radius": 60.0e-6,
         "absorptivity": 0.30,
         "power_nominal": 200.0,

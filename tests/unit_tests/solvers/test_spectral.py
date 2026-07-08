@@ -10,16 +10,41 @@ from fast_heat_solv.solvers.spectral import SpectralSolver
 
 
 def test_defaults():
-    # The Picard loop relies on these defaults; pin them.
-    # TODO: max_picard_iter and convergence_tol (and mixing_omega) should become
-    # user-configurable via SimulationContext/the YAML config rather than hardcoded.
-    # For now we test what's in place; reparametrize this once they come from config.
+    # Constructor defaults for the Picard fixed-point loop; these hold until
+    # initialize() applies any overrides from the simulation config.
     s = SpectralSolver(NumpyBackend())
     assert float(s.mixing_omega) == pytest.approx(0.1)
     assert float(s.convergence_tol) == pytest.approx(1e-4)
     assert s.max_picard_iter == 30
     assert s.track_picard_history is False
     assert s.state is None
+
+
+def test_initialize_applies_picard_config_overrides(tiny_config):
+    # initialize() overrides the Picard defaults from the simulation block
+    # (max_picard_iter / picard_tol / picard_omega); absent keys keep the defaults.
+    from fast_heat_solv.core.parameters import SimulationContext
+
+    tiny_config["simulation"].update(
+        max_picard_iter=55, picard_tol=1e-6, picard_omega=0.25)
+    ctx = SimulationContext.from_dict(tiny_config)
+    s = SpectralSolver(NumpyBackend(), ctx)
+    s.initialize()
+    assert s.max_picard_iter == 55
+    assert float(s.convergence_tol) == pytest.approx(1e-6)
+    assert float(s.mixing_omega) == pytest.approx(0.25)
+
+
+def test_initialize_keeps_picard_defaults_when_unset(tiny_config):
+    # No Picard keys in the config -> the constructor defaults survive initialize().
+    from fast_heat_solv.core.parameters import SimulationContext
+
+    ctx = SimulationContext.from_dict(tiny_config)
+    s = SpectralSolver(NumpyBackend(), ctx)
+    s.initialize()
+    assert s.max_picard_iter == 30
+    assert float(s.convergence_tol) == pytest.approx(1e-4)
+    assert float(s.mixing_omega) == pytest.approx(0.1)
 
 
 def test_initialize_requires_context():

@@ -1,8 +1,8 @@
 """Tests for the property-correction global transforms (spectral_ops).
 
-These pin the DCT-II/IDCT-II volume normalisation (property_correction.tex §6,
-§10) and the divergence-form assembly of the temperature-dependent property
-correction, validated against an explicit modal / finite-difference reference.
+These pin the DCT-II/IDCT-II volume normalisation and the divergence-form
+assembly of the temperature-dependent property correction, validated against an
+explicit modal / finite-difference reference.
 """
 
 import numpy as np
@@ -68,7 +68,7 @@ def test_reconstruct_volume_matches_modal_sum():
 
 
 # ---------------------------------------------------------------------------
-# assemble_property_correction — null behaviour (tex §8.1)
+# assemble_property_correction — null behaviour
 # ---------------------------------------------------------------------------
 
 def _const_model(k=15.0, rho=7900.0, cp=500.0):
@@ -142,7 +142,7 @@ def test_capacity_correction_zero_for_steady_field():
 
 
 # ---------------------------------------------------------------------------
-# Divergence form (Green's first identity, property_correction.tex)
+# Divergence form (Green's first identity)
 # ---------------------------------------------------------------------------
 
 def _kdep_model():

@@ -1,6 +1,6 @@
 """Tests for spectral_helpers.py (normalization, subgrid centering, reconstruction).
 
-Note: the plan's §3.7 `_cp` regression test targeted `_get_array_module` /
+Note: an earlier `_cp` regression test targeted `_get_array_module` /
 `_get_kernels`, which were removed when the runtime backend dispatch was dropped
 from this module — there is no longer any such code path to guard.
 """

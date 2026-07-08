@@ -3,10 +3,9 @@
 A :class:`MathBackend` bundles an array module (NumPy or CuPy) with its
 matching physics-kernel module. Inject one into
 :class:`~fast_heat_solv.solvers.spectral.SpectralSolver` to run on CPU or GPU
-from the same solver code.
-
-Want to run on a different array library (PyTorch, JAX, …)? See "Adding a
-backend" in ``docs/ARCHITECTURE.md`` 
+from the same solver code. To run on a different array library (PyTorch, JAX, …),
+add a :class:`MathBackend` bundling that array module with a matching
+physics-kernel module, see the docs for more details.
 
 Examples
 --------

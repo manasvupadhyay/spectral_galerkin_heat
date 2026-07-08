@@ -1,4 +1,4 @@
-"""CuPy backend contract (§3.3, gpu).
+"""CuPy backend contract (gpu).
 
 The CPU backend + ``get_backend`` dispatch live in ``test_base.py``; this file
 holds the GPU-only pieces, which ``importorskip`` away when CuPy / CUDA is

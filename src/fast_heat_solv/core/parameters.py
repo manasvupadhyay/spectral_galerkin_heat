@@ -130,7 +130,7 @@ class NumParams:
     save_all: bool = False
     # Optional Picard fixed-point controls (None -> use the solver defaults).
     # The temperature-dependent property correction needs a higher cap than the
-    # base 30 (property_correction.tex §8.3); expose them so the config can raise it.
+    # base 30; expose them so the config can raise it.
     max_picard_iter: Optional[int] = None
     picard_tol: Optional[float] = None
     picard_omega: Optional[float] = None
@@ -196,9 +196,10 @@ class MaterialParams:
         Temperature-dependent property model (``k(T)``, ``rho(T)``, ``c(T)``
         polynomial branches). ``None`` for a constant-property material, in which
         case the solver uses the scalar ``rho``/``k``/``Cp`` directly. When
-        present, the scalar fields hold the **reference constants** evaluated at
-        ``T0`` (which are also baked into the ETD1 propagators); the
-        property-correction path reinstates the fluctuations about them.
+        present, the scalar ``rho``/``k``/``Cp`` fields hold the user-supplied
+        **reference constants** (each property's in-block ``reference:`` key) that
+        are baked into the ETD1 propagators; the property-correction path
+        reinstates the fluctuations about them.
     """
     name: str = "Material"
     rho: float = 1.0
@@ -214,12 +215,6 @@ class MaterialParams:
     T0: float = 0
     h_conv: float = 0.0
     model: Optional['MaterialModel'] = None
-    # Reference temperature for the property-correction baseline k̄, ā (the
-    # constants baked into the ETD1 propagators). Defaults to T0; a warmer value
-    # (e.g. the liquidus / mean pool temperature) shrinks the property
-    # fluctuation k'=k(T)-k̄ that the semi-implicit correction must resum — the
-    # Chen-Shen stabilization choice (property_correction.tex §6.1).
-    T_ref: float = 0.0
     # Add more fields as needed from your YAML/config
 
     @property
@@ -452,24 +447,61 @@ class SimulationContext:
         T_solidus = real_t(_get_value(mat_cfg.get('T_solidus', 0.0)))
         T_liquidus = real_t(_get_value(mat_cfg.get('T_liquidus', 0.0)))
         T0 = real_t(_get_value(mat_cfg.get('T0', 0.0)))
-        # Property-correction reference temperature (defaults to T0). Evaluating
-        # k̄, ā at a warmer T_ref shrinks the fluctuation the correction resums.
-        T_ref = real_t(_get_value(mat_cfg.get('T_ref', float(T0))))
+        T_boil = real_t(_get_value(mat_cfg.get('T_boil', 0.0)))
 
         # Temperature-dependent properties: build a MaterialModel when any of
-        # k/rho/Cp is given as polynomial branches. The scalar k/rho/Cp fields
-        # then hold the reference constants evaluated at T_ref — exactly the values
-        # baked into the ETD1 propagators (see property_correction.tex §6.1).
+        # k/rho/Cp is given as polynomial branches.
         material_model = MaterialModel.from_config(
             mat_cfg, float(T_solidus), float(T_liquidus)
         )
-        if material_model is not None:
-            k_bar, _a_bar, rho_bar, c_bar = material_model.reference_constants(float(T_ref))
-            rho_ref, k_ref, cp_ref = real_t(rho_bar), real_t(k_bar), real_t(c_bar)
-        else:
+        if material_model is None:
+            # Fully scalar material — the scalars are the reference constants.
             rho_ref = real_t(_get_value(mat_cfg['rho']))
             k_ref = real_t(_get_value(mat_cfg['k']))
             cp_ref = real_t(_get_value(mat_cfg['Cp']))
+        else:
+            # The reference constants k̄, ρ̄, C̄p are baked into BOTH the ETD1
+            # propagators AND the fluctuations k'=k(T)-k̄, a'=a(T)-ā, so they set
+            # the implicit/explicit split of the property correction. For a
+            # genuinely T-dependent (polynomial-branch) property the reference is
+            # NOT auto-derived: the user MUST give it as a ``reference:`` key inside
+            # that property's block. Centering each reference in the middle of its
+            # working range halves the peak fluctuation the correction must carry,
+            # which markedly relaxes the explicit-diffusion CFL limit and stabilises
+            # fine-mesh / T-dependent runs (α_eff ∝ |k'|).
+            # It is accuracy-neutral (an EXACT reformulation) but matters a lot for
+            # convergence, which is why we force an explicit, deliberate choice.
+            # A scalar or constant-branch property is its own reference.
+            refs, missing = {}, []
+            for cfg_key, tprop in (('k', material_model.k),
+                                   ('rho', material_model.rho),
+                                   ('Cp', material_model.c)):
+                spec = mat_cfg.get(cfg_key)
+                is_branch = (isinstance(spec, dict)
+                             and ('solid' in spec or 'liquid' in spec))
+                if is_branch and not tprop.is_constant:
+                    if 'reference' not in spec:
+                        missing.append(cfg_key)
+                        continue
+                    refs[cfg_key] = real_t(_get_value(spec['reference']))
+                else:
+                    refs[cfg_key] = real_t(float(tprop(float(T0))))
+            if missing:
+                k_rec, rho_rec, cp_rec = material_model.recommended_references(
+                    float(T0), float(T_boil))
+                rec = {'k': k_rec, 'rho': rho_rec, 'Cp': cp_rec}
+                rec_str = ', '.join(f"{key}.reference={rec[key]:g}"
+                                    for key in missing)
+                raise ValueError(
+                    f"Temperature-dependent material property {missing} needs an "
+                    f"explicit 'reference:' key inside its block. It fixes the "
+                    f"implicit/explicit split of the property correction; centering "
+                    f"it in the middle of the working range matters for better "
+                    f"convergence. Recommended — the average of each property's two "
+                    f"extrema over [T0, T_boil] = [{float(T0):g}, {float(T_boil):g}] "
+                    f"K — are: {rec_str}."
+                )
+            k_ref, rho_ref, cp_ref = refs['k'], refs['rho'], refs['Cp']
 
         mat_params = MaterialParams(
             name=mat_cfg.get('name', 'Material'),
@@ -481,12 +513,11 @@ class SimulationContext:
             T_liquidus=T_liquidus,
             Pa=real_t(_get_value(mat_cfg.get('Pa', 0.0))),
             R_v=real_t(_get_value(mat_cfg.get('R_v', 0.0))),
-            T_boil=real_t(_get_value(mat_cfg.get('T_boil', 0.0))),
+            T_boil=T_boil,
             DeltaH_LV=real_t(_get_value(mat_cfg.get('DeltaH_LV', 0.0))),
             T0=T0,
             h_conv=real_t(_get_value(mat_cfg.get('h_conv', 0.0))),
             model=material_model,
-            T_ref=T_ref,
         )
 
         laser_cfg = cfg.get('laser', {})

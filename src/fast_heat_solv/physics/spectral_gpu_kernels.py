@@ -354,16 +354,16 @@ def _correction_source(T, k_prime, a_prime, T_prev, dt, dx, dy, dz):
 
 
 # ---------------------------------------------------------------------------
-# Makhoul DCT-II / DCT-III on the contiguous last axis.
+# Real-FFT-based DCT-II / DCT-III on the contiguous last axis.
 #
 # cupyx's ``dct`` is ~6× heavier than the underlying real FFT (9.2 ms vs 1.4 ms
 # for a 512-long contiguous axis) — it does the pre/post-processing in generic
-# strided passes. Makhoul's algorithm computes an N-point DCT from one N-point
+# strided passes. The approach here computes an N-point DCT from one N-point
 # real FFT plus an even/odd reorder and a twiddle recombine; doing those two
 # steps in fused, coalesced kernels (with the twiddle factors cached per length)
 # beats cupyx's ``dct`` by ~30 % for both the forward (II) and inverse (III).
-# Refs: Makhoul 1980; GPU spectral solvers (CaNS, arXiv:2001.05234) build their
-# real-to-real transforms the same way since cuFFT has no native DCT.
+# This real-FFT-based construction is the standard way to build real-to-real
+# transforms since cuFFT has no native DCT.
 # ---------------------------------------------------------------------------
 
 _DCT2_TWIDDLE = {}   # N -> (C, S) ortho recombine factors, length N
@@ -497,7 +497,7 @@ def _dctn_contig(x, dct_type):
     transforms every axis on the contiguous last position and returns the array
     to its original layout — 3 transpose copies instead of 6 (move-out +
     move-back per axis). The contiguous-axis transform itself is the fused
-    Makhoul DCT (``_dct2_last`` / ``_dct3_last``), ~30 % faster than cupyx's.
+    real-FFT-based DCT (``_dct2_last`` / ``_dct3_last``), ~30 % faster than cupyx's.
     """
     last = _dct2_last if dct_type == 2 else _dct3_last
     for _ in range(x.ndim):

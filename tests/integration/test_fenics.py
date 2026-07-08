@@ -1,10 +1,10 @@
-"""FEniCS / dolfinx finite-element cross-validation (§2.3, integration + fenics).
+"""FEniCS / dolfinx finite-element cross-validation (integration + fenics).
 
 Cross-validates the spectral solver (SG) against an *independent* numerical
 method — a P1 backward-Euler finite-element solve in dolfinx — in the **nonlinear
 constant-property** regime: latent heat of fusion + Hertz-Knudsen evaporation +
-bottom-face convection, with temperature-independent 316L properties (Chadwick
-values at T0=293 K). This is **not** a golden file (the FE reference is recomputed 
+bottom-face convection, with temperature-independent typical 316L properties
+(values at T0=293 K). This is **not** a golden file (the FE reference is recomputed
 each run). BEWARE the run takes ~25 min on a laptop CPU
 
 (fine ``h_fine`` strip along the laser path, coarse elsewhere),
@@ -25,8 +25,8 @@ FEniCS/gmsh are heavy and not project dependencies — install via **conda only*
     conda install -c conda-forge fenics-dolfinx=0.9.0 fenics-basix=0.9.0 \\
         fenics-ffcx=0.9.0 fenics-ufl=2024.2.0 mpi4py petsc4py python-gmsh
 
-(matches ``andreas_heat_solv/environment.yaml``).  The test ``importorskip``s
-them and is ``@pytest.mark.fenics`` so a CI FEniCS job can select it
+The test ``importorskip``s them and is ``@pytest.mark.fenics`` so a CI FEniCS
+job can select it
 (``pytest -m "integration and fenics"``).  It is heavy (~25 min: the nonlinear SG
 solve dominates) — run only in the dedicated FEniCS job.
 """

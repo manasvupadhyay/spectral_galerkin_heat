@@ -1,13 +1,12 @@
 """Integration gates for the temperature-dependent property correction.
 
-Implements the CPU-side checks of ``property_correction.tex`` §8 that must pass
-before any GPU / FE-reference comparison:
+CPU-side checks that must pass before any GPU / FE-reference comparison:
 
-* §8.1 null test — constant branches equal to the reference reproduce the base
+* null test — constant branches equal to the reference reproduce the base
   (constant-coefficient) solver bit-for-bit;
 * stability / physicality — the correction keeps the field finite, positive
   properties, surface bounded, and the Picard loop converging;
-* §8.4 convergence parameter ε stays in the modest regime.
+* convergence parameter ε stays in the modest regime.
 
 Run with::
 
@@ -23,11 +22,16 @@ import pytest
 
 from fast_heat_solv.core.parameters import SimulationContext
 
-# 316L Chadwick branches (matching the FE reference script).
-_K_BR = {"solid": [9.248, 0.01571], "liquid": [12.41, 0.003279]}
+# 316L typical T-dependent properties
+# Branch properties carry an in-block `reference` (½(min+max) over [T0, T_boil]),
+# required for any genuinely T-dependent branch material.
+_K_BR = {"solid": [9.248, 0.01571], "liquid": [12.41, 0.003279],
+         "reference": 24.5075, "unit": "W/(m.K)"}
 _RHO_BR = {"solid": [8084.2, -0.42086, -3.8942e-5],
-           "liquid": [7432.7, 0.039338, -1.8007e-4]}
-_CP_BR = {"solid": [458.98, 0.1328], "liquid": [769.86]}
+           "liquid": [7432.7, 0.039338, -1.8007e-4],
+           "reference": 6896.2365, "unit": "kg/m^3"}
+_CP_BR = {"solid": [458.98, 0.1328], "liquid": [769.86],
+          "reference": 633.8752, "unit": "J/(kg.K)"}
 
 _T_S, _T_L, _T0 = 1674.15, 1697.15, 293.0
 _LX, _LY, _LZ = 1.0e-3, 0.5e-3, 0.25e-3
@@ -89,7 +93,7 @@ def _run(ctx, max_picard_iter=None, track_history=False):
 
 
 # ---------------------------------------------------------------------------
-# §8.1 null test — constant branches == base solver, bit-for-bit
+# null test — constant branches == base solver, bit-for-bit
 # ---------------------------------------------------------------------------
 
 @pytest.mark.integration
@@ -162,23 +166,31 @@ def test_temperature_dependent_run_is_physical(constant_velocity_laser):
 
     # Convergence is *not impaired*: the final step converges below the cap and
     # its residual decreases monotonically (stable fixed point, all-orders
-    # resummation — tex §8.3/§8.4).
+    # resummation).
     assert picard[-1] < solver.max_picard_iter
     rms = [h["rms_diff"] for h in history]
     assert all(b <= a for a, b in zip(rms, rms[1:])), "residual not monotone"
 
 
 # ---------------------------------------------------------------------------
-# §8.4 convergence parameter ε ~ ||k'|| / (k̄ sqrt(V))
+# convergence parameter ε ~ ||k'|| / (k̄ sqrt(V))
 # ---------------------------------------------------------------------------
 
 @pytest.mark.integration
 @pytest.mark.slow
 def test_epsilon_in_safe_regime(constant_velocity_laser):
-    """The controlling parameter ε stays modest, so the series converges (tex §7)."""
+    """The controlling parameter ε stays modest, so the series converges."""
     from fast_heat_solv.physics.spectral_ops import reconstruct_volume
 
-    cfg = _cfg(_base_material(k=_K_BR, rho=_RHO_BR, Cp=_CP_BR))
+    # This short track stays cold in the bulk, so the reference that keeps the
+    # fluctuation k'=k(T)-k̄ modest is the cold-side value k(T0) (= the 316L solid
+    # branch at 293 K), not the [T0, T_boil] mid-range. Reference the branches at
+    # T0 to exercise the safe-regime guardrail.
+    ref = {"k": 13.851, "rho": 7957.5, "Cp": 497.89}
+    cfg = _cfg(_base_material(
+        k={**_K_BR, "reference": ref["k"]},
+        rho={**_RHO_BR, "reference": ref["rho"]},
+        Cp={**_CP_BR, "reference": ref["Cp"]}))
     laser = constant_velocity_laser(_X_START, _LY / 2, _V, 0.0, _P)
     ctx = _context(cfg, laser)
     solver, _, _, _ = _run(ctx)

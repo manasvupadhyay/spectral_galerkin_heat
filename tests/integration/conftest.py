@@ -1,4 +1,4 @@
-"""Shared fixtures and helpers for the integration suite (plan §1.3 / §2).
+"""Shared fixtures and helpers for the integration suite.
 
 Laser implementations and the Picard-convergence helpers are promoted here so
 the pipeline, validation, and restart tests share one copy.  Everything is
@@ -36,7 +36,7 @@ class ConstantVelocityLaser(LaserPath):
 
     Position at time ``t`` is ``(x0 + vx·t, y0 + vy·t)``; velocity is reported
     on the state so the solver's Doppler / shift bookkeeping sees it.  Used by
-    the Eagar-Tsai analytical check (§2.1), which assumes exactly this motion.
+    the Eagar-Tsai analytical check, which assumes exactly this motion.
     """
 
     def __init__(self, x0, y0, vx, vy, power, is_on=True):

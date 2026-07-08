@@ -129,6 +129,11 @@ class TempProperty:
         - a plain number, or a ``{value, unit}`` mapping → constant property;
         - a ``{solid: [...], liquid: [...]}`` mapping → polynomial branches
           (a missing branch falls back to the other).
+
+        A branch mapping may also carry ``reference:`` (the baked reference
+        constant k̄/ρ̄/C̄p, consumed by the material parser, see
+        ``SimulationContext.from_dict``) and ``unit:`` (documentary). Both are
+        metadata for the evaluator and are ignored here.
         """
         # {value, unit} or {solid, liquid} mapping.
         if isinstance(spec, dict) and ("solid" in spec or "liquid" in spec):
@@ -418,17 +423,26 @@ class MaterialModel:
         """True when every property is a single constant (null-correction path)."""
         return self.k.is_constant and self.rho.is_constant and self.c.is_constant
 
-    def reference_constants(self, T0: float):
-        """Reference scalars evaluated at the initial temperature *T0*.
+    def recommended_references(self, T_lo: float, T_hi: float,
+                               n_samples: int = 512):
+        """Recommended reference scalars over the working band ``[T_lo, T_hi]``.
 
-        Returns ``(k_bar, a_bar, rho_bar, c_bar)``. These are the constants that
-        **must** be baked into the ETD1 propagators ``K, KK`` so the exact
-        forcing identity holds (see ``property_correction.tex`` §6.1).
+        The user supplies each T-dependent property's reference constant
+        explicitly, as a ``reference:`` key inside its config block. This helper
+        only computes a *recommendation* for each: the midpoint of the property's
+        own extrema sampled across the range, ``½(min p + max p)``. Centering every
+        reference in the middle of its working range reduces the peak fluctuations
+        and helps convergence.
+
+        Returns the recommended ``(k, rho, Cp)`` references.
         """
-        k_bar = float(self.k(T0))
-        rho_bar = float(self.rho(T0))
-        c_bar = float(self.c(T0))
-        return k_bar, rho_bar * c_bar, rho_bar, c_bar
+        T = np.linspace(float(T_lo), float(T_hi), int(n_samples))
+
+        def _mid(prop):
+            vals = np.asarray(prop(T), dtype=np.float64)
+            return 0.5 * (float(vals.min()) + float(vals.max()))
+
+        return _mid(self.k), _mid(self.rho), _mid(self.c)
 
     @classmethod
     def from_config(cls, mat_cfg: dict, T_solidus: float, T_liquidus: float

@@ -31,15 +31,23 @@ fine_mesh:
 material:
   name: "316L"
   # Temperature-dependent: solid/liquid polynomial branches blended by f_l.
+  # `reference` (REQUIRED) is the baked constant k̄/ρ̄/C̄p = ½(min+max) over
+  # [T0, T_boil]; centering it matters for convergence. See 03_nonlinear_tdep.yaml.
   k:
     solid:  [9.248, 0.01571]        # k_s  = 9.248 + 0.01571·T
     liquid: [12.41, 0.003279]       # k_l  = 12.41 + 0.003279·T
+    reference: 24.5075
+    unit: "W/(m.K)"
   rho:
     solid:  [8084.2, -0.42086, -3.8942e-5]
     liquid: [7432.7, 0.039338, -1.8007e-4]
+    reference: 6896.2365
+    unit: "kg/m^3"
   Cp:
     solid:  [458.98, 0.1328]        # c_s  = 458.98 + 0.1328·T
     liquid: [769.86]                # c_l  = 769.86 (constant)
+    reference: 633.8752
+    unit: "J/(kg.K)"
   L_f:
     value: 2.677e5
     unit: "J/kg"

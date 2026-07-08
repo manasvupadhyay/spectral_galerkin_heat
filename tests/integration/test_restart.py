@@ -1,4 +1,4 @@
-"""Restart / state-injection round-trip (§2.6).
+"""Restart / state-injection round-trip.
 
 Run a few steps, snapshot the reconstructed field, build a fresh solver,
 ``set_state`` the snapshot back, and assert the reconstruction is unchanged

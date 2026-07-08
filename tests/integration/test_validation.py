@@ -1,4 +1,4 @@
-"""Physics validation: linear analytical (§2.1) + non-linear sanity (§2.2).
+"""Physics validation: linear analytical + non-linear sanity.
 
 The linear tests anchor *correctness* against the closed-form Eagar-Tsai moving
 heat-source solution (``tests/eagar_tsai.py``, method-of-images corrected for the
@@ -188,7 +188,7 @@ def test_nonlinear_sanity_bounds(constant_velocity_laser, assert_final_step_conv
     # No sub-ambient ringing on the resolved grid (observed undershoot ≈ 0.4 K).
     assert T.min() >= _T0 - 1.0
     # Surface capped well below a blow-up — evaporation must regularize it.
-    # 1.5×T_boil is the generous physical cap from the plan (§2.2).
+    # 1.5×T_boil is the generous physical cap.
     assert max(surf_max) < 1.5 * _MAT["T_boil"]
     # Picard loop respects the cap, and the final step converges below it.
     assert all(n <= solver.max_picard_iter for n in picard)

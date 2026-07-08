@@ -96,7 +96,7 @@ def test_from_dict_preserves_geom_axis_order():
 # Temperature-dependent properties (material.model)
 # ---------------------------------------------------------------------------
 
-# Chadwick 316L branches (ascending powers), matching the FE reference.
+# Typical 316L branches (ascending powers), matching the FE reference.
 _K_BR = {"solid": [9.248, 0.01571], "liquid": [12.41, 0.003279]}
 _RHO_BR = {"solid": [8084.2, -0.42086, -3.8942e-5],
            "liquid": [7432.7, 0.039338, -1.8007e-4]}
@@ -112,27 +112,46 @@ def test_scalar_material_has_no_model():
     assert float(ctx.mat.Cp) == pytest.approx(500.0)
 
 
-def test_branch_material_sets_reference_scalars_at_T0():
-    T0 = 293.0
+def test_branch_material_uses_in_block_reference_scalars():
+    # A T-dependent material bakes each property's in-block `reference:` verbatim
+    # into the scalar reference field (no auto-evaluation at any temperature).
     ctx = SimulationContext.from_dict(_cfg(material={
-        "k": _K_BR, "rho": _RHO_BR, "Cp": _CP_BR,
-        "T_solidus": 1674.15, "T_liquidus": 1697.15, "T0": T0,
+        "k": {**_K_BR, "reference": 22.5, "unit": "W/(m.K)"},
+        "rho": {**_RHO_BR, "reference": 7600.0, "unit": "kg/m^3"},
+        "Cp": {**_CP_BR, "reference": 620.0, "unit": "J/(kg.K)"},
+        "T_solidus": 1674.15, "T_liquidus": 1697.15, "T0": 293.0, "T_boil": 3090.0,
     }))
     assert ctx.mat.model is not None
-    # Below the solidus f_l = 0, so the reference equals the solid branch at T0.
-    assert float(ctx.mat.k) == pytest.approx(9.248 + 0.01571 * T0, rel=1e-5)
-    assert float(ctx.mat.rho) == pytest.approx(
-        8084.2 - 0.42086 * T0 - 3.8942e-5 * T0**2, rel=1e-5)
-    assert float(ctx.mat.Cp) == pytest.approx(458.98 + 0.1328 * T0, rel=1e-5)
+    assert float(ctx.mat.k) == pytest.approx(22.5)
+    assert float(ctx.mat.rho) == pytest.approx(7600.0)
+    assert float(ctx.mat.Cp) == pytest.approx(620.0)
+
+
+def test_branch_material_missing_reference_raises_with_recommendation():
+    # Omitting a property's `reference:` is a hard error whose message names the
+    # missing properties, recommends the mid-range values, and flags convergence.
+    with pytest.raises(ValueError) as excinfo:
+        SimulationContext.from_dict(_cfg(material={
+            "k": _K_BR, "rho": _RHO_BR, "Cp": _CP_BR,
+            "T_solidus": 1674.15, "T_liquidus": 1697.15, "T0": 293.0,
+            "T_boil": 3090.0,
+        }))
+    msg = str(excinfo.value)
+    assert "reference" in msg
+    assert "k.reference" in msg and "rho.reference" in msg and "Cp.reference" in msg
+    assert "convergence" in msg
+    assert "Recommended" in msg
 
 
 def test_mixed_branch_and_scalar_material():
-    # k T-dependent, rho/Cp scalar → model present, scalar refs consistent.
+    # k T-dependent (needs an in-block reference), rho/Cp scalar (each is its own
+    # reference) → still a model; the scalars pass straight through.
     ctx = SimulationContext.from_dict(_cfg(material={
-        "k": _K_BR, "rho": 7900.0, "Cp": 500.0,
-        "T_solidus": 1674.15, "T_liquidus": 1697.15, "T0": 293.0,
+        "k": {**_K_BR, "reference": 22.5}, "rho": 7900.0, "Cp": 500.0,
+        "T_solidus": 1674.15, "T_liquidus": 1697.15, "T0": 293.0, "T_boil": 3090.0,
     }))
     assert ctx.mat.model is not None
+    assert float(ctx.mat.k) == pytest.approx(22.5)
     assert float(ctx.mat.rho) == pytest.approx(7900.0)
     assert float(ctx.mat.Cp) == pytest.approx(500.0)
 

@@ -1,9 +1,8 @@
 """Tests for temperature-dependent properties (core/properties.py).
 
-The polynomial-branch values are checked against the Chadwick 316L expressions
-hard-coded in the finite-element reference solver
-(``andreas_heat_solv/.../Theo_cuboid_FE_temp_dep.py``); keeping these in sync is
-what lets the spectral solver be compared to the FE field.
+The polynomial-branch values are checked against the typical 316L expressions
+used by the finite-element reference solver; keeping these in sync is what lets
+the spectral solver be compared to the FE field.
 """
 
 import numpy as np
@@ -15,7 +14,7 @@ from fast_heat_solv.core.properties import (
     liquid_fraction,
 )
 
-# Chadwick 316L (ascending powers of T), copied from the FE reference script.
+# Typical 316L values (ascending powers of T), matching the FE reference.
 _T_S, _T_L = 1674.15, 1697.15
 _RHO_S = [8084.2, -0.42086, -3.8942e-5]
 _RHO_L = [7432.7, 0.039338, -1.8007e-4]
@@ -141,13 +140,21 @@ def test_model_a_is_rho_times_c():
     assert float(m.a(T)) == pytest.approx(float(m.rho(T)) * float(m.c(T)), rel=1e-9)
 
 
-def test_model_reference_constants_at_T0():
+def test_model_recommended_references_are_midrange_extrema():
+    # Recommendation = ½(min p + max p) sampled over [T_lo, T_hi], per property.
     m = _full_model()
-    T0 = 293.0
-    k_bar, a_bar, rho_bar, c_bar = m.reference_constants(T0)
-    assert k_bar == pytest.approx(_fe_k(T0), rel=1e-6)
-    assert rho_bar == pytest.approx(_fe_rho(T0), rel=1e-6)
-    assert a_bar == pytest.approx(rho_bar * c_bar, rel=1e-9)
+    T_lo, T_hi = 293.0, 3090.0
+    k_rec, rho_rec, cp_rec = m.recommended_references(T_lo, T_hi)
+
+    T = np.linspace(T_lo, T_hi, 512)
+    k_vals = np.asarray(m.k(T), dtype=np.float64)
+    rho_vals = np.asarray(m.rho(T), dtype=np.float64)
+    c_vals = np.asarray(m.c(T), dtype=np.float64)
+    assert k_rec == pytest.approx(0.5 * (k_vals.min() + k_vals.max()))
+    assert rho_rec == pytest.approx(0.5 * (rho_vals.min() + rho_vals.max()))
+    assert cp_rec == pytest.approx(0.5 * (c_vals.min() + c_vals.max()))
+    # Each recommendation lies inside the property's observed range.
+    assert k_vals.min() <= k_rec <= k_vals.max()
 
 
 def test_model_none_when_all_scalar():

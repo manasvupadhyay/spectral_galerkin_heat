@@ -75,7 +75,7 @@ class SpectralSolver(HeatSolver):
         self.max_picard_iter: int = 30
         self.track_picard_history: bool = False
         self.picard_history = []
-        # Temperature-dependent property correction (property_correction.tex).
+        # Temperature-dependent property correction.
         # Enabled in ``initialize`` when the material carries a non-constant model.
         self._property_correction: bool = False
         # Grid mode: no fine sub-box, latent heat evaluated on the coarse grid
@@ -166,26 +166,11 @@ class SpectralSolver(HeatSolver):
         model = getattr(mat, "model", None)
         self._property_correction = model is not None and not model.is_constant
         if self._property_correction:
-            # Reference for k̄, ā is T_ref (defaults to T0); evaluating it warmer
-            # shrinks the fluctuation k'=k(T)-k̄ the correction must resum.
-            T_ref = float(getattr(mat, "T_ref", 0.0)) or float(T0)
-            k_bar, a_bar, _rho_bar, _c_bar = model.reference_constants(T_ref)
-            self._kbar = xp.float32(k_bar)
-            self._abar = xp.float32(a_bar)
-            # tex §6.1 (Critical): the reference constants used in k'=k(T)-k̄ and
-            # a'=a(T)-ā must equal the constants baked into the ETD1 propagators,
-            # else the exact forcing identity breaks. mat.k / mat.rho*mat.Cp are
-            # set to these references at parse time — verify they agree.
-            prop_kbar = float(mat.k)
-            prop_abar = float(mat.rho) * float(mat.Cp)
-            if not (math.isclose(prop_kbar, k_bar, rel_tol=1e-4)
-                    and math.isclose(prop_abar, a_bar, rel_tol=1e-4)):
-                raise ValueError(
-                    "Property-correction reference constants do not match the "
-                    f"ETD1 propagator constants: k̄ propagator={prop_kbar:.6g} vs "
-                    f"model={k_bar:.6g}; ā propagator={prop_abar:.6g} vs "
-                    f"model={a_bar:.6g}. (property_correction.tex §6.1)"
-                )
+            # The reference constants k̄, ā used in the fluctuations
+            # k'=k(T)-k̄ and a'=a(T)-ā must equal the constants used in the propagators.
+            self._kbar = xp.float32(float(mat.k))
+            self._abar = xp.float32(float(mat.rho) * float(mat.Cp))
+
 
         # Previous converged full-volume field, shared by the property correction
         # (∂_t T) and grid-mode latent heat (f_l(T_prev)); starts at uniform T0.
@@ -195,17 +180,14 @@ class SpectralSolver(HeatSolver):
             )
 
         # Guardrail: in grid mode the sharp mushy-zone latent source is projected
-        # by the full-volume DCT, which on a coarse grid excites high-frequency
-        # ringing; combined with the (always full-volume) property correction it
-        # can destabilise the Picard iteration. Production T-dependent runs use a
-        # fine box, which projects the latent source locally and smoothly.
+        # by the full-volume DCT, which on a coarse grid can create ringing; 
+        # combined with the property correction, it can destabilise 
+        # the Picard iteration.
         if self._property_correction and self._grid_latent:
             logger.warning(
                 "Temperature-dependent run in grid mode (no fine_mesh): the sharp "
-                "latent-heat source is projected on the coarse grid and can ring, "
-                "destabilising the Picard iteration together with the property "
-                "correction. Add a fine_mesh section (box mode) if you see NaNs or "
-                "ringing."
+                "latent-heat source is projected on the coarse grid and can ring. "
+                " Add a fine_mesh section (box mode) if you see NaNs or ringing."
             )
 
         return self.state
@@ -341,7 +323,7 @@ class SpectralSolver(HeatSolver):
         # Divergence-mode property correction handles the conductivity boundary
         # term by rescaling the prescribed surface flux by k̄/k(T_surface): using
         # the Neumann BC (-k ∂_nT = q), the boundary piece -∮k'∂_nT Φ dS merges
-        # with F^Γ = -∮qΦ dS into -∮(k̄/k)qΦ dS (property_correction.tex). This is
+        # with F^Γ = -∮qΦ dS into -∮(k̄/k)qΦ dS. This is
         # exact and replaces the finite-difference face term.
         rescale_flux = self._property_correction
 
@@ -410,7 +392,7 @@ class SpectralSolver(HeatSolver):
                     grid.Cp32_broadcast_bottom, S_bot_raw,
                 )
 
-            # Temperature-dependent property correction (tex §5): re-evaluated
+            # Temperature-dependent property correction: re-evaluated
             # from the current iterate, folded into the forcing before relaxation
             # so the fixed point resums the perturbation series to all orders.
             if self._property_correction:

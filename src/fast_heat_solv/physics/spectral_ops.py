@@ -57,10 +57,10 @@ def project_box_to_modes(field_box, SsState):
 
 
 # ---------------------------------------------------------------------------
-# Global volume transforms for the temperature-dependent property correction
-# (property_correction.tex §6). The cell-centred DCT-II / IDCT-II pair below is
-# consistent with the modal basis baked into the K, KK propagators — distinct
-# from the node-centred DCT-I output helper in ``spectral_helpers``.
+# Global volume transforms for the temperature-dependent property correction.
+# The cell-centred DCT-II / IDCT-II pair below is consistent with the modal basis
+# baked into the K, KK propagators — distinct from the node-centred DCT-I output
+# helper in ``spectral_helpers``.
 # ---------------------------------------------------------------------------
 
 def reconstruct_volume(a, SsState):
@@ -86,16 +86,16 @@ def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
                                  k_bar, a_bar):
     """Assemble the temperature-dependent property correction modes ``C_mnp``.
 
-    Implements the forcing-assembly recipe of ``property_correction.tex`` §5/§7:
-    reconstruct ``T`` over Ω from the current trial modes, read the property
-    fluctuations ``k'(T)=k(T)-k̄`` and ``a'(T)=a(T)-ā`` from the tabulated model,
-    form ``g = k' ∇T`` (finite-difference gradient) and ``s_a = -a' ∂_t T``, then
-    project. The projection returns only the **volume** modes; the boundary
-    contribution of the conductivity correction is handled by the solver as a
-    rescaling of the prescribed surface flux (see below and ``SpectralSolver.step``).
+    Forcing-assembly recipe: reconstruct ``T`` over Ω from the current trial
+    modes, read the property fluctuations ``k'(T)=k(T)-k̄`` and ``a'(T)=a(T)-ā``
+    from the tabulated model, form ``g = k' ∇T`` (finite-difference gradient) and
+    ``s_a = -a' ∂_t T``, then project. The projection returns only the **volume**
+    modes; the boundary contribution of the conductivity correction is handled by
+    the solver as a rescaling of the prescribed surface flux (see below and
+    ``SpectralSolver.step``).
 
-    The conductivity term ``C^k`` is integrated by parts (``property_correction.tex``
-    eq. Ckdiv) so the volume term merges with ``C^a`` into a single DCT of
+    The conductivity term ``C^k`` is integrated by parts so the volume term merges
+    with ``C^a`` into a single DCT of
     ``f = -a'∂_tT + ∇·(k'∇T)``. The boundary term it generates is not assembled
     here; using the Neumann BC it merges with the base forcing ``F^Γ`` into a
     single rescaled-flux integral ``-∮ (k̄/k) q Φ dS`` applied in the solver.
@@ -128,8 +128,8 @@ def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
     k_prime, a_prime = model.k_prime_a_prime(T, k_bar, a_bar)
 
     # The real-space forcing f = ∇·(k'∇T) - a'∂_tT is assembled by a fused backend
-    # kernel when available (GPU/CPU: two stencil passes replacing six xp.gradient
-    # calls); otherwise fall back to xp finite differences.
+    # kernel when available; otherwise fall back to xp finite differences.
+    # TODO : Why it would not be available, do we need to check for that? 
     corr_source = getattr(SsState.hooks, "corr_source", None)
     if corr_source is not None:
         f = corr_source(T, k_prime, a_prime, T_prev_full, float(dt),
@@ -221,14 +221,10 @@ def compute_latent_heat_source(Q_buffer, phys, num, SsState):
     ``T_prev``.  Does not update ``T_prev``; call
     :func:`update_latent_heat_history` after the iteration has converged.
 
-    The latent sink is ``Q = -rho(T) * L_f * (f_l(T) - f_l(T_prev)) / dt`` with
-    ``f_l`` clamped to ``[0, 1]`` — the same expression the FE reference uses
-    (``Q_latent = rho_eff * L_f * (lf - lf_n)/dt``). For a temperature-dependent
+    The latent source is ``Q = -rho(T) * L_f * (f_l(T) - f_l(T_prev)) / dt`` with
+    ``f_l`` clamped to ``[0, 1]``.  For a temperature-dependent
     material the density is the **blended** ``rho(T) = (1-f_l)rho_s(T)+f_l
-    rho_l(T)`` evaluated per cell, not the constant reference ``rho(T0)`` baked
-    into the propagators — using the reference here over-weights the sink by
-    ~rho(T0)/rho(T_melt) ≈ 12 % and cools the pool spuriously. Constant-property
-    materials keep the fused scalar-rho kernel (validated, unchanged).
+    rho_l(T)`` evaluated per cell. 
     """
     fm = SsState.fine_mesh
     if fm is None or fm.T_prev is None:
