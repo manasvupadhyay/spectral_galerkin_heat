@@ -72,12 +72,14 @@ def _load_data(xdmf_path):
 # ==========================================
 
 # Presentation metadata per slice normal: (xlabel, ylabel, h_axis, v_axis).
-# Kept separate from the slice geometry so the labelling/axis-mapping is
-# independently testable and the "valid normal" check lives in one place.
+# Purely geometric: labels name the physical axes spanned by the plane, with no
+# application-specific terminology. Kept separate from the slice geometry so the
+# labelling/axis-mapping is independently testable and the "valid normal" check
+# lives in one place.
 _PLANE_LABELS = {
     "z": ("X (m)", "Y (m)", "x", "y"),
-    "y": ("Scanning direction (m)", "Build direction (m)", "x", "z"),
-    "x": ("Transverse direction (m)", "Build direction (m)", "y", "z"),
+    "y": ("X (m)", "Z (m)", "x", "z"),
+    "x": ("Y (m)", "Z (m)", "y", "z"),
 }
 
 
@@ -87,6 +89,23 @@ def _axis_labels(normal):
         return _PLANE_LABELS[normal]
     except KeyError:
         raise ValueError("Normal must be x, y, or z")
+
+
+def _parse_normal(normal):
+    """Split a possibly-signed *normal* (e.g. ``'-y'``) into ``(axis, flip_h)``.
+
+    A leading ``'-'`` means the plane is viewed from the negative side of the
+    axis, which mirrors the in-plane horizontal perspective. Returns the
+    unsigned axis (``'x'``/``'y'``/``'z'``) that the interpolation geometry
+    uses, and a boolean for whether the horizontal in-plane axis should be
+    flipped.
+    """
+    s = str(normal).strip().lower()
+    flip_h = s.startswith('-')
+    axis = s.lstrip('+-')
+    if axis not in _PLANE_LABELS:
+        raise ValueError("Normal must be one of x, -x, y, -y, z, -z")
+    return axis, flip_h
 
 
 def _get_slice(data, normal, center, width, height, reverse_axes=(), resolution=400, method='linear'):
@@ -215,7 +234,7 @@ def _get_slice(data, normal, center, width, height, reverse_axes=(), resolution=
 # 3. PLOTTING
 # ==========================================
 
-def _plot_meltpool(U, V, T_grid, xlabel, ylabel, liquidus, solidus, title, output_file):
+def _plot_meltpool(U, V, T_grid, xlabel, ylabel, isotherms, title, output_file):
     
     # --- 1. CONFIGURATION FOR ACADEMIC STYLE ---
     # This sets the font to look like LaTeX (Serif/Times)
@@ -224,10 +243,10 @@ def _plot_meltpool(U, V, T_grid, xlabel, ylabel, liquidus, solidus, title, outpu
         "font.serif": ["Times New Roman", "DejaVu Serif"],
         "font.size": 12,
         "axes.titlesize": 14,
-        "axes.labelsize": 11,
-        "legend.fontsize": 12,
-        "xtick.labelsize": 11,
-        "ytick.labelsize": 11,
+        "axes.labelsize": 12,
+        "legend.fontsize": 16,
+        "xtick.labelsize": 12,
+        "ytick.labelsize": 12,
         "lines.linewidth": 1.5,
         "lines.markersize": 7
     })
@@ -269,15 +288,29 @@ def _plot_meltpool(U, V, T_grid, xlabel, ylabel, liquidus, solidus, title, outpu
     cbar.ax.xaxis.set_ticks_position('top')
     cbar.ax.xaxis.set_label_position('top')
     
-    # 2. Isotherms (Liquidus and Solidus)
-    # Solid lines for current melt pool
-    iso_levels = [solidus, liquidus]
-    colors = ['red', 'red'] # Both red as per your example, or distinct if preferred
-    
-    contours = ax.contour(U, V, T_grid, levels=iso_levels, colors=colors, linewidths=2)
-    
-    # Label the lines (optional, but good for debugging)
-    # ax.clabel(contours, inline=True, fontsize=10, fmt='%1.0f K')
+    # 2. Isotherms (Parameterized)
+    if isotherms:
+        from matplotlib.lines import Line2D
+
+        # Extract levels for the contour function
+        levels = [val for name, val in isotherms]
+
+        # Plot contours (using distinct line styles if you want, but standard red works well)
+        ax.contour(U, V, T_grid, levels=levels, colors=['red'] * len(levels), linewidths=2)
+
+        # Create custom legend handles
+        legend_elements = []
+        for name, val in isotherms:
+            legend_elements.append(
+                Line2D([0], [0], color='red', lw=2, label=f"{name} ({val:g} K)")
+            )
+
+        # Place legend outside the plot, to the right of the colorbar.
+        # Colorbar is anchored at x=0.0, y=1.05, width=0.40.
+        # We start the legend at x=0.45 to give it some padding.
+        ax.legend(handles=legend_elements, loc='lower left',
+                  bbox_to_anchor=(0.45, 1.05), frameon=False,
+                  fontsize=9, handlelength=1.5)
 
     # 3. Gradient Vectors (Optional Plus)
     # Calculate gradient
@@ -334,7 +367,7 @@ def _plot_meltpool(U, V, T_grid, xlabel, ylabel, liquidus, solidus, title, outpu
 
 def generate_plots(xdmf_path, output_dir=None, show_ui=True, save_images=False,
                    normal='y', center=(0.0, 0.0, 0.0), width=2e-3, height=1e-3,
-                   reverse=(), liquidus=1800, solidus=1700, interp='linear',
+                   reverse=(), isotherms=None, interp='linear',
                    specific_output_filename=None):
     """
     Main function to generate plots from an XDMF file.
@@ -342,6 +375,16 @@ def generate_plots(xdmf_path, output_dir=None, show_ui=True, save_images=False,
     if not os.path.exists(xdmf_path):
         logger.error(f"Error: XDMF file not found: {xdmf_path}")
         return
+
+    # A signed normal ('-y') is a pure viewing choice: strip the sign so the
+    # interpolation geometry sees the bare axis, and mirror the horizontal
+    # in-plane axis to reproduce the "looking from the negative side" view.
+    axis, flip_h = _parse_normal(normal)
+    reverse = list(reverse)
+    if flip_h:
+        h_axis = _PLANE_LABELS[axis][2]
+        if h_axis not in reverse:
+            reverse.append(h_axis)
 
     # 1. Load Data
     try:
@@ -352,7 +395,7 @@ def generate_plots(xdmf_path, output_dir=None, show_ui=True, save_images=False,
 
     # 2. Interpolate Slice
     try:
-        U, V, T_grid, xlabel, ylabel = _get_slice(data, normal, center, width, height, reverse_axes=reverse, method=interp)
+        U, V, T_grid, xlabel, ylabel = _get_slice(data, axis, center, width, height, reverse_axes=reverse, method=interp)
     except Exception as e:
         logger.exception("Error extracting slice: %s", e)
         return
@@ -374,48 +417,80 @@ def generate_plots(xdmf_path, output_dir=None, show_ui=True, save_images=False,
                 os.makedirs(output_dir, exist_ok=True)
                 
             base_name = os.path.splitext(os.path.basename(xdmf_path))[0]
-            output_file = os.path.join(output_dir, f"{base_name}_cut_{normal}.png")
+            output_file = os.path.join(output_dir, f"{base_name}_cut_{axis}.png")
 
-    _plot_meltpool(U, V, T_grid, xlabel, ylabel, liquidus, solidus, 
+    _plot_meltpool(U, V, T_grid, xlabel, ylabel, isotherms,
                   f"Section Normal-{normal.upper()} @ {center}", output_file)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Plot Meltpool X-Sections from XDMF.")
-    parser.add_argument("xdmf_file", help="Path to input .xmf or .xdmf file")
-    parser.add_argument("--normal", default="y", choices=['x', 'y', 'z'], help="Normal of the slice plane")
-    
-    parser.add_argument("--center", nargs=3, type=float, default=[0.0, 0.0, 0.0], help="Center point of the slice plane (x y z)")
-    parser.add_argument("--width", type=float, default=2e-3, help="Width of the slice")
-    parser.add_argument("--height", type=float, default=1e-3, help="Height of the slice")
-    parser.add_argument("--reverse", nargs='*', default=[], choices=['x', 'y', 'z'], help="Axes to reverse for querying data (e.g. --reverse x)")
-    
-    parser.add_argument("--liquidus", type=float, default=1800, help="Liquidus temperature (K)")
-    parser.add_argument("--solidus", type=float, default=1700, help="Solidus temperature (K)")
-    parser.add_argument("--interp", default="linear", choices=['linear', 'nearest'], help="Interpolation method (linear or nearest)")
-    parser.add_argument("--out", default=None, help="Output image filename (overrides auto-generation)")
-    parser.add_argument("--no-show", action="store_true", help="Do not display the plot window")
-    
+    parser = argparse.ArgumentParser(
+        description="Extract and plot a 2-D slice from a 3-D XDMF field. "
+                    "The slice is a pure geometric cut defined by a signed "
+                    "normal, an absolute centre, and in-plane extents."
+    )
+
+    io_group = parser.add_argument_group("input / output")
+    io_group.add_argument("xdmf_file", help="Path to input .xmf or .xdmf file")
+    io_group.add_argument("--out", default=None,
+                          help="Output image filename (overrides auto-generation). "
+                               "When omitted the plot is only displayed.")
+    io_group.add_argument("--no-show", action="store_true",
+                          help="Do not display the plot window")
+
+    geom_group = parser.add_argument_group("slice geometry")
+    geom_group.add_argument("--normal", default="y",
+                            choices=['x', 'y', 'z', '-x', '-y', '-z'],
+                            help="Signed axis normal to the slice plane. The plane "
+                                 "spans the two remaining axes; a leading '-' views "
+                                 "it from the negative side (mirrors the in-plane "
+                                 "horizontal axis). Pass negative values with an "
+                                 "equals sign, e.g. --normal=-y.")
+    geom_group.add_argument("--center", nargs=3, type=float, default=[0.0, 0.0, 0.0],
+                            metavar=('X', 'Y', 'Z'),
+                            help="Absolute centre of the slice plane in domain "
+                                 "coordinates (x y z) [m].")
+    geom_group.add_argument("--width", type=float, required=True,
+                            help="In-plane horizontal (h) extent of the slice [m].")
+    geom_group.add_argument("--height", type=float, required=True,
+                            help="In-plane vertical (v) extent of the slice [m].")
+    geom_group.add_argument("--reverse", nargs='*', default=[], choices=['x', 'y', 'z'],
+                            help="In-plane axes to additionally mirror when querying data.")
+
+    contour_group = parser.add_argument_group("contour levels")
+    contour_group.add_argument("--isotherm", nargs=2, action="append", dest="isotherms",
+                               metavar=("NAME", "VALUE"),
+                               help="Define an isotherm to plot (e.g., --isotherm T_s 1674.15). "
+                                    "Can be used multiple times. If omitted, no isotherms are drawn.")
+    contour_group.add_argument("--interp", default="linear", choices=['linear', 'nearest'],
+                               help="Interpolation method (linear or nearest)")
+
     args = parser.parse_args()
 
     save_images = args.out is not None
     show_ui = not args.no_show
 
-    # If args.out is provided, it is a specific filename. 
-    # We pass it as specific_output_filename to generate_plots.
-    # Typical call :python utils/slices.py out/0_perfect_sim/fields/field_step002000.xmf --center 0.0095 0.0025 0.002475 --width 0.00035 --height 0.00005 --liquidus 1820 --out slice_spectral.pdf
+    # Convert isotherm string values to floats
+    parsed_isotherms = []
+    if args.isotherms:
+        for name, val in args.isotherms:
+            parsed_isotherms.append((name, float(val)))
 
+    # If args.out is provided, it is a specific filename passed straight through
+    # as specific_output_filename.
+    # Typical call: python -m fast_heat_solv.io_utils.slices field_step002000.xmf \
+    #   --normal=-y --center 0.0095 0.0025 0.002475 --width 3.5e-4 --height 5e-5 \
+    #   --isotherm T_s 1674.15 --out slice.png
     generate_plots(
         xdmf_path=Path(args.xdmf_file),
         output_dir=None, # Not used if specific_output_filename is set or save_images is False (mostly)
         show_ui=show_ui,
-        save_images=save_images, 
+        save_images=save_images,
         normal=args.normal,
         center=tuple(args.center),
         width=args.width,
         height=args.height,
         reverse=args.reverse if isinstance(args.reverse, list) else [],
-        liquidus=args.liquidus,
-        solidus=args.solidus,
+        isotherms=parsed_isotherms,
         interp=args.interp,
         specific_output_filename=args.out
     )

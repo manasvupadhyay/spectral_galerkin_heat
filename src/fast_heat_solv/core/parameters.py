@@ -460,16 +460,7 @@ class SimulationContext:
             k_ref = real_t(_get_value(mat_cfg['k']))
             cp_ref = real_t(_get_value(mat_cfg['Cp']))
         else:
-            # The reference constants k̄, ρ̄, C̄p are baked into BOTH the ETD1
-            # propagators AND the fluctuations k'=k(T)-k̄, a'=a(T)-ā, so they set
-            # the implicit/explicit split of the property correction. For a
-            # genuinely T-dependent (polynomial-branch) property the reference is
-            # NOT auto-derived: the user MUST give it as a ``reference:`` key inside
-            # that property's block. Centering each reference in the middle of its
-            # working range halves the peak fluctuation the correction must carry,
-            # which markedly relaxes the explicit-diffusion CFL limit and stabilises
-            # fine-mesh / T-dependent runs (α_eff ∝ |k'|).
-            # It is accuracy-neutral (an EXACT reformulation) but matters a lot for
+            # The reference constants k̄, ρ̄, C̄p matter a lot for
             # convergence, which is why we force an explicit, deliberate choice.
             # A scalar or constant-branch property is its own reference.
             refs, missing = {}, []
@@ -498,7 +489,7 @@ class SimulationContext:
                     f"implicit/explicit split of the property correction; centering "
                     f"it in the middle of the working range matters for better "
                     f"convergence. Recommended — the average of each property's two "
-                    f"extrema over [T0, T_boil] = [{float(T0):g}, {float(T_boil):g}] "
+                    f"extrema over [T0, T_boil] "
                     f"K — are: {rec_str}."
                 )
             k_ref, rho_ref, cp_ref = refs['k'], refs['rho'], refs['Cp']

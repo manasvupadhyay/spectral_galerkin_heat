@@ -93,6 +93,15 @@ io:
   profiles_locations:
     - 'laser'
   slice_planes:
-    - xy
-    - yz
-    - xz
+    - name: "surface_topview"
+      normal: "z"
+      isotherms:
+        - ["T_s", 1674.15]
+    - name: "transverse_section"
+      normal: "x"
+      isotherms:
+        - ["T_s", 1674.15]
+    - name: "longitudinal_section"
+      normal: "y"
+      isotherms:
+        - ["T_s", 1674.15]

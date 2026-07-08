@@ -1,5 +1,6 @@
 import os
 import logging
+from collections import namedtuple
 import h5py
 import numpy as np
 from datetime import datetime
@@ -9,6 +10,65 @@ from typing import Any, Dict, Optional, Union
 from fast_heat_solv.backends.base import to_host
 
 logger = logging.getLogger(__name__)
+
+# Fallback in-plane extents [m] when a slice_planes entry omits them.
+# width -> in-plane horizontal (h) axis, height -> in-plane vertical (v) axis.
+DEFAULT_SLICE_WIDTH = 0.6e-3
+DEFAULT_SLICE_HEIGHT = 0.2e-3
+
+# A geometric cut plane for a 2-D slice image. ``normal`` is a signed axis
+
+SlicePlane = namedtuple("SlicePlane", "name normal width height offset_h offset_v isotherms")
+
+
+def _parse_slice_plane(entry: Any) -> SlicePlane:
+    """Parse one ``slice_planes`` YAML entry (a mapping) into a :class:`SlicePlane`.
+
+    Expected keys:
+        normal    signed axis 'x','-x','y','-y','z','-z' (required)
+        name      free-form label used for the image filename (optional)
+        width     in-plane horizontal (h) extent [m] (optional, default)
+        height    in-plane vertical (v) extent [m] (optional, default)
+        offset_h  shift of the cut centre along h [m] (optional, default 0)
+        offset_v  shift of the cut centre along v [m] (optional, default 0)
+        isotherms list of [name, temperature_K] contours (optional; none drawn
+                  if omitted)
+    """
+    if not isinstance(entry, dict):
+        raise ValueError(
+            f"slice_planes entry must be a mapping with a 'normal' key, got {entry!r}."
+        )
+
+    raw_normal = entry.get('normal')
+    if raw_normal is None or str(raw_normal).strip() == "":
+        raise ValueError("slice_planes entry is missing the required 'normal' key.")
+    normal = str(raw_normal).strip().lower()
+    axis = normal.lstrip('+-')
+    if axis not in ('x', 'y', 'z'):
+        raise ValueError(
+            f"Invalid normal '{raw_normal}': expected one of x,-x,y,-y,z,-z."
+        )
+
+    name = entry.get('name')
+    if not name:
+        # Filename-safe default, e.g. '-y' -> 'neg_y'.
+        name = f"neg_{axis}" if normal.startswith('-') else axis
+
+    def _num(key: str, default: float) -> float:
+        val = entry.get(key)
+        return default if val is None else float(val)
+
+    isotherms = [(str(iso_name), float(iso_val)) for iso_name, iso_val in (entry.get('isotherms') or [])]
+
+    return SlicePlane(
+        name=str(name),
+        normal=normal,
+        width=_num('width', DEFAULT_SLICE_WIDTH),
+        height=_num('height', DEFAULT_SLICE_HEIGHT),
+        offset_h=_num('offset_h', 0.0),
+        offset_v=_num('offset_v', 0.0),
+        isotherms=isotherms,
+    )
 
 
 
@@ -53,11 +113,10 @@ class LocalFSIOManager:
         self._outputs = io_cfg.get('outputs') or []
         self._at_end = io_cfg.get('at_end') or []
         self._profiles_locations = io_cfg.get('profiles_locations') or []
+        # Raw slice_planes entries; parsed per-plane in _save_slices. Each entry
+        # is a plane name or [name, width, height, shift_h, shift_v] (see
+        # _parse_slice_plane).
         self._slice_planes = io_cfg.get('slice_planes') or []
-        # Slice-image geometry (metres). width -> in-plane horizontal axis,
-        # height -> in-plane vertical (build) axis. Centred on the laser spot.
-        self._slice_width = io_cfg.get('slice_width', 0.6e-3)
-        self._slice_height = io_cfg.get('slice_height', 0.2e-3)
 
         if self._interval is None:
             logger.info("io.output_interval is None: periodic outputs disabled; only 'at_end' outputs will be saved.")
@@ -253,38 +312,44 @@ class LocalFSIOManager:
         # 2. Generate slices for each plane
         from fast_heat_solv.io_utils.slices import generate_plots
         slices_dir = self.get_output_path('', subdir='slices')
-        width = self._slice_width
-        height = self._slice_height
-        mat = self.context.mat
-        for plane in slice_planes:
-            # A plane names the two in-plane axes (e.g. 'xz'); the slice normal is
-            # the remaining axis. A single letter ('y') is taken as the normal
-            # directly. So 'xz' -> normal 'y' (scanning x by build z, the
-            # longitudinal melt-pool section).
-            axes = [c for c in str(plane).lower() if c in 'xyz']
-            if len(axes) == 1:
-                normal = axes[0]
-            else:
-                normal = next((a for a in 'xyz' if a not in axes), axes[0])
-            output_file = os.path.join(slices_dir, f"slice_{plane}_step{step:06d}.png")
-            # Centre the cut on the laser spot; align its top with the surface.
-            laser_state = laser_path.get_state(time, 0.0)
-            center = (float(laser_state.x), float(laser_state.y),
-                      self.context.geom.size.z - height / 2)
+        surf_z = self.context.geom.size.z
+        laser_state = laser_path.get_state(time, 0.0)
+        lx, ly = float(laser_state.x), float(laser_state.y)
+        for entry in slice_planes:
+            plane = _parse_slice_plane(entry)
+
+            # Resolve the absolute cut centre here (this is the only place that
+            # knows the laser position); slices.py stays oblivious to the laser.
+            # The centre is the laser spot plus the in-plane offsets. The sign of
+            # the normal is a viewing choice only, so strip it to pick the
+            # horizontal / vertical in-plane axes:
+            #   axis 'z' (xy): h=x, v=y, cut taken at the surface (z = size.z)
+            #   axis 'y' (xz): h=x, v=z, top of the cut aligned with surface
+            #   axis 'x' (yz): h=y, v=z, top of the cut aligned with surface
+            axis = plane.normal.lstrip('+-')
+            if axis == 'z':
+                center = (lx + plane.offset_h, ly + plane.offset_v, surf_z)
+            elif axis == 'y':
+                center = (lx + plane.offset_h, ly,
+                          surf_z - plane.height / 2 + plane.offset_v)
+            else:  # axis == 'x'
+                center = (lx, ly + plane.offset_h,
+                          surf_z - plane.height / 2 + plane.offset_v)
+
+            output_file = os.path.join(slices_dir, f"slice_{plane.name}_step{step:06d}.png")
             generate_plots(
                 xdmf_path=xdmf_path,
                 output_dir=slices_dir,
                 show_ui=False,
                 save_images=True,
-                normal=normal,
+                normal=plane.normal,  # signed; slices.py handles the mirror
                 center=center,
-                width=width,
-                height=height,
-                liquidus=float(mat.T_liquidus),
-                solidus=float(mat.T_solidus),
+                width=plane.width,
+                height=plane.height,
+                isotherms=plane.isotherms,
                 specific_output_filename=output_file
             )
-            logger.info(f"Saved slice {plane} for step {step} to {output_file}")
+            logger.info(f"Saved slice {plane.name} for step {step} to {output_file}")
 
     def load_step(self, step: Union[int, str] = 'latest') -> Optional[Dict[str, Any]]:
         """

@@ -161,7 +161,8 @@ def test_save_slices_writes_png(tmp_path, monkeypatch, tiny_context, linear_stat
 
     m = LocalFSIOManager()
     m.initialize(tiny_context)
-    m._save_slices(0.0, 0, linear_state, laser_path=_Laser(), slice_planes=["xy"])
+    m._save_slices(0.0, 0, linear_state, laser_path=_Laser(),
+                   slice_planes=[{"name": "xy", "normal": "z"}])
 
     png = tmp_path / m.get_output_path("slice_xy_step000000.png", "slices")
     assert png.exists() and png.stat().st_size > 0

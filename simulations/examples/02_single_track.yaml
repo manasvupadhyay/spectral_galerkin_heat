@@ -99,6 +99,10 @@ io:
   profiles_locations:
     - 'laser'
   slice_planes:
-    - xz                      # normal y: longitudinal melt-pool section.
-  slice_width: 0.5e-3         # horizontal (scanning) extent [m].
-  slice_height: 0.06e-3       # vertical (build) extent [m].
+    - name: "longitudinal_section"
+      normal: "y"              # plane x-z: longitudinal melt-pool section.
+      width: 0.5e-3
+      height: 0.06e-3
+      
+      isotherms:
+        - ["T_s", 1674.15]

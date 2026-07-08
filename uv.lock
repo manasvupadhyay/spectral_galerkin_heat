@@ -405,8 +405,10 @@ dev = [
 docs = [
     { name = "myst-parser" },
     { name = "sphinx" },
+    { name = "sphinx-autoapi" },
     { name = "sphinx-design" },
     { name = "sphinx-rtd-theme" },
+    { name = "sphinxcontrib-mermaid" },
 ]
 fenics = [
     { name = "fenics-ufl" },
@@ -462,8 +464,10 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "scipy", specifier = ">=1.17.1" },
     { name = "sphinx", marker = "extra == 'docs'", specifier = ">=8.1.3" },
+    { name = "sphinx-autoapi", marker = "extra == 'docs'", specifier = ">=3.8.0" },
     { name = "sphinx-design", marker = "extra == 'docs'", specifier = ">=0.6.1" },
     { name = "sphinx-rtd-theme", marker = "extra == 'docs'", specifier = ">=3.0.1" },
+    { name = "sphinxcontrib-mermaid", marker = "extra == 'docs'", specifier = ">=2.0.1" },
 ]
 provides-extras = ["gpu", "viz", "fenics", "docs", "dev"]
 

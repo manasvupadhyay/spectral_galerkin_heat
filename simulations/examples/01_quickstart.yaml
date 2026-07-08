@@ -97,8 +97,27 @@ io:
   at_end: [full_volume, slices, profiles]  # Output types saved once, at the end.
   profiles_locations:         # Where 1-D profiles are sampled.
     - 'laser'                 #   'laser', 'hotspot', or an explicit [x, y] in metres.
-  slice_planes:               # Cut planes for the 2-D slice images. A plane names its
-    - xz                      #   two in-plane axes; the normal is the remaining axis.
-                              #   'xz' => normal y: the longitudinal melt-pool section.
-  slice_width: 0.5e-3         # Slice extent along the horizontal (scanning) axis [m].
-  slice_height: 0.08e-3       # Slice extent along the vertical (build) axis [m].
+  slice_planes:               # Cut planes for the 2-D slice images.
+    - name: "longitudinal_section"    # `normal` is required;  all other keys default.
+      normal: "y"           #   normal    signed axis (x,-x,y,-y,z,-z). The plane
+      width: 0.5e-3         #   width     in-plane horizontal (h) extent [m].
+      height: 0.08e-3       #   height    in-plane vertical (v) extent [m].
+      offset_h: 0.0         #   offset_h  shift the cut centre along h [m].
+      offset_v: 0.0         #   offset_v  shift the cut centre along v [m].
+      isotherms:            #   isotherms named [name, temperature K] contours to draw.
+        - ["T_s", 1674.15]
+        - ["T_l", 1697.15]
+    - name: "surface_topview"
+      normal: "z"             # plane x-y, at the surface.
+      width: 0.5e-3
+      height: 0.3e-3
+      offset_h: -0.05e-3
+      offset_v: 0.0
+      isotherms:
+        - ["T_s", 1674.15]
+    - name: "transverse_section"
+      normal: "x"             # plane y-z.
+      width: 0.3e-3
+      height: 0.08e-3
+      isotherms:
+        - ["T_s", 1674.15]

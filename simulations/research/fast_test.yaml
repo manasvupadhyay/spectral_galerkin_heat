@@ -74,4 +74,7 @@ io:
   profiles_locations:
     - 'hotspot'                       # 'laser', 'hotspot', or explicit [x, y] in m
   slice_planes:
-    - yz
+    - name: "transverse_section"
+      normal: "x"
+      isotherms:
+        - ["T_s", 1674.15]
