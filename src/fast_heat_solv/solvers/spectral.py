@@ -53,6 +53,10 @@ class SpectralSolver(HeatSolver):
         self,
         backend: MathBackend,
         context: Optional[SimulationContext] = None,
+        *,
+        mixing_omega: Optional[float] = None,
+        convergence_tol: Optional[float] = None,
+        max_picard_iter: Optional[int] = None,
     ):
         """
         Initialize the SpectralSolver.
@@ -65,14 +69,20 @@ class SpectralSolver(HeatSolver):
             A dataclass containing complete simulation parameters. May also be
             provided (or overridden) later via :meth:`initialize`. By default
             None.
+        mixing_omega, convergence_tol, max_picard_iter : float/int, optional
+            Picard fixed-point controls (under-relaxation factor, relative
+            convergence tolerance, iteration cap). 
         """
         self.backend: MathBackend = backend
         self.context: Optional[SimulationContext] = context
         self.state = None
-        xp = backend.xp
-        self.mixing_omega = xp.float32(0.1)
-        self.convergence_tol = xp.float32(1e-4)
-        self.max_picard_iter: int = 30
+        # Picard fixed-point controls. 
+        #   explicit constructor arg  >  config (NumParams)  >  built-in default.
+
+        self._omega_req = mixing_omega
+        self._tol_req = convergence_tol
+        self._maxit_req = max_picard_iter
+        self._resolve_picard_params(backend.xp.float32)
         self.track_picard_history: bool = False
         self.picard_history = []
         # Temperature-dependent property correction.
@@ -90,6 +100,24 @@ class SpectralSolver(HeatSolver):
         # Beam profile (shape + energy-conserving normalization); resolved from
         # the config in initialize(). Default keeps a usable solver before then.
         self._profile = build_laser_profile("gaussian")
+
+    def _resolve_picard_params(self, dtype) -> None:
+        """
+        Shared by the constructor (values available before ``initialize``) and
+        :meth:`initialize`
+        """
+        num = self.context.num if self.context is not None else None
+
+        def pick(explicit, cfg_attr, default):
+            if explicit is not None:
+                return explicit
+            if num is not None and getattr(num, cfg_attr, None) is not None:
+                return getattr(num, cfg_attr)
+            return default
+
+        self.mixing_omega = dtype(pick(self._omega_req, "picard_omega", 0.1))
+        self.convergence_tol = dtype(pick(self._tol_req, "picard_tol", 1e-4))
+        self.max_picard_iter = int(pick(self._maxit_req, "max_picard_iter", 30))
 
     def initialize(self, context: Optional[SimulationContext] = None) -> Any:
         """
@@ -136,18 +164,10 @@ class SpectralSolver(HeatSolver):
             cell_integrated=laser.cell_integrated,
         )
 
-        # Mixing/convergence scalars at the configured precision.
-        self.mixing_omega = dtype(0.1)
-        self.convergence_tol = dtype(1e-4)
-
-        # Optional Picard-iteration overrides from the config (simulation block,
-        # parsed onto NumParams). Absent keys keep the defaults above.
-        if getattr(num, "max_picard_iter", None) is not None:
-            self.max_picard_iter = int(num.max_picard_iter)
-        if getattr(num, "picard_tol", None) is not None:
-            self.convergence_tol = dtype(num.picard_tol)
-        if getattr(num, "picard_omega", None) is not None:
-            self.mixing_omega = dtype(num.picard_omega)
+        # Mixing/convergence/iteration-cap scalars at the configured precision,
+        # with optional overrides from the config (simulation block, parsed
+        # onto NumParams). Absent keys keep the solver defaults.
+        self._resolve_picard_params(dtype)
 
         # Initial condition: mean T in mode (0,0,0)
         self.state.a = xp.zeros((num.nz, num.ny, num.nx), dtype=dtype)
