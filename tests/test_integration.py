@@ -307,11 +307,11 @@ def test_cpu_float32_float64_consistency_e2e(tmp_path, monkeypatch):
     max_abs_diff = float(np.max(np.abs(T64 - T32)))
     # Both runs solve the identical problem, the fields should be equal
     # up to the float32 round-off Vs. the float64 run.
-    # Bounded 1e-4 * T_max
-    # (~0.39 K for T_max ~3860 K).
-    assert max_abs_diff == pytest.approx(0.0, abs=1e-5 * T_max), (
+    # Bounded 1e-5 * T_max
+    # (~0.039 K for T_max ~3860 K).
+    assert max_abs_diff <= 1e-5 * T_max, (
         f"float32 and float64 fields differ by {max_abs_diff:.3e} K, "
-        f"exceeding the 1e-4 * T_max = {1e-4 * T_max:.3e} K bound"
+        f"exceeding the 1e-5 * T_max = {1e-5 * T_max:.3e} K bound"
     )
 
 
@@ -427,7 +427,7 @@ def test_cpu_gpu_equivalence_e2e(tmp_path, monkeypatch):
     # 1e-5 * T_max (T_max > 3000 K for this config).
     T_max = float(T_cpu.max())
     max_abs_diff = float(np.max(np.abs(T_gpu - T_cpu)))
-    assert max_abs_diff == pytest.approx(0.0, abs=1e-5 * T_max), (
+    assert max_abs_diff <= 1e-5 * T_max, (
         f"CPU/GPU temperature fields differ by {max_abs_diff:.3e} K, "
         f"exceeding the 1e-5 * T_max = {1e-5 * T_max:.3e} K bound"
     )
