@@ -61,12 +61,47 @@ def test_get_value_unwraps_unit_dict_and_passes_scalars():
     assert _get_value(7.0) == 7.0                              
 
 
+def test_get_value_converts_units():
+    # Test conversion from a non-SI unit to the target SI unit.
+    val_in_mm = {"value": 500.0, "unit": "mm"}
+    assert _get_value(val_in_mm, target_unit="m") == pytest.approx(0.5)
+
+    # Test when units are already correct (no-op conversion).
+    val_in_m = {"value": 0.5, "unit": "m"}
+    assert _get_value(val_in_m, target_unit="m") == pytest.approx(0.5)
+
+    # Test incompatible units should raise.
+    # pint.errors.DimensionalityError is the specific exception.
+    try:
+        import pint
+        ErrorType = pint.errors.DimensionalityError
+    except (ImportError, AttributeError):
+        ErrorType = Exception  # Fallback for environments without pint
+    with pytest.raises(ErrorType):
+        _get_value(val_in_mm, target_unit="kg")
+
+@pytest.mark.parametrize("bad_input", [{}, {"unit": "W"}, None, "a string"])
+def test_get_value_invalid_input_raises(bad_input):
+    # _get_value should raise if the input is not a number or a valid value dict.
+    with pytest.raises((KeyError, TypeError)):
+        _get_value(bad_input)
+
+
 def test_unit_dict_values_unwrapped_in_parse():
     # Same {value, unit}, but test end-to-end through from_dict: a
     # laser power written as {value: 250, unit: "W"} must reach LaserParams.power
     # as the plain number 250
     ctx = SimulationContext.from_dict(_cfg(laser={"power_nominal": {"value": 250.0, "unit": "W"}}))
     assert ctx.laser.power == pytest.approx(250.0)
+
+
+def test_unit_conversion_in_parse():
+    # This test demonstrates the goal of unit-aware parsing.
+    # It provides density in g/cm^3 and expects the parser to convert it to kg/m^3.
+    # 1 g/cm^3 = 1000 kg/m^3.
+    cfg = _cfg(material={"rho": {"value": 7.9575, "unit": "g/cm**3"}})
+    ctx = SimulationContext.from_dict(cfg)
+    assert ctx.mat.rho == pytest.approx(7957.5)
 
 
 def test_material_diff_is_k_over_rho_cp():
@@ -96,11 +131,11 @@ def test_from_dict_preserves_geom_axis_order():
 # Temperature-dependent properties (material.model)
 # ---------------------------------------------------------------------------
 
-# Typical 316L branches (ascending powers), matching the FE reference.
-_K_BR = {"solid": [9.248, 0.01571], "liquid": [12.41, 0.003279]}
-_RHO_BR = {"solid": [8084.2, -0.42086, -3.8942e-5],
-           "liquid": [7432.7, 0.039338, -1.8007e-4]}
-_CP_BR = {"solid": [458.98, 0.1328], "liquid": [769.86]}
+# Typical 316L branch expressions, matching the FE reference.
+_K_BR = {"solid": "9.248 + 0.01571 * T", "liquid": "12.41 + 0.003279 * T"}
+_RHO_BR = {"solid": "8084.2 - 0.42086 * T - 3.8942e-5 * T**2",
+           "liquid": "7432.7 + 0.039338 * T - 1.8007e-4 * T**2"}
+_CP_BR = {"solid": "458.98 + 0.1328 * T", "liquid": "769.86"}
 
 
 def test_scalar_material_has_no_model():

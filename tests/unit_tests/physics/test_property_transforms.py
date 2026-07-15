@@ -75,9 +75,9 @@ def _const_model(k=15.0, rho=7900.0, cp=500.0):
     from fast_heat_solv.core.properties import MaterialModel
     # Branch form (so is_constant flagging is exercised) with equal branches.
     return MaterialModel.from_config(
-        {"k": {"solid": [k], "liquid": [k]},
-         "rho": {"solid": [rho], "liquid": [rho]},
-         "Cp": {"solid": [cp], "liquid": [cp]}},
+        {"k": {"solid": str(k), "liquid": str(k)},
+         "rho": {"solid": str(rho), "liquid": str(rho)},
+         "Cp": {"solid": str(cp), "liquid": str(cp)}},
         1674.15, 1697.15,
     )
 
@@ -119,7 +119,7 @@ def test_capacity_correction_zero_for_steady_field():
 
     st = _state(10, 8, 6)
     model = MaterialModel.from_config(
-        {"k": {"solid": [9.248, 0.01571], "liquid": [12.41, 0.003279]},
+        {"k": {"solid": "9.248 + 0.01571 * T", "liquid": "12.41 + 0.003279 * T"},
          "rho": 7900.0, "Cp": 500.0},
         1674.15, 1697.15,
     )
@@ -148,7 +148,7 @@ def test_capacity_correction_zero_for_steady_field():
 def _kdep_model():
     from fast_heat_solv.core.properties import MaterialModel
     return MaterialModel.from_config(
-        {"k": {"solid": [9.248, 0.01571], "liquid": [12.41, 0.003279]},
+        {"k": {"solid": "9.248 + 0.01571 * T", "liquid": "12.41 + 0.003279 * T"},
          "rho": 7900.0, "Cp": 500.0},
         1674.15, 1697.15,
     )

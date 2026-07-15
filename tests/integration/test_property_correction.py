@@ -25,12 +25,12 @@ from fast_heat_solv.core.parameters import SimulationContext
 # 316L typical T-dependent properties
 # Branch properties carry an in-block `reference` (½(min+max) over [T0, T_boil]),
 # required for any genuinely T-dependent branch material.
-_K_BR = {"solid": [9.248, 0.01571], "liquid": [12.41, 0.003279],
+_K_BR = {"solid": "9.248 + 0.01571 * T", "liquid": "12.41 + 0.003279 * T",
          "reference": 24.5075, "unit": "W/(m.K)"}
-_RHO_BR = {"solid": [8084.2, -0.42086, -3.8942e-5],
-           "liquid": [7432.7, 0.039338, -1.8007e-4],
+_RHO_BR = {"solid": "8084.2 - 0.42086 * T - 3.8942e-5 * T**2",
+           "liquid": "7432.7 + 0.039338 * T - 1.8007e-4 * T**2",
            "reference": 6896.2365, "unit": "kg/m^3"}
-_CP_BR = {"solid": [458.98, 0.1328], "liquid": [769.86],
+_CP_BR = {"solid": "458.98 + 0.1328 * T", "liquid": "769.86",
           "reference": 633.8752, "unit": "J/(kg.K)"}
 
 _T_S, _T_L, _T0 = 1674.15, 1697.15, 293.0
@@ -107,9 +107,9 @@ def test_null_constant_branches_match_scalar(constant_velocity_laser):
     k0, rho0, cp0 = 15.0, 7900.0, 500.0
     scalar = _cfg(_base_material(k=k0, rho=rho0, Cp=cp0))
     const_branch = _cfg(_base_material(
-        k={"solid": [k0], "liquid": [k0]},
-        rho={"solid": [rho0], "liquid": [rho0]},
-        Cp={"solid": [cp0], "liquid": [cp0]},
+        k={"solid": str(k0), "liquid": str(k0)},
+        rho={"solid": str(rho0), "liquid": str(rho0)},
+        Cp={"solid": str(cp0), "liquid": str(cp0)},
     ))
 
     laser = constant_velocity_laser(_X_START, _LY / 2, _V, 0.0, _P)

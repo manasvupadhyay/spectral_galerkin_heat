@@ -36,8 +36,8 @@ domain:
     value: [100, 60, 96]              # dz ~ 1.25 um resolves the mushy zone.
     unit: ""
 
-# OPTIONAL moving fine-mesh ROI that resolves the sharp mushy-zone gradients
-# under the beam. Omit the whole `fine_mesh` section to evaluate latent heat on
+# OPTIONAL moving fine-mesh that resolves the sharp mushy-zone gradients
+# under the beam. Omit the whole `fine_mesh` parameters to evaluate latent heat on
 # the coarse main grid (the default: lower memory, faster, coarser mushy zone).
 fine_mesh:
   refinement: 2                          # Fine cells per coarse cell, per axis.
@@ -45,29 +45,28 @@ fine_mesh:
 
 material:
   name: "316L"
-  # Temperature-dependent reference 316L properties. Each branch lists
-  # polynomial coefficients [c0, c1, c2, ...] in ascending powers of T (SI units);
-  # the solid and liquid branches are blended across the mushy zone by the liquid
-  # fraction f_l(T). (Constant examples 01/02 use the solid branch at T0 = 293 K.)
+  # Temperature-dependent reference 316L properties. Each branch is an expression
+  # of T in standard Python. The solid and liquid branches are blended across
+  # the mushy zone by the liquid fraction f_l(T). 
   #
   # `reference` (REQUIRED for each T-dependent property) is the constant reference
-  # property k_bar, rho_bar, Cp_bar, determines the fluctuation k'=k(T)-k̄. 
+  # property k_bar, rho_bar, Cp_bar, determines the fluctuation k'=k(T)-k̄.
   # Recommendation:
   # the average of the property's two extrema over [T0, T_boil] — centering it
   # matters for convergence. Omitting will raise an error.
   k:
-    solid:  [9.248, 0.01571]        # k_s  = 9.248 + 0.01571*T
-    liquid: [12.41, 0.003279]       # k_l  = 12.41 + 0.003279*T
+    solid: "9.248 + 0.01571 * T"
+    liquid: "12.41 + 0.003279 * T"
     reference: 24.5075              # ½(min k + max k) over [T0, T_boil]
     unit: "W/(m.K)"
   rho:
-    solid:  [8084.2, -0.42086, -3.8942e-5]   # rho_s = 8084.2 - 0.42086*T - 3.8942e-5*T^2
-    liquid: [7432.7, 0.039338, -1.8007e-4]   # rho_l = 7432.7 + 0.039338*T - 1.8007e-4*T^2
+    solid: "8084.2 - 0.42086 * T - 3.8942e-5 * T**2"
+    liquid: "7432.7 + 0.039338 * T - 1.8007e-4 * T**2"
     reference: 6896.2365           # ½(min rho + max rho) over [T0, T_boil]
     unit: "kg/m^3"
   Cp:
-    solid:  [458.98, 0.1328]        # c_s  = 458.98 + 0.1328*T
-    liquid: [769.86]                # c_l  = 769.86 (constant)
+    solid: "458.98 + 0.1328 * T"
+    liquid: "769.86"                # constant branch (a bare-number string)
     reference: 633.8752            # ½(min Cp + max Cp) over [T0, T_boil]
     unit: "J/(kg.K)"
   L_f:

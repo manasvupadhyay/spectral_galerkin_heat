@@ -1,6 +1,6 @@
 """Tests for temperature-dependent properties (core/properties.py).
 
-The polynomial-branch values are checked against the typical 316L expressions
+The branch-expression values are checked against the typical 316L expressions
 used by the finite-element reference solver; keeping these in sync is what lets
 the spectral solver be compared to the FE field.
 """
@@ -14,14 +14,14 @@ from fast_heat_solv.core.properties import (
     liquid_fraction,
 )
 
-# Typical 316L values (ascending powers of T), matching the FE reference.
+# Typical 316L values, matching the FE reference.
 _T_S, _T_L = 1674.15, 1697.15
-_RHO_S = [8084.2, -0.42086, -3.8942e-5]
-_RHO_L = [7432.7, 0.039338, -1.8007e-4]
-_CP_S = [458.98, 0.1328]
-_CP_L = [769.86]
-_K_S = [9.248, 0.01571]
-_K_L = [12.41, 0.003279]
+_RHO_S = "8084.2 - 0.42086 * T - 3.8942e-5 * T**2"
+_RHO_L = "7432.7 + 0.039338 * T - 1.8007e-4 * T**2"
+_CP_S = "458.98 + 0.1328 * T"
+_CP_L = "769.86"
+_K_S = "9.248 + 0.01571 * T"
+_K_L = "12.41 + 0.003279 * T"
 
 
 def _fe_rho(T):
@@ -111,14 +111,23 @@ def test_missing_branch_falls_back():
     assert float(k(3000.0)) == pytest.approx(9.248 + 0.01571 * 3000.0, rel=1e-6)
 
 
-def test_empty_branch_rejected():
+def test_malformed_expression_rejected():
     with pytest.raises(ValueError):
-        TempProperty.from_config({"solid": [], "liquid": _K_L}, _T_S, _T_L)
+        TempProperty.from_config({"solid": "1.0 +", "liquid": _K_L}, _T_S, _T_L)
 
 
-def test_nonfinite_coeff_rejected():
+def test_disallowed_name_rejected():
+    # Only 'T' (and pi/e) are valid names; anything else must be rejected —
+    # this is the whitelist that keeps the expression evaluator safe.
     with pytest.raises(ValueError):
-        TempProperty.from_config({"solid": [1.0, np.nan], "liquid": _K_L}, _T_S, _T_L)
+        TempProperty.from_config({"solid": "os.system('echo hi')", "liquid": _K_L},
+                                  _T_S, _T_L)
+
+
+def test_disallowed_function_rejected():
+    with pytest.raises(ValueError):
+        TempProperty.from_config({"solid": "__import__('os').system('x')",
+                                   "liquid": _K_L}, _T_S, _T_L)
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +186,7 @@ def test_model_mixed_scalar_and_branches():
 def test_model_is_constant_when_branches_all_constant():
     # Branches present but numerically constant on both phases.
     m = MaterialModel.from_config(
-        {"k": {"solid": [15.0], "liquid": [15.0]}, "rho": 7900.0, "Cp": 500.0},
+        {"k": {"solid": "15.0", "liquid": "15.0"}, "rho": 7900.0, "Cp": 500.0},
         _T_S, _T_L,
     )
     assert m is not None

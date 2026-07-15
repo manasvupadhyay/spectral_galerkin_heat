@@ -95,16 +95,17 @@ Physical material parameters.
 * **T_boil**: Boiling temperature (`K`)
 
 **Temperature-dependent properties.** `k`, `rho` and `Cp` may instead be given as
-temperature-dependent polynomials with separate solid and liquid branches, blended by the liquid
-fraction. Each branch is a list of coefficients in *ascending* powers of `T` (SI units):
+temperature-dependent expressions with separate solid and liquid branches, blended by the liquid
+fraction. Each branch is a string math expression of `T` (SI units, standard Python syntax 
+`**` for exponentiation, not `^`), not limited to polynomials:
 
 ```yaml
 k:
-  solid:  [9.248, 0.01571]     # k_s = 9.248 + 0.01571*T
-  liquid: [12.41, 0.003279]    # k_l = 12.41 + 0.003279*T
+  solid:  "9.248 + 0.01571 * T"
+  liquid: "12.41 + 0.003279 * T"
 Cp:
-  solid:  [458.98, 0.1328]
-  liquid: [769.86]             # constant branch (single coefficient)
+  solid:  "458.98 + 0.1328 * T"
+  liquid: "769.86"             # constant branch (a bare-number string)
 ```
 
 Using this form makes the solve non-linear; set the Picard keys under `simulation`

@@ -39,11 +39,50 @@ if TYPE_CHECKING:
 # Scalar values may be a plain number or a {value, unit} mapping (see _get_value).
 
 
-def _get_value(v):
-    """Accept a plain scalar or a {value: ..., unit: ...} mapping."""
-    if isinstance(v, dict):
-        return v['value']
-    return v
+import pint
+
+# Create a single unit registry instance to be reused.
+_ureg = pint.UnitRegistry()
+
+
+def _get_value(raw_val: Any, target_unit: str | None = None) -> float:
+    """
+    Extracts a numeric value from a config field, with unit conversion.
+
+    If raw_val is a dict with a "unit" and a target_unit is provided, it
+    converts the value to the target unit. Otherwise, it returns the value
+    as-is, assuming it's already in the correct units.
+
+    Args:
+        raw_val: The raw value from the configuration dictionary. Can be a
+            scalar or a dict like {"value": 1.0, "unit": "m"}.
+        target_unit: The desired pint-compatible unit string (e.g., "kg / m**3").
+
+    Returns:
+        The numeric value, converted to the target unit if applicable.
+
+    Raises:
+        pint.errors.DimensionalityError: If the provided unit is incompatible
+            with the target unit.
+        KeyError: If the dict is malformed (e.g., missing "value").
+    """
+    if isinstance(raw_val, dict):
+        # This handles both simple {value, unit} dicts and the more complex
+        # T-dependent property dicts which also contain a "value" for reference.
+        value = raw_val["value"]
+        unit = raw_val.get("unit")
+
+        if unit and target_unit:
+            quantity = _ureg.Quantity(value, unit)
+            return float(quantity.to(target_unit).magnitude)
+
+        return float(value)
+
+    if isinstance(raw_val, (int, float)):
+        return float(raw_val)
+
+    # Raise for other types that are not directly convertible to float.
+    raise TypeError(f"Cannot extract a value from type {type(raw_val)}")
 
 
 # Floating-point precisions the solver supports, keyed by config name.
@@ -194,7 +233,7 @@ class MaterialParams:
         by default 0.0.
     model : MaterialModel, optional
         Temperature-dependent property model (``k(T)``, ``rho(T)``, ``c(T)``
-        polynomial branches). ``None`` for a constant-property material, in which
+        solid/liquid branch expressions). ``None`` for a constant-property material, in which
         case the solver uses the scalar ``rho``/``k``/``Cp`` directly. When
         present, the scalar ``rho``/``k``/``Cp`` fields hold the user-supplied
         **reference constants** (each property's in-block ``reference:`` key) that
@@ -397,10 +436,15 @@ class SimulationContext:
         sim_cfg = cfg.get('simulation', {})
         domain_cfg = cfg.get('domain', {})
         sim_backend = sim_cfg.get('backend', 'cpu').lower()
-        Lx, Ly, Lz = _get_value(domain_cfg['size'])
-        nx, ny, nz = _get_value(domain_cfg['mesh'])
-        t_end = float(_get_value(sim_cfg.get('duration', 0.01)))
-        dt_nominal = float(real_t(_get_value(sim_cfg['dt'])))
+        
+        size_vec = domain_cfg['size']
+        Lx, Ly, Lz = [float(_get_value(v, "m")) for v in size_vec]
+        
+        nx, ny, nz = domain_cfg['mesh']
+        
+        t_end = float(_get_value(sim_cfg.get('duration', 0.01), "s"))
+        dt_nominal = float(real_t(_get_value(sim_cfg['dt'], "s")))
+        
         n_steps = round(t_end / dt_nominal)
         dt = t_end / n_steps  # corrected: n_steps * dt == t_end exactly
 
@@ -412,7 +456,7 @@ class SimulationContext:
             t_end=t_end,
             n_steps=n_steps,
             dt_nominal=dt_nominal,
-            update_interval=float(sim_cfg.get('update_interval', 1e-3)),
+            update_interval=float(_get_value(sim_cfg.get('update_interval', 1e-3), "s")),
             max_picard_iter=(int(sim_cfg['max_picard_iter'])
                              if sim_cfg.get('max_picard_iter') is not None else None),
             picard_tol=(float(sim_cfg['picard_tol'])
@@ -423,50 +467,41 @@ class SimulationContext:
         )
 
         geom_params = GeomParams(
-            size=Vec3(float(Lx), float(Ly), float(Lz)),
+            size=Vec3(Lx, Ly, Lz),
             n=Vec3(int(nx), int(ny), int(nz)),
         )
 
-        # Fine mesh — the refined, laser-following sub-box (optional). When the
-        # ``fine_mesh`` section is absent, ``fine`` is None and the latent heat is
-        # evaluated on the main (coarse) grid: lower memory and faster for small
-        # runs. Providing the section switches on the localized fine-box path
-        # (needed to resolve the mushy zone on large production grids).
         fine_cfg = cfg.get('fine_mesh', None)
         if fine_cfg is None:
             fine_params = None
         else:
             default_box = (0.9e-3, 0.9e-3, 0.04e-3)
-            box = fine_cfg.get('box_size', default_box)
+            box_val = fine_cfg.get('box_size', default_box)
+            box_size_m = [float(_get_value(v, "m")) for v in box_val]
+            
             fine_params = FineMeshParams(
-                refinement=int(fine_cfg.get('refinement', 4)),
-                box_size=Vec3(float(box[0]), float(box[1]), float(box[2])),
+                refinement=int(_get_value(fine_cfg.get('refinement', 4))),
+                box_size=Vec3(box_size_m[0], box_size_m[1], box_size_m[2]),
             )
 
         mat_cfg = cfg.get('material', {})
-        T_solidus = real_t(_get_value(mat_cfg.get('T_solidus', 0.0)))
-        T_liquidus = real_t(_get_value(mat_cfg.get('T_liquidus', 0.0)))
-        T0 = real_t(_get_value(mat_cfg.get('T0', 0.0)))
-        T_boil = real_t(_get_value(mat_cfg.get('T_boil', 0.0)))
+        T_solidus = real_t(_get_value(mat_cfg.get('T_solidus', 0.0), "K"))
+        T_liquidus = real_t(_get_value(mat_cfg.get('T_liquidus', 0.0), "K"))
+        T0 = real_t(_get_value(mat_cfg.get('T0', 0.0), "K"))
+        T_boil = real_t(_get_value(mat_cfg.get('T_boil', 0.0), "K"))
 
-        # Temperature-dependent properties: build a MaterialModel when any of
-        # k/rho/Cp is given as polynomial branches.
         material_model = MaterialModel.from_config(
             mat_cfg, float(T_solidus), float(T_liquidus)
         )
         if material_model is None:
-            # Fully scalar material — the scalars are the reference constants.
-            rho_ref = real_t(_get_value(mat_cfg['rho']))
-            k_ref = real_t(_get_value(mat_cfg['k']))
-            cp_ref = real_t(_get_value(mat_cfg['Cp']))
+            rho_ref = real_t(_get_value(mat_cfg['rho'], "kg / m**3"))
+            k_ref = real_t(_get_value(mat_cfg['k'], "W / (m * K)"))
+            cp_ref = real_t(_get_value(mat_cfg['Cp'], "J / (kg * K)"))
         else:
-            # The reference constants k̄, ρ̄, C̄p matter a lot for
-            # convergence, which is why we force an explicit, deliberate choice.
-            # A scalar or constant-branch property is its own reference.
             refs, missing = {}, []
-            for cfg_key, tprop in (('k', material_model.k),
-                                   ('rho', material_model.rho),
-                                   ('Cp', material_model.c)):
+            for cfg_key, tprop, unit in (('k', material_model.k, "W / (m * K)"),
+                                         ('rho', material_model.rho, "kg / m**3"),
+                                         ('Cp', material_model.c, "J / (kg * K)")):
                 spec = mat_cfg.get(cfg_key)
                 is_branch = (isinstance(spec, dict)
                              and ('solid' in spec or 'liquid' in spec))
@@ -474,7 +509,7 @@ class SimulationContext:
                     if 'reference' not in spec:
                         missing.append(cfg_key)
                         continue
-                    refs[cfg_key] = real_t(_get_value(spec['reference']))
+                    refs[cfg_key] = real_t(_get_value(spec['reference'], unit))
                 else:
                     refs[cfg_key] = real_t(float(tprop(float(T0))))
             if missing:
@@ -499,26 +534,26 @@ class SimulationContext:
             rho=rho_ref,
             k=k_ref,
             Cp=cp_ref,
-            L_f=real_t(_get_value(mat_cfg.get('L_f', 0.0))),
+            L_f=real_t(_get_value(mat_cfg.get('L_f', 0.0), "J / kg")),
             T_solidus=T_solidus,
             T_liquidus=T_liquidus,
-            Pa=real_t(_get_value(mat_cfg.get('Pa', 0.0))),
-            R_v=real_t(_get_value(mat_cfg.get('R_v', 0.0))),
+            Pa=real_t(_get_value(mat_cfg.get('Pa', 0.0), "Pa")),
+            R_v=real_t(_get_value(mat_cfg.get('R_v', 0.0), "J / (kg * K)")),
             T_boil=T_boil,
-            DeltaH_LV=real_t(_get_value(mat_cfg.get('DeltaH_LV', 0.0))),
+            DeltaH_LV=real_t(_get_value(mat_cfg.get('DeltaH_LV', 0.0), "J / kg")),
             T0=T0,
-            h_conv=real_t(_get_value(mat_cfg.get('h_conv', 0.0))),
+            h_conv=real_t(_get_value(mat_cfg.get('h_conv', 0.0), "W / (m**2 * K)")),
             model=material_model,
         )
 
         laser_cfg = cfg.get('laser', {})
         laser_params = LaserParams(
-            radius=real_t(_get_value(laser_cfg['radius'])),
+            radius=real_t(_get_value(laser_cfg['radius'], "m")),
             absorptivity=real_t(_get_value(laser_cfg['absorptivity'])),
-            power=real_t(_get_value(laser_cfg['power_nominal'])),
+            power=real_t(_get_value(laser_cfg['power_nominal'], "W")),
             profile=str(laser_cfg.get('profile', 'gaussian')),
-            r_x=real_t(_get_value(laser_cfg.get('r_x', 0.0))),
-            r_y=real_t(_get_value(laser_cfg.get('r_y', 0.0))),
+            r_x=real_t(_get_value(laser_cfg.get('r_x', 0.0), "m")),
+            r_y=real_t(_get_value(laser_cfg.get('r_y', 0.0), "m")),
             super_gaussian_order=float(_get_value(laser_cfg.get('super_gaussian_order', 2.0))),
             cell_integrated=bool(laser_cfg.get('cell_integrated', False)),
         )

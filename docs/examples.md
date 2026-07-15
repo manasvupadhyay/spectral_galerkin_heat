@@ -118,7 +118,7 @@ Melt-pool section for the single track. The two red contours are the solidus and
 ## 3. Temperature-dependent properties
 
 {download}`03_nonlinear_tdep.yaml <../simulations/examples/03_nonlinear_tdep.yaml>` lets the
-conductivity, density and specific heat vary with temperature (solid and liquid polynomial
+conductivity, density and specific heat vary with temperature (solid and liquid expression
 branches blended by the liquid fraction), making the problem non-linear. Each step is solved by a
 Picard iteration that also resolves the property correction (see {doc}`theory`):
 
