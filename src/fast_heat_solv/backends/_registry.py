@@ -59,9 +59,19 @@ def register_backend(name: str) -> Callable[[F], F]:
     -------
     Callable
         A decorator that registers its argument and returns it unchanged.
+
+    Raises
+    ------
+    ValueError
+        If *name* is already registered
     """
 
     def decorator(factory: F) -> F:
+        if name in _BACKEND_FACTORIES:
+            raise ValueError(
+                f"Backend {name!r} is already registered "
+                f"({_BACKEND_FACTORIES[name]!r}); cannot overwrite it."
+            )
         _BACKEND_FACTORIES[name] = factory
         return factory
 
