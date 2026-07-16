@@ -11,7 +11,7 @@ Internal helpers (prefixed with ``_``) are not part of the public API.
 
 **Internal helpers in spectral_helpers:**
 - ``_C_coef``: Normalization coefficients (private)
-- ``_cp``: CuPy import (private)
+- ``_calculate_subgrid_indices``: Fine-mesh box centering (private)
 """
 
 __all__ = [

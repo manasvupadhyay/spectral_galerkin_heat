@@ -104,7 +104,8 @@ See {download}`example_orchestrator.py <../simulations/example_orchestrator.py>`
 
 ```python
 from fast_heat_solv.core.parameters import SimulationContext
-from fast_heat_solv.solvers.spectral_cpu import SpectralSolverCPU
+from fast_heat_solv.solvers.spectral import SpectralSolver
+from fast_heat_solv.backends import NumpyBackend
 
 # 1. Define configuration as a plain Python dictionary
 config = {
@@ -120,7 +121,7 @@ config = {
 context = SimulationContext.from_dict(config)
 
 # 3. Instantiate and initialize the solver directly
-solver = SpectralSolverCPU()
+solver = SpectralSolver(NumpyBackend())  # use get_backend("cupy") for GPU
 state = solver.initialize(context)
 
 # 4. Custom time loop driven by your orchestrator

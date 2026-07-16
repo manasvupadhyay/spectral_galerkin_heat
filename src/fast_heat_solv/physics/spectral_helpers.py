@@ -15,29 +15,10 @@
 # limitations under the License.
 
 import numpy as np
-import os
 import scipy.fft
 
-try:
-    import cupy as _cp
-except ImportError:
-    _cp = None
-
-# Default to CPU kernels for module-level access, but dispatch properly in functions
-import fast_heat_solv.physics.spectral_cpu_kernels as kernels
-
-
-def _get_array_module(arr):
-    if cp is not None and hasattr(arr, 'device'): # Check if it's a cupy array
-        return cp
-    return np
-
-def _get_kernels(arr):
-    xp = _get_array_module(arr)
-    if xp == cp:
-         import fast_heat_solv.physics.spectral_gpu_kernels as gpu_kernels
-         return gpu_kernels
-    return kernels
+from fast_heat_solv.physics import spectral_ops as _ops
+from fast_heat_solv.backends.base import to_host
 
 
 def _C_coef(N, L, xp=np):
@@ -61,6 +42,45 @@ def _C_coef(N, L, xp=np):
     C = xp.sqrt(2.0 / L) * xp.ones(N)
     C[0] = xp.sqrt(1.0 / L)
     return C
+
+
+def _calculate_subgrid_indices(pos, dx, n_total_fine, n_box):
+    """Center a box of ``n_box`` cells around a physical position.
+
+    Backend-agnostic: operates on plain Python scalars, so it is shared by both
+    the CPU and GPU kernel modules.
+
+    Parameters
+    ----------
+    pos : float
+        Physical position (laser center).
+    dx : float
+        Grid spacing.
+    n_total_fine : int
+        Total number of points in the fine grid.
+    n_box : int
+        Number of points in the active box.
+
+    Returns
+    -------
+    tuple of int
+        ``(idx_start, idx_end, idx_relative)`` — box start/end indices and the
+        position's index relative to the box start.
+    """
+    # Nearest global index for the center position, clamped to the fine grid.
+    idx_global = int(round(max(0.0, min(pos / dx, n_total_fine - 1))))
+
+    # Desired start index to center the box, clamped to [0, max_start].
+    idx_start = idx_global - n_box // 2
+    max_start = max(0, n_total_fine - n_box)
+    idx_start = max(0, min(idx_start, max_start))
+    idx_end = idx_start + n_box
+
+    # Position index relative to the box start, clamped to the box.
+    idx_relative = idx_global - idx_start
+    idx_relative = max(0, min(idx_relative, n_box - 1))
+
+    return idx_start, idx_end, idx_relative
 
 def _cosine_basis_along_axis(n_modes, length, coords):
     """
@@ -106,24 +126,20 @@ def reconstruct_temperature_volume(a, SsState):
         Full volumetric temperature field array.
     """
 
-    if hasattr(a, 'get'):
-        a = a.get()  # Move to CPU if it's a CuPy array
-    
+    a = to_host(a)
+    out_dtype = a.dtype  # precision-transparent: follow the modes array
+
     grid = SsState.grid
 
-    Bx = grid.Bx_recon  # (modes_x, nx_points)
-    By = grid.By_recon  # (modes_y, ny_points)
-    Bz = grid.Bz_recon  # (modes_z, nz_points)
-    # Validate reconstruction bases
-
-    if Bx is None or By is None or Bz is None:
-        raise RuntimeError("Reconstruction bases not initialized on SsState. Call prepare_full_reconstruction()/full_reconstruction() first.")
+    if grid.B_recon is None:
+        raise RuntimeError("Reconstruction bases not initialized on SsState. Call prepare_full_reconstruction() first.")
+    Bx, By, Bz = grid.B_recon  # (modes_axis, n_points+1) for each axis
 
     T_step1 = np.tensordot(a, Bx, axes=(2, 0))  # (N_z, N_y, N_x)
     T_step2 = np.tensordot(T_step1, By, axes=(1, 0))  # (nz, nx, ny)
     T_full = np.tensordot(T_step2, Bz, axes=(0, 0))  # (N_x, N_y, N_z)
 
-    return T_full.astype(np.float32)
+    return T_full.astype(out_dtype)
 
 def reconstruct_temperature_DCT(a, SsState):
     """Reconstruct node-centered temperature field using DCT type I.
@@ -148,29 +164,26 @@ def reconstruct_temperature_DCT(a, SsState):
     a : ndarray, shape (N_z, N_y, N_x)
         Spectral coefficients (CuPy arrays are moved to CPU automatically).
     SsState : fast_heat_solv.physics.spectral_cpu_kernels.SpectralSolverState
-        Must have ``grid.Cm``, ``grid.Cn``, ``grid.Cp`` normalization vectors.
+        Must have ``grid.C`` normalization tuple (C[0]=x, C[1]=y, C[2]=z).
 
     Returns
     -------
-    T : ndarray, shape (N_x+1, N_y+1, N_z+1), dtype float32
-        Node-centred temperature field.
+    T : ndarray, shape (N_x+1, N_y+1, N_z+1)
+        Node-centred temperature field, in the modes array's float dtype.
     """
-    if hasattr(a, 'get'):
-        a = a.get()
+    a = to_host(a)
+    out_dtype = a.dtype  # precision-transparent: follow the modes array
 
     grid = SsState.grid
     nz, ny, nx = a.shape
 
     # ── Fused 1-D weight vectors: normalization × DCT-I halving ──────
     # Combined weight[i] = C[i] * (0.5 if i>0 else 1.0)
-    # Precomputed as 1-D float32 vectors (6 elements total).
-    # Handle both numpy and cupy arrays (GPU solver uses cupy)
-    Cm = grid.Cm.get() if hasattr(grid.Cm, 'get') else grid.Cm
-    Cn = grid.Cn.get() if hasattr(grid.Cn, 'get') else grid.Cn
-    Cp = grid.Cp.get() if hasattr(grid.Cp, 'get') else grid.Cp
-    wx = np.array(Cm, dtype=np.float32); wx[1:] *= 0.5
-    wy = np.array(Cn, dtype=np.float32); wy[1:] *= 0.5
-    wz = np.array(Cp, dtype=np.float32); wz[1:] *= 0.5
+    # Precomputed as 1-D vectors (6 elements total).
+    wx, wy, wz = (np.array(to_host(c), dtype=out_dtype) for c in grid.C)
+    wx[1:] *= 0.5
+    wy[1:] *= 0.5
+    wz[1:] *= 0.5
 
     # ── Scale on contiguous memory, then copy once into padded ───────
     # Working on a contiguous copy of `a` is faster than writing
@@ -180,7 +193,7 @@ def reconstruct_temperature_DCT(a, SsState):
     b *= wy[None, :, None]
     b *= wx[None, None, :]
 
-    padded = np.empty((nz + 1, ny + 1, nx + 1), dtype=np.float32)
+    padded = np.empty((nz + 1, ny + 1, nx + 1), dtype=out_dtype)
     padded[:nz, :ny, :nx] = b            # single contiguous-to-strided copy
     padded[nz, :, :] = 0.0               # zero the 3 padding planes
     padded[:, ny, :] = 0.0
@@ -192,7 +205,7 @@ def reconstruct_temperature_DCT(a, SsState):
                         overwrite_x=True, workers=-1)
 
     # ── Transpose (nz+1, ny+1, nx+1) → (N_x+1, N_y+1, N_z+1) ─────────
-    return np.ascontiguousarray(T.transpose(2, 1, 0), dtype=np.float32)
+    return np.ascontiguousarray(T.transpose(2, 1, 0), dtype=out_dtype)
 
 def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
     """
@@ -216,36 +229,28 @@ def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
     ndarray
         Array of shape N with temperature values at each queried point.
     """
-    coords = np.asarray(coords, dtype=np.float32)
+    # Bring modal/spectral coefficients to host to avoid mixed NumPy/CuPy
+    # arithmetic in these CPU-based helpers.
+    grid = SsState.grid
+    a_np = to_host(a)
+    out_dtype = a_np.dtype  # precision-transparent: follow the modes array
+
+    coords = np.asarray(coords, dtype=out_dtype)
     if coords.ndim != 2 or coords.shape[1] != 3:
         raise ValueError("coords must be of shape (N, 3)")
 
-    x_vals = np.clip(coords[:, 0], 0.0, geom.Lx)
-    y_vals = np.clip(coords[:, 1], 0.0, geom.Ly)
-    z_vals = np.clip(coords[:, 2], 0.0, geom.Lz)
+    x_vals = np.clip(coords[:, 0], 0.0, geom.size.x)
+    y_vals = np.clip(coords[:, 1], 0.0, geom.size.y)
+    z_vals = np.clip(coords[:, 2], 0.0, geom.size.z)
 
-    # Ensure modal coefficient arrays and spectral coefficients are NumPy arrays
-    # This avoids mixed NumPy/CuPy arithmetic when CPU-based helpers are used.
-    def _to_numpy(x):
-        # If x is a CuPy array with .get(), move to host; otherwise use np.asarray
-        if hasattr(x, 'get') and callable(x.get):
-            return np.asarray(x.get())
-        return np.asarray(x)
-    
-    # Support both old monolithic state and new decoupled state
-    grid = SsState.grid if hasattr(SsState, 'grid') else SsState
+    C = [to_host(c) for c in grid.C]
 
-    Cm = _to_numpy(getattr(grid, 'Cm', None))
-    Cn = _to_numpy(getattr(grid, 'Cn', None))
-    Cp = _to_numpy(getattr(grid, 'Cp', None))
-    a_np = _to_numpy(a).astype(np.float32)
-
-    Bx = (Cm[:, None] * _cosine_basis_along_axis(num.nx, geom.Lx, x_vals)).astype(np.float32)
-    By = (Cn[:, None] * _cosine_basis_along_axis(num.ny, geom.Ly, y_vals)).astype(np.float32)
-    Bz = (Cp[:, None] * _cosine_basis_along_axis(num.nz, geom.Lz, z_vals)).astype(np.float32)
+    Bx = (C[0][:, None] * _cosine_basis_along_axis(num.nx, geom.size.x, x_vals)).astype(out_dtype)
+    By = (C[1][:, None] * _cosine_basis_along_axis(num.ny, geom.size.y, y_vals)).astype(out_dtype)
+    Bz = (C[2][:, None] * _cosine_basis_along_axis(num.nz, geom.size.z, z_vals)).astype(out_dtype)
     temps = np.einsum('pnm,pi,ni,mi->i', a_np, Bz, By, Bx, optimize=True)
 
-    return temps.astype(np.float32)
+    return temps.astype(out_dtype)
 
 
 def save_temp_profiles(
@@ -272,30 +277,28 @@ def save_temp_profiles(
 
     # 1. Determine Sample Center (Intersection Point)
     # Use the TOP surface (z = Lz) as reference
-    z_top = float(geom.Lz)
+    z_top = float(geom.size.z)
 
 
     if center == "hotspot":
-        # Scan low-res surface to find approximate max
-        # This requires reconstructing a 2D slice first
-        # For efficiency, we reconstruct T_surf from kernels
-        loc_kernels = _get_kernels(a)
-        T_surf = loc_kernels.reconstruct_surface_temperature(a, SsState)
-        
+        # Scan low-res surface to find approximate max. ``reconstruct_surface_temperature``
+        # is backend-agnostic (it takes the array module + FFT hook from SsState),
+        # so no runtime CPU/GPU dispatch is needed here.
+        T_surf = _ops.reconstruct_surface_temperature(a, SsState)
+
         # Ensure T_surf is on CPU for coordinate extraction
-        if hasattr(T_surf, 'get'):
-            T_surf = T_surf.get()
-            
+        T_surf = to_host(T_surf)
+
         iy_idx, ix_idx = np.unravel_index(np.argmax(T_surf), T_surf.shape)
         
-        # Handle decoupled state or monolithic state
-        grid = SsState.grid if hasattr(SsState, 'grid') else SsState
-        x_center = grid.x[ix_idx] 
+        grid = SsState.grid
+        x_center = grid.x[ix_idx]
         y_center = grid.y[iy_idx]
         
-        # Helper to safely scalarize
+        # Bring a NumPy/CuPy 0-d scalar to a host Python float.
         def _scalar(val):
-            if hasattr(val, 'item'): return val.item()
+            if hasattr(val, 'item'):
+                return val.item()
             return val
             
         x_center = _scalar(x_center)
@@ -309,35 +312,24 @@ def save_temp_profiles(
         raise ValueError(f"Unknown center method: {center}")
 
     # Clamp to domain
-    x_center = float(np.clip(x_center, 0.0, geom.Lx))
-    y_center = float(np.clip(y_center, 0.0, geom.Ly))
+    x_center = float(np.clip(x_center, 0.0, geom.size.x))
+    y_center = float(np.clip(y_center, 0.0, geom.size.y))
 
-    # 2. Generate Dense Sampling Coordinates
-    coords_x = np.linspace(0.0, geom.Lx, num_points, dtype=np.float64)
-    coords_y = np.linspace(0.0, geom.Ly, num_points, dtype=np.float64)
-    coords_z = np.linspace(0.0, geom.Lz, num_points, dtype=np.float64)
-
-    # 3. Create Point Clouds for Batched Evaluation
-    # Line along X through (y_c, z_top)
-    points_x = np.column_stack((coords_x, np.full_like(coords_x, y_center), np.full_like(coords_x, z_top)))
-    # Line along Y through (x_c, z_top)
-    points_y = np.column_stack((np.full_like(coords_y, x_center), coords_y, np.full_like(coords_y, z_top)))
-    # Line along Z through (x_c, y_c)
-    points_z = np.column_stack((np.full_like(coords_z, x_center), np.full_like(coords_z, y_center), coords_z))
-
-    # 4. Evaluate using Spectral Kernel
-    # (reconstruct_temperature_volume_at_points should be available in kernels import or helper)
-    # Using the one currently in helpers until refactor is 100% complete
-    T_x = reconstruct_temperature_volume_at_points(a, num, geom, SsState, points_x)
-    T_y = reconstruct_temperature_volume_at_points(a, num, geom, SsState, points_y)
-    T_z = reconstruct_temperature_volume_at_points(a, num, geom, SsState, points_z)
-
-    # 5. Return computed profiles as a dictionary
-    return {
-        'x': (coords_x, T_x),
-        'y': (coords_y, T_y),
-        'z': (coords_z, T_z)
-    }
+    # 2-4. Generate coords, build point clouds, and evaluate temperature for each axis
+    # Each entry: (key, domain_length, (fixed_x_or_None, fixed_y_or_None, fixed_z_or_None))
+    axes_cfg = [
+        ('x', geom.size.x, (None, y_center, z_top)),
+        ('y', geom.size.y, (x_center, None, z_top)),
+        ('z', geom.size.z, (x_center, y_center, None)),
+    ]
+    profiles = {}
+    for key, L_axis, fixed in axes_cfg:
+        coords = np.linspace(0.0, L_axis, num_points, dtype=np.float64)
+        pts = np.empty((num_points, 3), dtype=np.float64)
+        for col, v in enumerate(fixed):
+            pts[:, col] = coords if v is None else v
+        profiles[key] = (coords, reconstruct_temperature_volume_at_points(a, num, geom, SsState, pts))
+    return profiles
     
     
 

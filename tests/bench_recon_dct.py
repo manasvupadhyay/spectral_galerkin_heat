@@ -22,8 +22,9 @@ config = {
 
 ctx = SimulationContext.from_dict(config)
 
-from fast_heat_solv.solvers.spectral_cpu import SpectralSolverCPU
-solver = SpectralSolverCPU()
+from fast_heat_solv.solvers.spectral import SpectralSolver
+from fast_heat_solv.backends import NumpyBackend
+solver = SpectralSolver(NumpyBackend())
 state = solver.initialize(ctx)
 
 # Run a few steps to get non-trivial coefficients

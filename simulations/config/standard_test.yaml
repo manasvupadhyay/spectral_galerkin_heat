@@ -14,6 +14,11 @@ domain:
   size: [0.005, 0.0025, 0.00125]  # [Lx, Ly, Lz] in m
   mesh: [1000, 500, 100]         # [nx, ny, nz]
 
+# Moving fine-mesh ROI for latent-heat / nonlinear terms (optional; defaults shown).
+fine_mesh:
+  refinement: 4                        # fine cells per coarse cell, per axis
+  box_size: [0.9e-3, 0.9e-3, 0.04e-3]  # [Lx_box, Ly_box, Lz_box] in m (x/y footprint, z depth)
+
 material:
   name: "316L"
   rho:

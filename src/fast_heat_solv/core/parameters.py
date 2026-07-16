@@ -21,9 +21,11 @@ __author__ = "Théo Andrieux"
 __copyright__ = "Copyright 2026, LMS, École Polytechnique"
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Any, Dict, TYPE_CHECKING
+from typing import Optional, Any, Dict, TYPE_CHECKING
 import numpy as np
 import os
+
+from fast_heat_solv.core.vector import Vec3
 
 if TYPE_CHECKING:
     from fast_heat_solv.core.laser import LaserPath
@@ -33,6 +35,38 @@ def _get_value(v):
     if isinstance(v, dict):
         return v['value']
     return v
+
+
+# Floating-point precisions the solver supports, keyed by config name.
+_SUPPORTED_DTYPES = {"float32": np.float32, "float64": np.float64}
+
+
+def _resolve_dtype(name):
+    """Resolve a precision name (e.g. ``"float32"``) to a NumPy scalar type.
+
+    Parameters
+    ----------
+    name : str
+        Precision name from the ``simulation.dtype`` config key.
+
+    Returns
+    -------
+    type
+        ``numpy.float32`` or ``numpy.float64``.
+
+    Raises
+    ------
+    ValueError
+        If *name* is not a supported precision.
+    """
+    key = str(name).lower()
+    try:
+        return _SUPPORTED_DTYPES[key]
+    except KeyError:
+        choices = ", ".join(sorted(_SUPPORTED_DTYPES))
+        raise ValueError(
+            f"Unknown dtype: {name!r}. Choose one of: {choices}."
+        ) from None
 
 
 @dataclass
@@ -61,6 +95,20 @@ class NumParams:
         by default 1e-3.
     save_all : bool, optional
         If True, save the full temperature field at every time step;  default False.
+    dtype : type, optional
+        Floating-point precision for the solver arrays (``numpy.float32`` or
+        ``numpy.float64``), by default ``numpy.float32``. Set via the
+        ``simulation.dtype`` config key.
+    max_picard_iter : int, optional
+        Cap on the spectral solver's fixed-point (Picard) iterations per step.
+        ``None`` (default) lets the solver use its built-in default. Set via the
+        ``simulation.max_picard_iter`` config key.
+    picard_tol : float, optional
+        Relative convergence tolerance for the Picard loop. ``None`` (default)
+        uses the solver default. Set via ``simulation.picard_tol``.
+    picard_omega : float, optional
+        Under-relaxation (mixing) factor for the Picard loop. ``None`` (default)
+        uses the solver default. Set via ``simulation.picard_omega``.
     """
     dt: float
     nx: int
@@ -71,6 +119,10 @@ class NumParams:
     dt_nominal: float = 0.0
     update_interval: float = 1e-3
     save_all: bool = False
+    dtype: Any = np.float32
+    max_picard_iter: Optional[int] = None
+    picard_tol: Optional[float] = None
+    picard_omega: Optional[float] = None
 
 @dataclass
 class MaterialParams:
@@ -159,61 +211,27 @@ class MaterialParams:
 
 @dataclass
 class GeomParams:
-    """
-    Rectangular domain [0, Lx] × [0, Ly] × [0, Lz] with uniform spectral grid.
-    Derived fields (x, y, z, dx, dy, dz) computed in __post_init__.
+    """Rectangular domain ``[0, Lx] × [0, Ly] × [0, Lz]`` with a uniform spectral grid.
+
+    The geometry is stored as grouped ``(x, y, z)`` triples (:class:`Vec3`)
+    rather than loose scalars, so e.g. the spacing is ``geom.d.x`` /
+    ``geom.d`` (the whole triple) instead of ``geom.dx``.
 
     Attributes
     ----------
-    Lx : float
-        Domain size in x direction (meters).
-    Ly : float
-        Domain size in y direction (meters).
-    Lz : float
-        Domain size in z direction (meters).
-    nx : int
-        Number of grid points in x.
-    ny : int
-        Number of grid points in y.
-    nz : int
-        Number of grid points in z.
-    x : np.ndarray
-        1D x coordinates (computed, cell-centered).
-    y : np.ndarray
-        1D y coordinates (computed, cell-centered).
-    z : np.ndarray
-        1D z coordinates (computed, node-centered).
-    dx : float
-        Grid spacing in x = Lx / nx.
-    dy : float
-        Grid spacing in y = Ly / ny.
-    dz : float
-        Grid spacing in z = Lz / nz.
+    size : Vec3
+        Domain extent ``(Lx, Ly, Lz)`` in metres.
+    n : Vec3
+        Mesh counts ``(nx, ny, nz)``.
+    d : Vec3
+        Grid spacing ``(dx, dy, dz) = size / n`` (computed in ``__post_init__``).
     """
-    Lx: float
-    Ly: float
-    Lz: float
-    nx: int
-    ny: int
-    nz: int
-    
-    # Grid arrays (initialized in __post_init__ or property)
-    x: np.ndarray = field(init=False, default=None)
-    y: np.ndarray = field(init=False, default=None)
-    z: np.ndarray = field(init=False, default=None)
-    dx: float = field(init=False)
-    dy: float = field(init=False)
-    dz: float = field(init=False)
+    size: Vec3
+    n: Vec3
+    d: Vec3 = field(init=False)
 
     def __post_init__(self):
-        self.dx = self.Lx / self.nx
-        self.dy = self.Ly / self.ny
-        self.dz = self.Lz / self.nz
-        
-        self.x = np.linspace(0.0, self.Lx, self.nx, endpoint=False).astype(np.float32)
-        self.y = np.linspace(0.0, self.Ly, self.ny, endpoint=False).astype(np.float32)
-        # Check if z endpoint should be included or not. Usually for spectral in Z we might want specific BCs.
-        self.z = np.linspace(0.0, self.Lz, self.nz).astype(np.float32)
+        self.d = self.size / self.n
 
 @dataclass
 class LaserParams:
@@ -230,10 +248,61 @@ class LaserParams:
     power : float, optional
         Nominal/maximum laser power (watts), by default 0.0. Actual power may vary
         via :class:`LaserPath.get_state`.
+    profile : str, optional
+        Beam-profile name (``"gaussian"`` / ``"flat_top"`` / ``"super_gaussian"``)
+        resolved to a :class:`fast_heat_solv.core.laser.LaserProfile`, by default
+        ``"gaussian"``. Set via the ``laser.profile`` config key.
+    r_x, r_y : float, optional
+        Beam radii along x and y (metres). Default to ``radius`` (circular beam);
+        set both for an elliptical beam. Set via ``laser.r_x`` / ``laser.r_y``.
+    super_gaussian_order : float, optional
+        Super-Gaussian order ``n`` used when ``profile == "super_gaussian"``
+        (``2`` = Gaussian, large = flat-top), by default 2.0. Set via
+        ``laser.super_gaussian_order``.
     """
     radius: float
     absorptivity: float
     power: float = 0.0
+    profile: str = "gaussian"
+    r_x: float = 0.0
+    r_y: float = 0.0
+    super_gaussian_order: float = 2.0
+
+    def __post_init__(self):
+        # Default to a circular beam (r_x = r_y = radius) when axes are unset.
+        if not self.r_x:
+            self.r_x = self.radius
+        if not self.r_y:
+            self.r_y = self.radius
+
+    @property
+    def ref_area(self) -> float:
+        """Reference area ``r_x · r_y`` (``r_b²`` for a circular beam).
+
+        Used by :meth:`LaserProfile.peak_intensity` to enforce
+        ``∬ q dA = A·P``.
+        """
+        return self.r_x * self.r_y
+
+@dataclass
+class FineMeshParams:
+    """Moving fine-mesh parameters — a refined, laser-following sub-box of the domain — for latent-heat / nonlinear terms.
+
+    The solver reconstructs temperature on a refined box that tracks the laser,
+    to resolve the sharp mushy-zone gradients the coarse spectral grid cannot.
+
+    Attributes
+    ----------
+    refinement : int
+        Per-axis cell-refinement factor of the fine mesh relative to the global
+        spectral grid (fine spacing ``= geom.d / refinement``), by default 4.
+    box_size : Vec3
+        Extent of the refined, laser-following sub-box in metres ``(Lx_box, Ly_box, Lz_box)``: the
+        x/y extents span the laser footprint, the z extent is the near-surface
+        depth. By default ``Vec3(0.9e-3, 0.9e-3, 0.04e-3)``.
+    """
+    refinement: int = 4
+    box_size: Vec3 = Vec3(0.9e-3, 0.9e-3, 0.04e-3)
 
 @dataclass
 class SimulationContext:
@@ -258,18 +327,23 @@ class SimulationContext:
         Solver method ('spectral' or 'fem'), by default 'spectral'.
     backend : str, optional
         Compute backend ('cpu' or 'gpu'), by default 'cpu'.
+    fine : FineMeshParams, optional
+        Moving fine-mesh parameters — the refined, laser-following sub-box
+        (refinement, box extents). Defaults to
+        :class:`FineMeshParams` defaults.
     """
     num: 'NumParams'
     mat: 'MaterialParams'
     geom: 'GeomParams'
     laser: 'LaserParams'
     laser_path: 'LaserPath' # Use forward reference
-    
+
     # Existing fields
     io: Dict[str, Any]  # Flat dict with new keys
     # Execution configuration
     method: str = "spectral"  # "spectral" or "fem"
     backend: str = "cpu"      # "cpu" or "gpu"
+    fine: 'FineMeshParams' = field(default_factory=FineMeshParams)
 
     @classmethod
     def from_dict(cls, cfg: Dict[str, Any], config_dir: Optional[str] = None) -> 'SimulationContext':
@@ -290,9 +364,9 @@ class SimulationContext:
         Returns
         -------
         SimulationContext
-            A populated simulation context ready to initialize solver factories.
+            A populated simulation context ready to build and initialize a solver.
         """
-        real_t = np.float32
+        real_t = _resolve_dtype(cfg.get('simulation', {}).get('dtype', 'float32'))
         sim_cfg = cfg.get('simulation', {})
         domain_cfg = cfg.get('domain', {})
         sim_method = sim_cfg.get('method', 'spectral').lower()
@@ -312,12 +386,29 @@ class SimulationContext:
             t_end=t_end,
             n_steps=n_steps,
             dt_nominal=dt_nominal,
-            update_interval=float(sim_cfg.get('update_interval', 1e-3))
+            update_interval=float(sim_cfg.get('update_interval', 1e-3)),
+            dtype=real_t,
+            max_picard_iter=(int(sim_cfg['max_picard_iter'])
+                             if sim_cfg.get('max_picard_iter') is not None else None),
+            picard_tol=(float(sim_cfg['picard_tol'])
+                        if sim_cfg.get('picard_tol') is not None else None),
+            picard_omega=(float(sim_cfg['picard_omega'])
+                          if sim_cfg.get('picard_omega') is not None else None),
         )
 
         geom_params = GeomParams(
-            Lx=float(Lx), Ly=float(Ly), Lz=float(Lz),
-            nx=int(nx), ny=int(ny), nz=int(nz)
+            size=Vec3(float(Lx), float(Ly), float(Lz)),
+            n=Vec3(int(nx), int(ny), int(nz)),
+        )
+
+        # Fine mesh — the refined, laser-following sub-box (optional; defaults
+        # reproduce the previous hardcoded box).
+        fine_cfg = cfg.get('fine_mesh', {})
+        default_box = (0.9e-3, 0.9e-3, 0.04e-3)
+        box = fine_cfg.get('box_size', default_box)
+        fine_params = FineMeshParams(
+            refinement=int(fine_cfg.get('refinement', 4)),
+            box_size=Vec3(float(box[0]), float(box[1]), float(box[2])),
         )
 
         mat_cfg = cfg.get('material', {})
@@ -341,7 +432,11 @@ class SimulationContext:
         laser_params = LaserParams(
             radius=real_t(_get_value(laser_cfg['radius'])),
             absorptivity=real_t(_get_value(laser_cfg['absorptivity'])),
-            power=real_t(_get_value(laser_cfg.get('power_nominal')))
+            power=real_t(_get_value(laser_cfg.get('power_nominal'))),
+            profile=str(laser_cfg.get('profile', 'gaussian')),
+            r_x=real_t(_get_value(laser_cfg.get('r_x', 0.0))),
+            r_y=real_t(_get_value(laser_cfg.get('r_y', 0.0))),
+            super_gaussian_order=float(_get_value(laser_cfg.get('super_gaussian_order', 2.0))),
         )
         
         # Laser Path
@@ -364,4 +459,4 @@ class SimulationContext:
                 laser_path = GCodeLaserPath(gcode_file, initial_position=initial_position)
                 
         io_cfg = cfg.get('io', {})
-        return cls(num=num_params, mat=mat_params, geom=geom_params, laser=laser_params, laser_path=laser_path, io=io_cfg, method=sim_method, backend=sim_backend)
+        return cls(num=num_params, mat=mat_params, geom=geom_params, laser=laser_params, laser_path=laser_path, io=io_cfg, method=sim_method, backend=sim_backend, fine=fine_params)

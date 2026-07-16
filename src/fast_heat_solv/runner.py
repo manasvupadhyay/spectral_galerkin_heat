@@ -37,9 +37,8 @@ import multiprocessing
 import platform
 from typing import Optional, Dict, Any
 
-from fast_heat_solv.factories.base import SimulationFactory
 from fast_heat_solv.solvers.base import HeatSolver
-from fast_heat_solv.io_utils.io_base import IOManager
+from fast_heat_solv.io_utils.spectral_fs_io import LocalFSIOManager
 from fast_heat_solv.core.parameters import SimulationContext
 
 logger = logging.getLogger(__name__)
@@ -57,7 +56,7 @@ def initialize_run_logging(config: Dict[str, Any], yaml_path: str, out_dir: str)
     log lines produced by the Python logging handlers.
 
     Must be called after the output directory tree has been created by
-    ``IOManager.initialize()``.
+    ``LocalFSIOManager.initialize()``.
 
     Parameters
     ----------
@@ -212,34 +211,35 @@ class StandaloneHeatRunner:
 
     Responsibilities
     ----------------
-    * Creates solver and I/O manager via the supplied factory.
     * Runs the time-stepping loop (``while t < t_end``).
-    * Delegates periodic / end-of-run output to the ``IOManager``.
+    * Delegates periodic / end-of-run output to the ``LocalFSIOManager``.
     * Prints ETA / telemetry to the logger.
 
     Parameters
     ----------
     context : SimulationContext
         Fully populated simulation parameters.
-    factory : SimulationFactory
-        Abstract factory that produces backend-specific components.
+    heat_solver : HeatSolver
+        The solver to run; build one with
+        :func:`fast_heat_solv.solvers.build_solver`.
+    io_manager : LocalFSIOManager, optional
+        Output handler. Defaults to a fresh :class:`LocalFSIOManager`.
     """
 
     def __init__(
         self,
         context: SimulationContext,
-        factory: SimulationFactory,
+        heat_solver: HeatSolver,
+        io_manager: Optional[LocalFSIOManager] = None,
         config: Optional[Dict[str, Any]] = None,
         yaml_path: Optional[str] = None,
     ):
         self.context = context
-        self.factory = factory
         self.config = config        # raw YAML dict — used for the run header
         self.yaml_path = yaml_path  # absolute path to the original YAML file
 
-        # Create components via factory
-        self.heat_solver: HeatSolver = self.factory.create_heat_solver()
-        self.io_manager: IOManager = self.factory.create_io_manager()
+        self.heat_solver: HeatSolver = heat_solver
+        self.io_manager: LocalFSIOManager = io_manager or LocalFSIOManager()
 
     # ------------------------------------------------------------------
     #  Telemetry helpers

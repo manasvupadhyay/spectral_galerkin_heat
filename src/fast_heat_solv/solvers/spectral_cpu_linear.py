@@ -82,13 +82,12 @@ class SpectralSolverCPULinear(HeatSolver):
         mat = self.context.mat  
 
         # Initialize spectral solver state
-        self.state = kernels.SpectralSolverState(mat, geom, num)
+        self.state = kernels.SpectralSolverState(mat, geom, num, self.context.fine)
 
         # Initial condition: mean T in mode (0,0,0)
-        self.state.a = np.zeros((num.nz, num.ny, num.nx), dtype=np.float32)
-        # Use T0 if present, else default to 293.0
-        T0 = getattr(mat, 'T0', 293.0)
-        self.state.a[0,0,0] = T0 * np.sqrt(geom.Lx * geom.Ly * geom.Lz)
+        self.state.a = np.zeros((num.nz, num.ny, num.nx), dtype=self.state.dtype)
+        T0 = mat.T0
+        self.state.a[0,0,0] = T0 * np.sqrt(geom.size.x * geom.size.y * geom.size.z)
 
         return self.state
 
@@ -116,7 +115,6 @@ class SpectralSolverCPULinear(HeatSolver):
         # Unpack context attributes
         context = self.context
         geom = context.geom
-        mat = context.mat
         laser_params = context.laser
         laser_path: LaserPath = context.laser_path
         
@@ -146,7 +144,7 @@ class SpectralSolverCPULinear(HeatSolver):
         # Reconstruct surface temperature just for metrics
         T_temp = kernels.reconstruct_surface_temperature(buffers.a_temp, SsState)
         
-        P_laser = np.sum(q_las) * geom.dx * geom.dy
+        P_laser = np.sum(q_las) * geom.d.x * geom.d.y
 
         # Metrics for logging/diagnostics
         metrics = {
@@ -176,8 +174,9 @@ class SpectralSolverCPULinear(HeatSolver):
         if self.state is None or self.context is None:
             raise RuntimeError("Solver must be initialized before calling set_state().")
         geom = self.context.geom
-        T = np.asarray(temperature_field, dtype=np.float32)
-        scale = np.sqrt(np.float32(geom.dx * geom.dy * geom.dz))
+        dtype = self.state.dtype
+        T = np.asarray(temperature_field, dtype=dtype)
+        scale = dtype(np.sqrt(geom.d.x * geom.d.y * geom.d.z))
         self.state.a = kernels.DCT_II(T) * scale
 
     def finalize(self) -> None:
