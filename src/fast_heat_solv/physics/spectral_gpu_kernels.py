@@ -255,73 +255,80 @@ def _source_term(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
     )
 
 
+@cuda.jit(device=True, inline=True)
+def _g_x_at(T, kp, z, y, x, nx, inv_dx):
+    """``g_x = k'(T) ∂T/∂x`` at one point, recomputed on demand.
+
+    """
+    if x == 0:
+        dtx = (T[z, y, 1] - T[z, y, 0]) * inv_dx
+    elif x == nx - 1:
+        dtx = (T[z, y, nx - 1] - T[z, y, nx - 2]) * inv_dx
+    else:
+        dtx = (T[z, y, x + 1] - T[z, y, x - 1]) * (0.5 * inv_dx)
+    return kp[z, y, x] * dtx
+
+
+@cuda.jit(device=True, inline=True)
+def _g_y_at(T, kp, z, y, x, ny, inv_dy):
+    """``g_y = k'(T) ∂T/∂y`` at one point, recomputed on demand."""
+    if y == 0:
+        dty = (T[z, 1, x] - T[z, 0, x]) * inv_dy
+    elif y == ny - 1:
+        dty = (T[z, ny - 1, x] - T[z, ny - 2, x]) * inv_dy
+    else:
+        dty = (T[z, y + 1, x] - T[z, y - 1, x]) * (0.5 * inv_dy)
+    return kp[z, y, x] * dty
+
+
+@cuda.jit(device=True, inline=True)
+def _g_z_at(T, kp, z, y, x, nz, inv_dz):
+    """``g_z = k'(T) ∂T/∂z`` at one point, recomputed on demand."""
+    if z == 0:
+        dtz = (T[1, y, x] - T[0, y, x]) * inv_dz
+    elif z == nz - 1:
+        dtz = (T[nz - 1, y, x] - T[nz - 2, y, x]) * inv_dz
+    else:
+        dtz = (T[z + 1, y, x] - T[z - 1, y, x]) * (0.5 * inv_dz)
+    return kp[z, y, x] * dtz
+
+
 @cuda.jit
-def _grad_kprime_kernel(T, kp, inv_dx, inv_dy, inv_dz, gx, gy, gz):
-    """First pass of the divergence-form correction: ``g = k'(T) ∇T``.
+def _corr_source_fused_kernel(T, kp, ap, Tprev,
+                              inv_dx, inv_dy, inv_dz, inv_dt, out):
+    """``f = ∇·(k'∇T) - a'(T) (T - T_prev)/dt`` in a single pass.
 
-    Central differences in the interior, first-order one-sided at the faces —
-    bit-for-bit the ``numpy.gradient(.., edge_order=1)`` stencil used by the CPU
-    fallback, fused with the ``k'`` multiply so ``∇T`` is never materialised.
-
-    Thread layout maps the fastest thread index to the contiguous ``x`` axis so
-    the ±1 neighbour reads coalesce (see ``_correction_source`` launch config).
     """
     x, y, z = cuda.grid(3)
     nz, ny, nx = T.shape
     if z < nz and y < ny and x < nx:
         if x == 0:
-            dtx = (T[z, y, 1] - T[z, y, 0]) * inv_dx
+            dgx = (_g_x_at(T, kp, z, y, 1, nx, inv_dx)
+                   - _g_x_at(T, kp, z, y, 0, nx, inv_dx)) * inv_dx
         elif x == nx - 1:
-            dtx = (T[z, y, nx - 1] - T[z, y, nx - 2]) * inv_dx
+            dgx = (_g_x_at(T, kp, z, y, nx - 1, nx, inv_dx)
+                   - _g_x_at(T, kp, z, y, nx - 2, nx, inv_dx)) * inv_dx
         else:
-            dtx = (T[z, y, x + 1] - T[z, y, x - 1]) * (0.5 * inv_dx)
+            dgx = (_g_x_at(T, kp, z, y, x + 1, nx, inv_dx)
+                   - _g_x_at(T, kp, z, y, x - 1, nx, inv_dx)) * (0.5 * inv_dx)
         if y == 0:
-            dty = (T[z, 1, x] - T[z, 0, x]) * inv_dy
+            dgy = (_g_y_at(T, kp, z, 1, x, ny, inv_dy)
+                   - _g_y_at(T, kp, z, 0, x, ny, inv_dy)) * inv_dy
         elif y == ny - 1:
-            dty = (T[z, ny - 1, x] - T[z, ny - 2, x]) * inv_dy
+            dgy = (_g_y_at(T, kp, z, ny - 1, x, ny, inv_dy)
+                   - _g_y_at(T, kp, z, ny - 2, x, ny, inv_dy)) * inv_dy
         else:
-            dty = (T[z, y + 1, x] - T[z, y - 1, x]) * (0.5 * inv_dy)
+            dgy = (_g_y_at(T, kp, z, y + 1, x, ny, inv_dy)
+                   - _g_y_at(T, kp, z, y - 1, x, ny, inv_dy)) * (0.5 * inv_dy)
         if z == 0:
-            dtz = (T[1, y, x] - T[0, y, x]) * inv_dz
+            dgz = (_g_z_at(T, kp, 1, y, x, nz, inv_dz)
+                   - _g_z_at(T, kp, 0, y, x, nz, inv_dz)) * inv_dz
         elif z == nz - 1:
-            dtz = (T[nz - 1, y, x] - T[nz - 2, y, x]) * inv_dz
+            dgz = (_g_z_at(T, kp, nz - 1, y, x, nz, inv_dz)
+                   - _g_z_at(T, kp, nz - 2, y, x, nz, inv_dz)) * inv_dz
         else:
-            dtz = (T[z + 1, y, x] - T[z - 1, y, x]) * (0.5 * inv_dz)
-        k = kp[z, y, x]
-        gx[z, y, x] = k * dtx
-        gy[z, y, x] = k * dty
-        gz[z, y, x] = k * dtz
-
-
-@cuda.jit
-def _div_minus_capacity_kernel(gx, gy, gz, ap, T, Tprev,
-                               inv_dx, inv_dy, inv_dz, inv_dt, out):
-    """Second pass: ``f = ∇·g - a'(T) (T - T_prev)/dt``.
-
-    Same ``numpy.gradient`` stencil applied to ``g``, with the capacity source
-    fused in so the whole real-space forcing is one extra read/write pass.
-    """
-    x, y, z = cuda.grid(3)
-    nz, ny, nx = T.shape
-    if z < nz and y < ny and x < nx:
-        if x == 0:
-            dgx = (gx[z, y, 1] - gx[z, y, 0]) * inv_dx
-        elif x == nx - 1:
-            dgx = (gx[z, y, nx - 1] - gx[z, y, nx - 2]) * inv_dx
-        else:
-            dgx = (gx[z, y, x + 1] - gx[z, y, x - 1]) * (0.5 * inv_dx)
-        if y == 0:
-            dgy = (gy[z, 1, x] - gy[z, 0, x]) * inv_dy
-        elif y == ny - 1:
-            dgy = (gy[z, ny - 1, x] - gy[z, ny - 2, x]) * inv_dy
-        else:
-            dgy = (gy[z, y + 1, x] - gy[z, y - 1, x]) * (0.5 * inv_dy)
-        if z == 0:
-            dgz = (gz[1, y, x] - gz[0, y, x]) * inv_dz
-        elif z == nz - 1:
-            dgz = (gz[nz - 1, y, x] - gz[nz - 2, y, x]) * inv_dz
-        else:
-            dgz = (gz[z + 1, y, x] - gz[z - 1, y, x]) * (0.5 * inv_dz)
+            dgz = (_g_z_at(T, kp, z + 1, y, x, nz, inv_dz)
+                   - _g_z_at(T, kp, z - 1, y, x, nz, inv_dz)) * (0.5 * inv_dz)
         dTdt = (T[z, y, x] - Tprev[z, y, x]) * inv_dt
         out[z, y, x] = dgx + dgy + dgz - ap[z, y, x] * dTdt
 
@@ -329,14 +336,7 @@ def _div_minus_capacity_kernel(gx, gy, gz, ap, T, Tprev,
 def _correction_source(T, k_prime, a_prime, T_prev, dt, dx, dy, dz):
     """Divergence-form correction forcing ``f = ∇·(k'∇T) - a'∂_tT`` (GPU).
 
-    Two fused stencil passes replacing the six ``xp.gradient`` calls of the
-    backend-agnostic path: ``g = k'∇T`` then ``∇·g`` minus the capacity source.
-    Bit-for-bit the ``numpy.gradient(edge_order=1)`` discretisation, ~5× cheaper
-    (one read/write pass each instead of ``xp.gradient``'s strided slicing).
     """
-    gx = cp.empty_like(T)
-    gy = cp.empty_like(T)
-    gz = cp.empty_like(T)
     out = cp.empty_like(T)
     # Map the fastest thread index (cuda.grid(3)[0]) to the contiguous x axis so
     # the stencil's ±1 reads coalesce; grid is sized (nx, ny, nz) accordingly.
@@ -345,10 +345,8 @@ def _correction_source(T, k_prime, a_prime, T_prev, dt, dx, dy, dz):
     bpg = ((nx + tpb[0] - 1) // tpb[0],
            (ny + tpb[1] - 1) // tpb[1],
            (nz + tpb[2] - 1) // tpb[2])
-    _grad_kprime_kernel[bpg, tpb](
-        T, k_prime, 1.0 / dx, 1.0 / dy, 1.0 / dz, gx, gy, gz)
-    _div_minus_capacity_kernel[bpg, tpb](
-        gx, gy, gz, a_prime, T, T_prev,
+    _corr_source_fused_kernel[bpg, tpb](
+        T, k_prime, a_prime, T_prev,
         1.0 / dx, 1.0 / dy, 1.0 / dz, 1.0 / dt, out)
     return out
 
@@ -412,15 +410,21 @@ def _dct2_reorder_kernel(x, v, N):
 
 
 @cuda.jit
-def _dct2_recombine_kernel(Vr, Vi, C, S, X, N):
-    """X[k] = Re(W^k V[k])·2·norm, V[k>N/2] via conjugate symmetry."""
+def _dct2_recombine_kernel(V, C, S, X, N):
+    """X[k] = Re(W^k V[k])·2·norm, V[k>N/2] via conjugate symmetry.
+
+    Reads the complex half-spectrum directly. Splitting it into contiguous real
+    and imaginary arrays first cost two full-size copies per transformed axis
+    (``V.real``/``V.imag`` are strided views, so they had to be materialised);
+    the kernel is memory-bound and reads each element once either way.
+    """
     idx = cuda.grid(1); R = X.shape[0]
     if idx < R * N:
         r = idx // N; k = idx % N; M = N // 2
         if k <= M:
-            ar = Vr[r, k];     ai = Vi[r, k]
+            z = V[r, k];     ar = z.real; ai = z.imag
         else:
-            ar = Vr[r, N - k]; ai = -Vi[r, N - k]
+            z = V[r, N - k]; ar = z.real; ai = -z.imag
         X[r, k] = ar * C[k] + ai * S[k]
 
 
@@ -462,10 +466,9 @@ def _dct2_last(x2):
     bpg, tpb = _dct_grid(R * N)
     _dct2_reorder_kernel[bpg, tpb](x2, v, N)
     V = cp.fft.rfft(v, axis=-1)
-    Vr = cp.ascontiguousarray(V.real); Vi = cp.ascontiguousarray(V.imag)
     C, S = _dct2_twiddle(N)
     X = cp.empty_like(x2)
-    _dct2_recombine_kernel[bpg, tpb](Vr, Vi, C, S, X, N)
+    _dct2_recombine_kernel[bpg, tpb](V, C, S, X, N)
     return X
 
 

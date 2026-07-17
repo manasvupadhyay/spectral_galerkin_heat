@@ -331,7 +331,6 @@ class SpectralSolver(HeatSolver):
         # Reuse the Picard scratch buffers allocated once in SolverBuffers
         # ================================================================
         a_old = buffers.a_old
-        a_raw = buffers.a_raw
         residual_curr = buffers.residual_curr
         n_elements = buffers.n_elements
 
@@ -422,12 +421,14 @@ class SpectralSolver(HeatSolver):
                 )
                 kernels.add_source_term_modes(buffers.a_temp, SsState.KK, C_corr)
 
-            xp.copyto(a_raw, buffers.a_temp)
-            xp.subtract(a_raw, a_old, out=residual_curr)
-
+            # Under-relax in residual form: ω·a_raw + (1-ω)·a_old is identically
+            # a_old + ω·(a_raw - a_old), and the residual is already needed for the
+            # convergence test. Written this way the iteration needs neither a
+            # verbatim copy of a_temp nor a full-grid temporary for (1-ω)·a_old.
             omega = self.mixing_omega
-            xp.multiply(a_raw, omega, out=buffers.a_temp)
-            buffers.a_temp += (dtype(1.0) - omega) * a_old
+            xp.subtract(buffers.a_temp, a_old, out=residual_curr)
+            xp.multiply(residual_curr, omega, out=buffers.a_temp)
+            buffers.a_temp += a_old
 
             rms_diff = xp.sqrt(xp.vdot(residual_curr, residual_curr) / n_elements)
             rms_old = xp.sqrt(xp.vdot(a_old, a_old) / n_elements)
@@ -459,7 +460,10 @@ class SpectralSolver(HeatSolver):
         # 6. Commit converged state
         # ================================================================
         buffers.q_evap_old[:] = buffers.q_evap_buffer
-        SsState.a = buffers.a_temp.copy()
+        # Copy into the existing modes array rather than rebinding to a fresh one:
+        # `.copy()` allocated a full-grid array every step and orphaned the old.
+        # a_temp and SsState.a are distinct buffers, so an in-place copy is safe.
+        xp.copyto(SsState.a, buffers.a_temp)
 
         # Store the converged full-volume field for the next step's ∂_t T (used
         # by both the property correction and grid-mode latent heat).

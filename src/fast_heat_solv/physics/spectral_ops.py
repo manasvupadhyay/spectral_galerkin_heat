@@ -68,18 +68,26 @@ def reconstruct_volume(a, SsState):
 
     Inverse of :func:`project_volume`: ``T = IDCT_II(a) / sqrt(dV)``. Returns a
     ``(nz, ny, nx)`` array on the same grid the modes live on.
+
+    ``sqrt_dV`` is a scalar, so the scaling is applied in place on the transform's
+    own output: at full-grid sizes an out-of-place divide would double this
+    function's footprint for nothing, and it is called several times per Picard
+    iteration.
     """
-    xp = SsState.xp
-    return (SsState.hooks.idct(a) / SsState.grid.sqrt_dV).astype(xp.float32, copy=False)
+    out = SsState.hooks.idct(a)
+    out /= SsState.grid.sqrt_dV
+    return out
 
 
 def project_volume(field, SsState):
     """Project a full cell-centred volume field onto the modal basis.
 
     Forward of :func:`reconstruct_volume`: ``modes = sqrt(dV) * DCT_II(field)``.
+    Scaled in place, for the reason given in :func:`reconstruct_volume`.
     """
-    xp = SsState.xp
-    return (SsState.hooks.dct(field) * SsState.grid.sqrt_dV).astype(xp.float32, copy=False)
+    out = SsState.hooks.dct(field)
+    out *= SsState.grid.sqrt_dV
+    return out
 
 
 def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
@@ -134,17 +142,27 @@ def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
     if corr_source is not None:
         f = corr_source(T, k_prime, a_prime, T_prev_full, float(dt),
                         grid.dx, grid.dy, grid.dz)
-        return project_volume(f, SsState).astype(xp.float32, copy=False)
+        # T, k' and a' are dead once f exists. Dropping the references before the
+        # forward transform lets its working copies reuse those blocks instead of
+        # stacking three more full-grid arrays onto the peak — this function runs
+        # once per Picard iteration (tens of times per step), so its peak, not its
+        # total, is what sets the largest grid that fits.
+        del T, k_prime, a_prime
+        return project_volume(f, SsState)
 
     dT_dz, dT_dy, dT_dx = xp.gradient(T, grid.dz, grid.dy, grid.dx)
     g_x = k_prime * dT_dx
     g_y = k_prime * dT_dy
     g_z = k_prime * dT_dz
+    del dT_dx, dT_dy, dT_dz
     s_a = -a_prime * ((T - T_prev_full) / xp.float32(dt))
     div_g = (xp.gradient(g_x, grid.dx, axis=2)
              + xp.gradient(g_y, grid.dy, axis=1)
              + xp.gradient(g_z, grid.dz, axis=0))
-    return project_volume(s_a + div_g, SsState).astype(xp.float32, copy=False)
+    del g_x, g_y, g_z, T, k_prime, a_prime
+    s_a += div_g
+    del div_g
+    return project_volume(s_a, SsState)
 
 
 def reconstruct_temperature_box(a, SsState):

@@ -252,7 +252,6 @@ class SolverBuffers:
     # Picard-iteration scratch (nz, ny, nx) — fixed shape, allocated once here
     # and reused every time step (see SpectralSolver.step).
     a_old: NDArray = None
-    a_raw: NDArray = None
     residual_curr: NDArray = None
     n_elements: float = 0.0
 
@@ -271,7 +270,6 @@ class SolverBuffers:
 
         # Per-iteration Picard scratch — same shape as a_temp, never resized.
         self.a_old = xp.empty((nz, ny, nx), dtype=dtype)
-        self.a_raw = xp.empty((nz, ny, nx), dtype=dtype)
         self.residual_curr = xp.empty((nz, ny, nx), dtype=dtype)
         self.n_elements = dtype(self.a_temp.size)
 
@@ -366,24 +364,57 @@ class SpectralSolverState:
         self.K, self.KK = precompute_K_KK(phys, num, geom, xp, self.dtype)
 
 
+# Target size of one float64 z-slab of wavenumber intermediates in
+# precompute_K_KK. Bounds that function's transient memory independently of the
+# grid; the handful of temporaries per slab are small multiples of this.
+_K_KK_SLAB_BYTES = 1 << 26  # 64 MiB
+
+
 def precompute_K_KK(phys, num, geom, xp, dtype=np.float32):
     """
     Compute spectral Propagators (K, KK) based on grid and time step.
     K = exp(-alpha * k^2 * dt) for ETD1 (Exact integration of linear part)
     KK = phi_1 / (rho * Cp), where phi_1(z) = (exp(z) - 1) / z, z = -alpha * k^2 * dt
     """
-    # Per-axis wavenumbers in array-index order [z, y, x].
-    k = [np.pi * xp.arange(n) / L for n, L in zip(geom.n.zyx(), geom.size.zyx())]
-    k_grids = xp.meshgrid(*k, indexing='ij')  # shape (nz, ny, nx) each
-    denom = phys.k / (phys.rho * phys.Cp) * sum(kg**2 for kg in k_grids)
-    K = xp.exp(-denom * num.dt).astype(dtype)
+    nz, ny, nx = geom.n.zyx()
+    Lz, Ly, Lx = geom.size.zyx()
 
-    # The only singular entry is the 0 mode (k=0 on every axis), which sits at
-    # index [0, 0, 0] 
-    denom[0, 0, 0] = 1.0  # placeholder to avoid 0/0; phi_1[0,0,0] set below
+    # Per-axis wavenumbers in array-index order [z, y, x], kept 1-D and
+    # broadcast per z-slab below. Expanding them with meshgrid would hold three
+    # extra (nz, ny, nx) grids, and since ``np.pi * xp.arange(n)`` is float64
+    # those intermediates peak at ~7x the two arrays actually returned — the
+    # dominant setup cost on large grids.
+    #
+    # The wide math deliberately stays in float64 even when *dtype* is float32:
+    # phi_1 = (e^z - 1)/z cancels catastrophically as z -> 0, and evaluating it
+    # in float32 costs ~an order of magnitude of accuracy on KK. Slabbing keeps
+    # the float64 working set bounded instead, so only K and KK scale with the
+    # grid.
+    kz, ky, kx = [np.pi * xp.arange(n) / L
+                  for n, L in zip((nz, ny, nx), (Lz, Ly, Lx))]
+    alpha = phys.k / (phys.rho * phys.Cp)
+    rho_Cp = phys.rho * phys.Cp
 
-    phi_1 = (K - 1.0) / (-denom)
-    phi_1[0, 0, 0] = num.dt  # lim_{z->0} (e^z - 1)/(-z·denom) -> dt
+    K = xp.empty((nz, ny, nx), dtype=dtype)
+    KK = xp.empty((nz, ny, nx), dtype=dtype)
 
-    KK = (phi_1 / (phys.rho * phys.Cp)).astype(dtype)
+    nz_step = max(1, min(nz, _K_KK_SLAB_BYTES // (ny * nx * 8)))
+    for z0 in range(0, nz, nz_step):
+        z1 = min(z0 + nz_step, nz)
+        denom = alpha * (kz[z0:z1, None, None] ** 2
+                         + ky[None, :, None] ** 2
+                         + kx[None, None, :] ** 2)
+        K_slab = xp.exp(-denom * num.dt).astype(dtype)
+
+        # The only singular entry is the 0 mode (k=0 on every axis), which sits
+        # at index [0, 0, 0] and so falls in the first slab.
+        if z0 == 0:
+            denom[0, 0, 0] = 1.0  # placeholder to avoid 0/0; phi_1 set below
+        phi_1 = (K_slab - 1.0) / (-denom)
+        if z0 == 0:
+            phi_1[0, 0, 0] = num.dt  # lim_{z->0} (e^z - 1)/(-z·denom) -> dt
+
+        K[z0:z1] = K_slab
+        KK[z0:z1] = (phi_1 / rho_Cp).astype(dtype)
+
     return K, KK
