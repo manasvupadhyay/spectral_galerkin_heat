@@ -31,6 +31,10 @@ source-term kernel — stay in the per-backend kernel modules.
 __author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
 __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
 
+# Only to identify the CPU backend (``xp is _np``), as in core/properties.py;
+# these functions still route every array op through ``SsState.xp``.
+import numpy as _np
+
 __all__ = [
     "project_box_to_modes",
     "reconstruct_temperature_box",
@@ -47,12 +51,33 @@ __all__ = [
 
 
 def project_box_to_modes(field_box, SsState):
-    """Project fine box field to global spectral modes."""
+    """Project fine box field to global spectral modes.
+
+    ``einsum('zyx,Zz,Yy,Xx->ZYX', ..., optimize=True)`` picks the FLOP-optimal
+    contraction order (y, then x, then z — keeping the intermediates small) but
+    hands back an **F-contiguous view**. On GPU that makes the ``* dV_fine``
+    scaling read uncoalesced: 3.14 ms against 0.17 ms for the same scaling of a
+    C-contiguous array (100x200x400). Spelling the same order out as tensordots
+    leaves every intermediate — and the result — C-contiguous, which is
+    bit-identical output for 2.6x less time (5.18 -> 1.97 ms), with smaller
+    intermediates than einsum's.
+
+    CPU keeps einsum: strided access costs far less there, and NumPy's einsum
+    beats the explicit chain end-to-end (6.3 vs 6.9 s/step), so the split is by
+    backend rather than one form for both.
+    """
     if SsState.fine_mesh is None:
         raise RuntimeError("Fine mesh not initialized.")
     xp = SsState.xp
     fm = SsState.fine_mesh
-    modes = xp.einsum('zyx,Zz,Yy,Xx->ZYX', field_box, fm.B_fine[2], fm.B_fine[1], fm.B_fine[0], optimize=True)
+    Bz, By, Bx = fm.B_fine[2], fm.B_fine[1], fm.B_fine[0]
+    if xp is _np:
+        modes = xp.einsum('zyx,Zz,Yy,Xx->ZYX', field_box, Bz, By, Bx,
+                          optimize=True)
+    else:
+        t = xp.tensordot(field_box, By, axes=([1], [1]))   # (z, x, Y)
+        t = xp.tensordot(t, Bx, axes=([1], [1]))           # (z, Y, X)
+        modes = xp.tensordot(Bz, t, axes=([1], [0]))       # (Z, Y, X)
     return modes * fm.dV_fine
 
 

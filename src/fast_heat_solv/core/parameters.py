@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Any, Dict, TYPE_CHECKING
 import numpy as np
 import os
+import re
 
 from fast_heat_solv.core.vector import Vec3
 from fast_heat_solv.core.properties import MaterialModel
@@ -43,6 +44,17 @@ import pint
 
 # Create a single unit registry instance to be reused.
 _ureg = pint.UnitRegistry()
+
+# Configs write exponents in the compact engineering form (``m2``, ``m3``),
+# which pint reads as undefined unit names rather than powers. ``.`` (multiply)
+# and ``^`` are already understood, so only the digit suffix needs rewriting.
+# No SI unit used here carries a digit in its name.
+_UNIT_EXPONENT_RE = re.compile(r"(?<=[A-Za-z])(\d+)")
+
+
+def _normalize_unit(unit: str) -> str:
+    """Rewrite compact exponents (``W/(m2.K)``) into pint syntax (``W/(m**2.K)``)."""
+    return _UNIT_EXPONENT_RE.sub(r"**\1", unit)
 
 
 def _get_value(raw_val: Any, target_unit: str | None = None) -> float:
@@ -73,8 +85,8 @@ def _get_value(raw_val: Any, target_unit: str | None = None) -> float:
         unit = raw_val.get("unit")
 
         if unit and target_unit:
-            quantity = _ureg.Quantity(value, unit)
-            return float(quantity.to(target_unit).magnitude)
+            quantity = _ureg.Quantity(value, _normalize_unit(unit))
+            return float(quantity.to(_normalize_unit(target_unit)).magnitude)
 
         return float(value)
 
@@ -83,6 +95,29 @@ def _get_value(raw_val: Any, target_unit: str | None = None) -> float:
 
     # Raise for other types that are not directly convertible to float.
     raise TypeError(f"Cannot extract a value from type {type(raw_val)}")
+
+
+def _get_vector(raw_val: Any, target_unit: str | None = None) -> list:
+    """Extract a list of numbers from a config field, with unit conversion.
+
+    Vector fields (``domain.size``, ``domain.mesh``) carry the sequence under
+    the ``value`` key of a ``{value, unit}`` mapping, so the mapping must be
+    unwrapped before the elements are converted; a bare sequence is also
+    accepted. Returns floats -- integer fields are cast by the caller.
+    """
+    if isinstance(raw_val, dict):
+        values = raw_val["value"]
+        unit = raw_val.get("unit")
+        if unit and target_unit:
+            src, dst = _normalize_unit(unit), _normalize_unit(target_unit)
+            return [float(_ureg.Quantity(v, src).to(dst).magnitude)
+                    for v in values]
+        return [float(v) for v in values]
+
+    if isinstance(raw_val, (list, tuple)):
+        return [float(_get_value(v, target_unit)) for v in raw_val]
+
+    raise TypeError(f"Cannot extract a vector from type {type(raw_val)}")
 
 
 # Floating-point precisions the solver supports, keyed by config name.
@@ -227,10 +262,15 @@ class MaterialParams:
     T0 : float, optional
         Initial/ambient temperature in Kelvin. All temperatures computed relative
         to T0 as reference. Typical: 293 K (room temperature), by default 0.
-    h_conv : float, optional
-        Convective heat transfer coefficient in W/(m²·K) at the domain boundary.
-        Controls boundary cooling (e.g., bottom surface). Typical: 50–5000 W/(m²·K),
-        by default 0.0.
+    h_conv_top : float, optional
+        Convective heat transfer coefficient in W/(m²·K) at the top surface
+        (z = Lz, the laser-facing face -- same face as the laser flux and
+        evaporation). 0.0 disables it. Typical: 50-5000 W/(m²·K), by default 0.0.
+    h_conv_bottom : float, optional
+        Convective heat transfer coefficient in W/(m²·K) at the bottom surface
+        (z = 0). 0.0 disables it. Typical: 50-5000 W/(m²·K), by default 0.0.
+        A bare ``h_conv`` key in a config dict is a legacy alias for this one
+        (see ``SimulationContext.from_dict``).
     model : MaterialModel, optional
         Temperature-dependent property model (``k(T)``, ``rho(T)``, ``c(T)``
         solid/liquid branch expressions). ``None`` for a constant-property material, in which
@@ -252,7 +292,8 @@ class MaterialParams:
     T_boil: float = 0
     DeltaH_LV: float = 0
     T0: float = 0
-    h_conv: float = 0.0
+    h_conv_top: float = 0.0
+    h_conv_bottom: float = 0.0
     model: Optional['MaterialModel'] = None
     # Add more fields as needed from your YAML/config
 
@@ -437,11 +478,10 @@ class SimulationContext:
         domain_cfg = cfg.get('domain', {})
         sim_backend = sim_cfg.get('backend', 'cpu').lower()
         
-        size_vec = domain_cfg['size']
-        Lx, Ly, Lz = [float(_get_value(v, "m")) for v in size_vec]
-        
-        nx, ny, nz = domain_cfg['mesh']
-        
+        Lx, Ly, Lz = _get_vector(domain_cfg['size'], "m")
+
+        nx, ny, nz = _get_vector(domain_cfg['mesh'])
+
         t_end = float(_get_value(sim_cfg.get('duration', 0.01), "s"))
         dt_nominal = float(real_t(_get_value(sim_cfg['dt'], "s")))
         
@@ -542,7 +582,11 @@ class SimulationContext:
             T_boil=T_boil,
             DeltaH_LV=real_t(_get_value(mat_cfg.get('DeltaH_LV', 0.0), "J / kg")),
             T0=T0,
-            h_conv=real_t(_get_value(mat_cfg.get('h_conv', 0.0), "W / (m**2 * K)")),
+            # 'h_conv' is a legacy alias for the bottom face (its only meaning
+            # before top/bottom were split out); 'h_conv_bottom' overrides it.
+            h_conv_top=real_t(_get_value(mat_cfg.get('h_conv_top', 0.0), "W / (m**2 * K)")),
+            h_conv_bottom=real_t(_get_value(
+                mat_cfg.get('h_conv_bottom', mat_cfg.get('h_conv', 0.0)), "W / (m**2 * K)")),
             model=material_model,
         )
 

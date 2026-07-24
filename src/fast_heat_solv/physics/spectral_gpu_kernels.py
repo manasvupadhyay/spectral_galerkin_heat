@@ -48,67 +48,47 @@ __all__ = [
 # CUDA Kernels (Device Functions)
 # ======================================
 
-@cuda.jit
-def _update_modes_etd1_kernel(aK, KK, Cp_broadcast, B_scaled, a_temp_out):
+# These are CuPy ``ElementwiseKernel``s rather than numba ``@cuda.jit`` kernels:
+# see the note above the DCT stages for why a numba launch handed a CuPy array
+# costs ~0.85 ms. CuPy broadcasts the operands (``Cp_broadcast`` is (nz,1,1),
+# ``B_scaled`` is (ny,nx)) the same way the explicit indexing did, and each
+# writes into a caller-owned buffer, so no full-grid temporary is created.
+# Operand grouping is kept exactly as the numba kernels had it, so results are
+# bit-identical.
+
+_ek_update_modes_etd1 = cp.ElementwiseKernel(
+    "float32 aK, float32 KK, float32 Cp, float32 B", "float32 out",
+    "out = aK + (KK * Cp) * B",
+    "fhs_update_modes_etd1")
+
+_ek_add_source_term_modes = cp.ElementwiseKernel(
+    "float32 KK, float32 Q", "float32 a_temp",
+    "a_temp += KK * Q",
+    "fhs_add_source_term_modes")
+
+_ek_add_bottom_surface_source = cp.ElementwiseKernel(
+    "float32 KK, float32 Cp_bottom, float32 B", "float32 a_temp",
+    "a_temp += KK * Cp_bottom * B",
+    "fhs_add_bottom_surface_source")
+
+# Evaporation: the numba kernel promoted to double via ``math.sqrt``/``math.exp``
+# on float64 scalar args and stored back to float32, so the arithmetic is done in
+# double here too.
+_ek_evaporation_flux = cp.ElementwiseKernel(
+    "float32 T_surface, float64 P0, float64 T_boil, float64 DeltaH_LV,"
+    " float64 R_v, float64 T_liquidus",
+    "float32 q_out",
     """
-    Update spectral coefficients for ETD1 scheme.
-    Grid: 3D (nz, ny, nx)
-    """
-    z, y, x = cuda.grid(3)
-    nz, ny, nx = aK.shape
-
-    if z < nz and y < ny and x < nx:
-        # Reconstruct KK_by_Cp factor on the fly: KK * Cp_broadcast
-        factor = KK[z, y, x] * Cp_broadcast[z, 0, 0]
-        a_temp_out[z, y, x] = aK[z, y, x] + factor * B_scaled[y, x]
-
-@cuda.jit
-def _add_source_term_modes_kernel(a_temp, KK, Q_modes):
-    """
-    Accumulate volumetric source term into temperature modes.
-    Grid: 3D (nz, ny, nx)
-    """
-    z, y, x = cuda.grid(3)
-    nz, ny, nx = a_temp.shape
-    
-    if z < nz and y < ny and x < nx:
-        a_temp[z, y, x] += KK[z, y, x] * Q_modes[z, y, x]
-
-
-@cuda.jit
-def _add_bottom_surface_source_kernel(a_temp, KK, Cp_broadcast_bottom, B_scaled):
-    """
-    Accumulate a surface source at z=0 into temperature modes.
-    a_temp[z,y,x] += KK[z,y,x] * Cp_bottom[z] * B_scaled[y,x]
-    Grid: 3D (nz, ny, nx)
-    """
-    z, y, x = cuda.grid(3)
-    nz, ny, nx = a_temp.shape
-
-    if z < nz and y < ny and x < nx:
-        a_temp[z, y, x] += KK[z, y, x] * Cp_broadcast_bottom[z, 0, 0] * B_scaled[y, x]
-
-
-
-@cuda.jit
-def _compute_evaporation_flux_kernel(T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liquidus):
-    """
-    Compute evaporative heat flux (Arrhenius law).
-    Grid: 2D (ny, nx)
-    """
-    y, x = cuda.grid(2)
-    ny, nx = T_surface.shape
-    
-    if y < ny and x < nx:
-        T = T_surface[y, x]
-        if T < T_liquidus:
-            q_out[y, x] = 0.0
-        else:
-            factor1 = 0.82 * DeltaH_LV * P0 / math.sqrt(2.0 * math.pi * R_v)
-            factor2 = DeltaH_LV / (R_v * T_boil)
-
-            term = (1.0 / math.sqrt(T)) * math.exp(factor2 * (1.0 - T_boil / T))
-            q_out[y, x] = factor1 * term
+    double T = (double)T_surface;
+    if (T < T_liquidus) {
+        q_out = 0.0f;
+    } else {
+        double factor1 = 0.82 * DeltaH_LV * P0 / sqrt(2.0 * M_PI * R_v);
+        double factor2 = DeltaH_LV / (R_v * T_boil);
+        double term = (1.0 / sqrt(T)) * exp(factor2 * (1.0 - T_boil / T));
+        q_out = factor1 * term;
+    }
+    """, "fhs_evaporation_flux")
 
 # ======================================
 # Spectral Method GPU State Definition
@@ -151,22 +131,17 @@ def _launch_config(shape, tpb=None):
 
 def update_modes_etd1(aK, KK, Cp_broadcast, B_scaled, a_temp_out):
     """Wrapper for ETD1 kernel."""
-    blockspergrid, threadsperblock = _launch_config(aK.shape)
-    _update_modes_etd1_kernel[blockspergrid, threadsperblock](aK, KK, Cp_broadcast, B_scaled, a_temp_out)
+    _ek_update_modes_etd1(aK, KK, Cp_broadcast, B_scaled, a_temp_out)
 
 
 def add_source_term_modes(a_temp, KK, Q_modes):
     """Wrapper for Source Term Accumulation."""
-    blockspergrid, threadsperblock = _launch_config(a_temp.shape)
-    _add_source_term_modes_kernel[blockspergrid, threadsperblock](a_temp, KK, Q_modes)
+    _ek_add_source_term_modes(KK, Q_modes, a_temp)
 
 
 def add_bottom_surface_source(a_temp, KK, Cp_broadcast_bottom, B_scaled):
     """Wrapper for bottom surface source accumulation (GPU)."""
-    blockspergrid, threadsperblock = _launch_config(a_temp.shape)
-    _add_bottom_surface_source_kernel[blockspergrid, threadsperblock](
-        a_temp, KK, Cp_broadcast_bottom, B_scaled
-    )
+    _ek_add_bottom_surface_source(KK, Cp_broadcast_bottom, B_scaled, a_temp)
 
 
 @cuda.jit
@@ -206,9 +181,9 @@ def compute_source_term_from_temperature(T_curr, T_prev, T_S, T_L, rho, L, dt, o
 
 def compute_evaporation_flux(T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liquidus):
     """Wrapper for Evaporation kernel."""
-    blockspergrid, threadsperblock = _launch_config(T_surface.shape, (16, 16))
-    _compute_evaporation_flux_kernel[blockspergrid, threadsperblock](
-        T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liquidus
+    _ek_evaporation_flux(
+        T_surface, float(P0), float(T_boil), float(DeltaH_LV),
+        float(R_v), float(T_liquidus), q_out,
     )
 
 
@@ -255,99 +230,98 @@ def _source_term(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
     )
 
 
-@cuda.jit(device=True, inline=True)
-def _g_x_at(T, kp, z, y, x, nx, inv_dx):
-    """``g_x = k'(T) ∂T/∂x`` at one point, recomputed on demand.
+# ``f = ∇·(k'∇T) - a'(T)(T - T_prev)/dt`` in a single pass.
+#
+# An ElementwiseKernel over the output (`i` is its flat index, decomposed back to
+# z,y,x) rather than a numba `@cuda.jit` stencil: the numba launch spent ~0.72 ms
+# of its 3.11 ms per call just adopting the CuPy arrays (see the note above the
+# DCT stages). The `g_*_at` helpers are the same one-sided/central branches the
+# numba device functions had, in the same order, so the result is bit-identical.
+# The flat index keeps the contiguous x axis on the fastest-varying thread index,
+# so the stencil's ±1 reads still coalesce.
 
+_CORR_PREAMBLE = r"""
+__device__ __forceinline__ float g_x_at(const float* T, const float* kp,
+        int z, int y, int x, int nz, int ny, int nx, float inv_dx) {
+    const int base = (z * ny + y) * nx;
+    float dtx;
+    if (x == 0)            dtx = (T[base + 1] - T[base + 0]) * inv_dx;
+    else if (x == nx - 1)  dtx = (T[base + nx - 1] - T[base + nx - 2]) * inv_dx;
+    else                   dtx = (T[base + x + 1] - T[base + x - 1]) * (0.5f * inv_dx);
+    return kp[base + x] * dtx;
+}
+__device__ __forceinline__ float g_y_at(const float* T, const float* kp,
+        int z, int y, int x, int nz, int ny, int nx, float inv_dy) {
+    const int zb = z * ny * nx;
+    float dty;
+    if (y == 0)            dty = (T[zb + 1 * nx + x] - T[zb + 0 * nx + x]) * inv_dy;
+    else if (y == ny - 1)  dty = (T[zb + (ny - 1) * nx + x] - T[zb + (ny - 2) * nx + x]) * inv_dy;
+    else                   dty = (T[zb + (y + 1) * nx + x] - T[zb + (y - 1) * nx + x]) * (0.5f * inv_dy);
+    return kp[zb + y * nx + x] * dty;
+}
+__device__ __forceinline__ float g_z_at(const float* T, const float* kp,
+        int z, int y, int x, int nz, int ny, int nx, float inv_dz) {
+    const int p = y * nx + x, s = ny * nx;
+    float dtz;
+    if (z == 0)            dtz = (T[1 * s + p] - T[0 * s + p]) * inv_dz;
+    else if (z == nz - 1)  dtz = (T[(nz - 1) * s + p] - T[(nz - 2) * s + p]) * inv_dz;
+    else                   dtz = (T[(z + 1) * s + p] - T[(z - 1) * s + p]) * (0.5f * inv_dz);
+    return kp[z * s + p] * dtz;
+}
+"""
+
+_ek_corr_source = cp.ElementwiseKernel(
+    "raw float32 T, raw float32 kp, raw float32 ap, raw float32 Tprev,"
+    " float32 inv_dx, float32 inv_dy, float32 inv_dz, float32 inv_dt,"
+    " int32 nz, int32 ny, int32 nx",
+    "float32 out",
     """
-    if x == 0:
-        dtx = (T[z, y, 1] - T[z, y, 0]) * inv_dx
-    elif x == nx - 1:
-        dtx = (T[z, y, nx - 1] - T[z, y, nx - 2]) * inv_dx
-    else:
-        dtx = (T[z, y, x + 1] - T[z, y, x - 1]) * (0.5 * inv_dx)
-    return kp[z, y, x] * dtx
-
-
-@cuda.jit(device=True, inline=True)
-def _g_y_at(T, kp, z, y, x, ny, inv_dy):
-    """``g_y = k'(T) ∂T/∂y`` at one point, recomputed on demand."""
-    if y == 0:
-        dty = (T[z, 1, x] - T[z, 0, x]) * inv_dy
-    elif y == ny - 1:
-        dty = (T[z, ny - 1, x] - T[z, ny - 2, x]) * inv_dy
-    else:
-        dty = (T[z, y + 1, x] - T[z, y - 1, x]) * (0.5 * inv_dy)
-    return kp[z, y, x] * dty
-
-
-@cuda.jit(device=True, inline=True)
-def _g_z_at(T, kp, z, y, x, nz, inv_dz):
-    """``g_z = k'(T) ∂T/∂z`` at one point, recomputed on demand."""
-    if z == 0:
-        dtz = (T[1, y, x] - T[0, y, x]) * inv_dz
-    elif z == nz - 1:
-        dtz = (T[nz - 1, y, x] - T[nz - 2, y, x]) * inv_dz
-    else:
-        dtz = (T[z + 1, y, x] - T[z - 1, y, x]) * (0.5 * inv_dz)
-    return kp[z, y, x] * dtz
-
-
-@cuda.jit
-def _corr_source_fused_kernel(T, kp, ap, Tprev,
-                              inv_dx, inv_dy, inv_dz, inv_dt, out):
-    """``f = ∇·(k'∇T) - a'(T) (T - T_prev)/dt`` in a single pass.
-
-    """
-    x, y, z = cuda.grid(3)
-    nz, ny, nx = T.shape
-    if z < nz and y < ny and x < nx:
-        if x == 0:
-            dgx = (_g_x_at(T, kp, z, y, 1, nx, inv_dx)
-                   - _g_x_at(T, kp, z, y, 0, nx, inv_dx)) * inv_dx
-        elif x == nx - 1:
-            dgx = (_g_x_at(T, kp, z, y, nx - 1, nx, inv_dx)
-                   - _g_x_at(T, kp, z, y, nx - 2, nx, inv_dx)) * inv_dx
-        else:
-            dgx = (_g_x_at(T, kp, z, y, x + 1, nx, inv_dx)
-                   - _g_x_at(T, kp, z, y, x - 1, nx, inv_dx)) * (0.5 * inv_dx)
-        if y == 0:
-            dgy = (_g_y_at(T, kp, z, 1, x, ny, inv_dy)
-                   - _g_y_at(T, kp, z, 0, x, ny, inv_dy)) * inv_dy
-        elif y == ny - 1:
-            dgy = (_g_y_at(T, kp, z, ny - 1, x, ny, inv_dy)
-                   - _g_y_at(T, kp, z, ny - 2, x, ny, inv_dy)) * inv_dy
-        else:
-            dgy = (_g_y_at(T, kp, z, y + 1, x, ny, inv_dy)
-                   - _g_y_at(T, kp, z, y - 1, x, ny, inv_dy)) * (0.5 * inv_dy)
-        if z == 0:
-            dgz = (_g_z_at(T, kp, 1, y, x, nz, inv_dz)
-                   - _g_z_at(T, kp, 0, y, x, nz, inv_dz)) * inv_dz
-        elif z == nz - 1:
-            dgz = (_g_z_at(T, kp, nz - 1, y, x, nz, inv_dz)
-                   - _g_z_at(T, kp, nz - 2, y, x, nz, inv_dz)) * inv_dz
-        else:
-            dgz = (_g_z_at(T, kp, z + 1, y, x, nz, inv_dz)
-                   - _g_z_at(T, kp, z - 1, y, x, nz, inv_dz)) * (0.5 * inv_dz)
-        dTdt = (T[z, y, x] - Tprev[z, y, x]) * inv_dt
-        out[z, y, x] = dgx + dgy + dgz - ap[z, y, x] * dTdt
+    const int x = i % nx;
+    const int y = (i / nx) % ny;
+    const int z = i / (nx * ny);
+    float dgx, dgy, dgz;
+    if (x == 0)
+        dgx = (g_x_at(&T[0], &kp[0], z, y, 1, nz, ny, nx, inv_dx)
+             - g_x_at(&T[0], &kp[0], z, y, 0, nz, ny, nx, inv_dx)) * inv_dx;
+    else if (x == nx - 1)
+        dgx = (g_x_at(&T[0], &kp[0], z, y, nx - 1, nz, ny, nx, inv_dx)
+             - g_x_at(&T[0], &kp[0], z, y, nx - 2, nz, ny, nx, inv_dx)) * inv_dx;
+    else
+        dgx = (g_x_at(&T[0], &kp[0], z, y, x + 1, nz, ny, nx, inv_dx)
+             - g_x_at(&T[0], &kp[0], z, y, x - 1, nz, ny, nx, inv_dx)) * (0.5f * inv_dx);
+    if (y == 0)
+        dgy = (g_y_at(&T[0], &kp[0], z, 1, x, nz, ny, nx, inv_dy)
+             - g_y_at(&T[0], &kp[0], z, 0, x, nz, ny, nx, inv_dy)) * inv_dy;
+    else if (y == ny - 1)
+        dgy = (g_y_at(&T[0], &kp[0], z, ny - 1, x, nz, ny, nx, inv_dy)
+             - g_y_at(&T[0], &kp[0], z, ny - 2, x, nz, ny, nx, inv_dy)) * inv_dy;
+    else
+        dgy = (g_y_at(&T[0], &kp[0], z, y + 1, x, nz, ny, nx, inv_dy)
+             - g_y_at(&T[0], &kp[0], z, y - 1, x, nz, ny, nx, inv_dy)) * (0.5f * inv_dy);
+    if (z == 0)
+        dgz = (g_z_at(&T[0], &kp[0], 1, y, x, nz, ny, nx, inv_dz)
+             - g_z_at(&T[0], &kp[0], 0, y, x, nz, ny, nx, inv_dz)) * inv_dz;
+    else if (z == nz - 1)
+        dgz = (g_z_at(&T[0], &kp[0], nz - 1, y, x, nz, ny, nx, inv_dz)
+             - g_z_at(&T[0], &kp[0], nz - 2, y, x, nz, ny, nx, inv_dz)) * inv_dz;
+    else
+        dgz = (g_z_at(&T[0], &kp[0], z + 1, y, x, nz, ny, nx, inv_dz)
+             - g_z_at(&T[0], &kp[0], z - 1, y, x, nz, ny, nx, inv_dz)) * (0.5f * inv_dz);
+    const float dTdt = (T[i] - Tprev[i]) * inv_dt;
+    out = dgx + dgy + dgz - ap[i] * dTdt;
+    """, "fhs_corr_source", preamble=_CORR_PREAMBLE)
 
 
 def _correction_source(T, k_prime, a_prime, T_prev, dt, dx, dy, dz):
-    """Divergence-form correction forcing ``f = ∇·(k'∇T) - a'∂_tT`` (GPU).
-
-    """
-    out = cp.empty_like(T)
-    # Map the fastest thread index (cuda.grid(3)[0]) to the contiguous x axis so
-    # the stencil's ±1 reads coalesce; grid is sized (nx, ny, nz) accordingly.
+    """Divergence-form correction forcing ``f = ∇·(k'∇T) - a'∂_tT`` (GPU)."""
     nz, ny, nx = T.shape
-    tpb = (32, 8, 1)
-    bpg = ((nx + tpb[0] - 1) // tpb[0],
-           (ny + tpb[1] - 1) // tpb[1],
-           (nz + tpb[2] - 1) // tpb[2])
-    _corr_source_fused_kernel[bpg, tpb](
+    out = cp.empty_like(T)
+    _ek_corr_source(
         T, k_prime, a_prime, T_prev,
-        1.0 / dx, 1.0 / dy, 1.0 / dz, 1.0 / dt, out)
+        cp.float32(1.0 / dx), cp.float32(1.0 / dy), cp.float32(1.0 / dz),
+        cp.float32(1.0 / dt),
+        cp.int32(nz), cp.int32(ny), cp.int32(nx), out,
+    )
     return out
 
 
@@ -397,78 +371,61 @@ def _dct3_twiddle(N):
     return t
 
 
-@cuda.jit
-def _dct2_reorder_kernel(x, v, N):
-    """Even/odd reorder v = [x0,x2,..,  x(odd reversed)] over rows (R, N)."""
-    idx = cuda.grid(1); R = x.shape[0]
-    if idx < R * N:
-        r = idx // N; m = idx % N
-        if m < (N + 1) // 2:
-            v[r, m] = x[r, 2 * m]
-        else:
-            v[r, m] = x[r, 2 * N - 2 * m - 1]
+# The DCT stages are CuPy ``ElementwiseKernel``s rather than numba ``@cuda.jit``
+# kernels. Numba re-adopts a CuPy array through ``__cuda_array_interface__`` on
+# every launch, and CuPy exports CAI v3 with ``stream=1``, whose semantics oblige
+# numba to synchronise as it adopts the array. That serialises the pipeline and
+# costs ~0.85 ms per launch — against ~35 us for the same launch from CuPy, and
+# ~45 us of real work for a 2-D surface transform. The stages below are plain
+# gathers/recombines, so they port to ElementwiseKernel bit-exactly (`i` is the
+# flat index of the non-raw output, which sets the launch range).
 
-
-@cuda.jit
-def _dct2_recombine_kernel(V, C, S, X, N):
-    """X[k] = Re(W^k V[k])·2·norm, V[k>N/2] via conjugate symmetry.
-
-    Reads the complex half-spectrum directly. Splitting it into contiguous real
-    and imaginary arrays first cost two full-size copies per transformed axis
-    (``V.real``/``V.imag`` are strided views, so they had to be materialised);
-    the kernel is memory-bound and reads each element once either way.
+_ek_dct2_reorder = cp.ElementwiseKernel(
+    "raw float32 x, int32 N", "float32 v",
     """
-    idx = cuda.grid(1); R = X.shape[0]
-    if idx < R * N:
-        r = idx // N; k = idx % N; M = N // 2
-        if k <= M:
-            z = V[r, k];     ar = z.real; ai = z.imag
-        else:
-            z = V[r, N - k]; ar = z.real; ai = -z.imag
-        X[r, k] = ar * C[k] + ai * S[k]
+    int r = i / N, m = i % N;
+    int src = (m < (N + 1) / 2) ? (2 * m) : (2 * N - 2 * m - 1);
+    v = x[r * N + src];
+    """, "fhs_dct2_reorder")
 
+_ek_dct2_recombine = cp.ElementwiseKernel(
+    "raw complex64 V, raw float32 C, raw float32 S, int32 N, int32 L", "float32 X",
+    """
+    int r = i / N, k = i % N, M = N / 2;
+    complex<float> z; float ar, ai;
+    if (k <= M) { z = V[r * L + k];       ar = z.real(); ai =  z.imag(); }
+    else        { z = V[r * L + (N - k)]; ar = z.real(); ai = -z.imag(); }
+    X = ar * C[k] + ai * S[k];
+    """, "fhs_dct2_recombine")
 
-@cuda.jit
-def _dct3_prerecombine_kernel(X, PA, QA, PB, QB, V, N):
-    """Rebuild the half-spectrum V[k]=a+ib, k=0..N/2, from the (k, N-k) pair."""
-    idx = cuda.grid(1); R = X.shape[0]; L = N // 2 + 1
-    if idx < R * L:
-        r = idx // L; k = idx % L
-        nk = 0 if k == 0 else N - k
-        xk = X[r, k]; xnk = X[r, nk]
-        V[r, k] = complex(PA[k] * xk + QA[k] * xnk,
-                          PB[k] * xk + QB[k] * xnk)
+_ek_dct3_prerecombine = cp.ElementwiseKernel(
+    "raw float32 X, raw float32 PA, raw float32 QA, raw float32 PB, raw float32 QB,"
+    " int32 N, int32 L", "complex64 V",
+    """
+    int r = i / L, k = i % L;
+    int nk = (k == 0) ? 0 : (N - k);
+    float xk = X[r * N + k], xnk = X[r * N + nk];
+    V = complex<float>(PA[k] * xk + QA[k] * xnk, PB[k] * xk + QB[k] * xnk);
+    """, "fhs_dct3_prerecombine")
 
-
-@cuda.jit
-def _dct3_unreorder_kernel(v, x, N):
-    """Inverse of the even/odd reorder: scatter v back to natural order."""
-    idx = cuda.grid(1); R = x.shape[0]
-    if idx < R * N:
-        r = idx // N; n = idx % N
-        if n % 2 == 0:
-            x[r, n] = v[r, n // 2]
-        else:
-            x[r, n] = v[r, N - (n + 1) // 2]
-
-
-_DCT_TPB = 256
-
-
-def _dct_grid(total):
-    return (total + _DCT_TPB - 1) // _DCT_TPB, _DCT_TPB
+_ek_dct3_unreorder = cp.ElementwiseKernel(
+    "raw float32 v, int32 N", "float32 x",
+    """
+    int r = i / N, n = i % N;
+    int src = (n % 2 == 0) ? (n / 2) : (N - (n + 1) / 2);
+    x = v[r * N + src];
+    """, "fhs_dct3_unreorder")
 
 
 def _dct2_last(x2):
     """DCT-II (ortho) along the last axis of a contiguous (R, N) float32 array."""
     R, N = x2.shape
     v = cp.empty_like(x2)
-    bpg, tpb = _dct_grid(R * N)
-    _dct2_reorder_kernel[bpg, tpb](x2, v, N)
+    _ek_dct2_reorder(x2, cp.int32(N), v)
     V = cp.fft.rfft(v, axis=-1)
     C, S = _dct2_twiddle(N)
     X = cp.empty_like(x2)
-    _dct2_recombine_kernel[bpg, tpb](V, C, S, X, N)
+    _ek_dct2_recombine(V, C, S, cp.int32(N), cp.int32(N // 2 + 1), X)
     return X
 
 
@@ -477,12 +434,10 @@ def _dct3_last(x2):
     R, N = x2.shape; L = N // 2 + 1
     PA, QA, PB, QB = _dct3_twiddle(N)
     V = cp.empty((R, L), cp.complex64)
-    bl, tpb = _dct_grid(R * L)
-    _dct3_prerecombine_kernel[bl, tpb](x2, PA, QA, PB, QB, V, N)
+    _ek_dct3_prerecombine(x2, PA, QA, PB, QB, cp.int32(N), cp.int32(L), V)
     v = cp.fft.irfft(V, n=N, axis=-1)        # complex64 -> contiguous float32
     out = cp.empty((R, N), cp.float32)
-    bpg, _ = _dct_grid(R * N)
-    _dct3_unreorder_kernel[bpg, tpb](v, out, N)
+    _ek_dct3_unreorder(v.astype(cp.float32, copy=False), cp.int32(N), out)
     return out
 
 

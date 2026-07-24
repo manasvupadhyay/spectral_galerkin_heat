@@ -305,10 +305,12 @@ class SpectralSolver(HeatSolver):
         # step; grid mode recomputes it each iteration (no stored box history).
         Q_latent = fm.Q_prev if fm is not None else None
 
-        # Bottom convection
-        h_conv = mat.h_conv
+        # Convection at either face, independently switched by h_conv_top /
+        # h_conv_bottom (0.0 disables that face, same gating as evaporation).
+        h_conv_top = mat.h_conv_top
+        h_conv_bottom = mat.h_conv_bottom
         T0 = dtype(mat.T0)
-        S_bot = xp.zeros((num.ny, num.nx), dtype=dtype) if h_conv > 0 else None
+        S_bot = xp.zeros((num.ny, num.nx), dtype=dtype) if h_conv_bottom > 0 else None
 
         # Build initial a_temp = θ̃ + Q_mnp · F  with all forcing guesses
         kernels.update_modes_etd1(
@@ -319,9 +321,20 @@ class SpectralSolver(HeatSolver):
                 buffers.a_temp, SsState.KK,
                 kernels.project_box_to_modes(Q_latent, SsState),
             )
-        if h_conv > 0:
+        if h_conv_top > 0:
+            # Same face as the laser/evaporation flux. add_bottom_surface_source
+            # is a generic Cp-weighted 2D-surface accumulator (nothing
+            # bottom-specific in the kernel itself) -- pass the top Cp
+            # weighting to add a convective loss at z=Lz instead of z=0.
+            T_surface0 = kernels.reconstruct_surface_temperature(buffers.a_temp, SsState)
+            q_conv_top0 = dtype(-h_conv_top) * (T_surface0 - T0)
+            S_top_conv = grid.dct_scale * kernels.DCT_II(q_conv_top0)
+            kernels.add_bottom_surface_source(
+                buffers.a_temp, SsState.KK, grid.Cp32_broadcast, S_top_conv
+            )
+        if h_conv_bottom > 0:
             T_bottom = kernels.reconstruct_bottom_temperature(buffers.a_temp, SsState)
-            q_conv = dtype(-h_conv) * (T_bottom - T0)
+            q_conv = dtype(-h_conv_bottom) * (T_bottom - T0)
             S_bot[:] = grid.dct_scale * kernels.DCT_II(q_conv)
             kernels.add_bottom_surface_source(
                 buffers.a_temp, SsState.KK, grid.Cp32_broadcast_bottom, S_bot
@@ -347,9 +360,9 @@ class SpectralSolver(HeatSolver):
         rescale_flux = self._property_correction
 
         S_bot_raw = None
-        if h_conv > 0:
+        if h_conv_bottom > 0:
             T_bottom = kernels.reconstruct_bottom_temperature(buffers.a_temp, SsState)
-            q_conv = dtype(-h_conv) * (T_bottom - T0)
+            q_conv = dtype(-h_conv_bottom) * (T_bottom - T0)
             if rescale_flux:
                 q_conv = q_conv * (self._kbar / mat.model.k(T_bottom))
             S_bot_raw = grid.dct_scale * kernels.DCT_II(q_conv)
@@ -365,15 +378,20 @@ class SpectralSolver(HeatSolver):
                 T_surface, buffers.q_evap_buffer,
                 mat.Pa, mat.T_boil, mat.DeltaH_LV, mat.R_v, mat.T_liquidus,
             )
+            # Top convection is just another top-face flux term, recomputed
+            # from the current iterate exactly like evaporation.
+            q_conv_top = (dtype(h_conv_top) * (T_surface - T0)) if h_conv_top > 0 else dtype(0.0)
             if rescale_flux:
                 # Exact Neumann-BC boundary correction: scale the net top flux by
                 # k̄/k(T_surface) before projecting (folds -∮k'∂_nT Φ dS into F^Γ).
-                q_top = ((q_las - buffers.q_evap_buffer)
+                q_top = ((q_las - buffers.q_evap_buffer - q_conv_top)
                          * (self._kbar / mat.model.k(T_surface)))
                 S_top_raw = grid.dct_scale * kernels.DCT_II(q_top)
             else:
                 S_evap = grid.dct_scale * kernels.DCT_II(buffers.q_evap_buffer)
                 S_top_raw = S_las - S_evap
+                if h_conv_top > 0:
+                    S_top_raw = S_top_raw - grid.dct_scale * kernels.DCT_II(q_conv_top)
 
             # Latent-heat source at the current iterate a_old, projected to modes.
             # Box mode: reconstruct on the fine sub-box and contract against the
