@@ -1,24 +1,9 @@
 out/
-.validation/
-validation_results/
-
 
 # Python bytecode
 __pycache__/
 *.py[cod]
 *.pyc
-
-# Output artifacts. Runs write under out/, which is already ignored; these
-# patterns only catch runs pointed at a different output directory.
-*.log
-*_step[0-9][0-9][0-9][0-9][0-9][0-9].txt
-profiler.txt
-*.png
-!docs/_images/*.png
-*.h5
-*.xmf
-*.xdmf
-
 
 # Sphinx documentation temporaries
 docs/_build/
@@ -34,6 +19,3 @@ docs/api/
 .coverage
 .coverage.*
 htmlcov/
-
-# Editor settings
-.vscode/

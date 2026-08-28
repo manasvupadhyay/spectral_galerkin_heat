@@ -156,10 +156,7 @@ def _resolve_dtype(name):
 @dataclass
 class NumParams:
     """
-    Numerical parameters for the simulation.
-
-    These parameters control time-stepping accuracy and spatial discretization.
-    The spectral method's accuracy depends critically on adequate resolution.
+    Numerical parameters for the simulation: time stepping and grid resolution.
 
     Attributes
     ----------

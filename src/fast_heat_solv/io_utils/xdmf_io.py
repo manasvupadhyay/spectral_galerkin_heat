@@ -85,10 +85,8 @@ FieldData = StructuredField | UnstructuredField
 
 
 class XdmfBuilder:
-    """Builder for XDMF XML documents using xml.etree.ElementTree.
-
-    This class provides a clean API for constructing XDMF files for both
-    structured (3DRectMesh) and unstructured (Tetrahedron) grids.
+    """Build XDMF XML documents for structured (3DRectMesh) and
+    unstructured (Tetrahedron) grids, via xml.etree.ElementTree.
     """
 
     def __init__(self, version: str = "2.0"):

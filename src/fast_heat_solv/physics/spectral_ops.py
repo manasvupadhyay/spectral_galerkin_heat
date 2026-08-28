@@ -149,11 +149,9 @@ def assemble_property_correction(SsState, a_trial, T_prev_full, dt, model,
     if corr_source is not None:
         f = corr_source(T, k_prime, a_prime, T_prev_full, float(dt),
                         grid.dx, grid.dy, grid.dz)
-        # T, k' and a' are dead once f exists. Dropping the references before the
-        # forward transform lets its working copies reuse those blocks instead of
-        # stacking three more full-grid arrays onto the peak. This function runs
-        # once per Picard iteration (tens of times per step), so its peak, not its
-        # total, is what sets the largest grid that fits.
+        # T, k' and a' are dead once f exists. Dropping them before the forward
+        # transform lets it reuse those blocks, which lowers the peak footprint
+        # and so raises the largest grid that fits.
         del T, k_prime, a_prime
         return project_volume(f, SsState)
 

@@ -50,10 +50,11 @@ __all__ = [
 # CUDA Kernels (Device Functions)
 # ======================================
 
-# CuPy ``ElementwiseKernel``s rather than numba ``@cuda.jit``: see the note
-# above the DCT stages. CuPy broadcasts the operands (``Cp_broadcast`` is
-# (nz,1,1), ``B_scaled`` is (ny,nx)) and each writes into a caller-owned
-# buffer, so no full-grid temporary is created.
+# CuPy ``ElementwiseKernel``s rather than numba ``@cuda.jit``: launching a
+# numba kernel on a CuPy array carries a per-call overhead these small kernels
+# cannot amortise. CuPy broadcasts the operands (``Cp_broadcast`` is (nz,1,1),
+# ``B_scaled`` is (ny,nx)) and each writes into a caller-owned buffer, so no
+# full-grid temporary is created.
 
 _ek_update_modes_etd1 = cp.ElementwiseKernel(
     "F aK, F KK, F Cp, F B", "F out",

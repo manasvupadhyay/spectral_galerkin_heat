@@ -45,8 +45,8 @@ F = TypeVar("F", bound=Callable[[], MathBackend])
 def register_backend(name: str) -> Callable[[F], F]:
     """Register a backend factory under *name*.
 
-    Use as a decorator on a :class:`MathBackend` subclass (the class itself is
-    a zero-argument factory) or on a plain factory function::
+    Decorates a :class:`MathBackend` subclass (the class is itself a
+    zero-argument factory) or a plain factory function::
 
         @register_backend("numpy")
         class NumpyBackend(MathBackend):
@@ -55,7 +55,7 @@ def register_backend(name: str) -> Callable[[F], F]:
     Parameters
     ----------
     name : str
-        Key under which the backend is looked up by :func:`get_backend`.
+        Key :func:`get_backend` looks the backend up by.
 
     Returns
     -------
@@ -65,7 +65,7 @@ def register_backend(name: str) -> Callable[[F], F]:
     Raises
     ------
     ValueError
-        If *name* is already registered
+        If *name* is already registered.
     """
 
     def decorator(factory: F) -> F:
@@ -81,26 +81,24 @@ def register_backend(name: str) -> Callable[[F], F]:
 
 
 def get_backend(name: str = "numpy") -> MathBackend:
-    """Return a :class:`MathBackend` by registered name.
+    """Return a fresh backend instance by registered name.
 
     Parameters
     ----------
     name : str, optional
-        Name of a registered backend, e.g. ``"numpy"`` for the CPU backend or
-        ``"cupy"`` for the GPU backend. Defaults to ``"numpy"``.
+        ``"numpy"`` for CPU, ``"cupy"`` for GPU. Defaults to ``"numpy"``.
 
     Returns
     -------
     MathBackend
-        A fresh instance of the requested backend.
+        A new instance of the requested backend.
 
     Raises
     ------
     ValueError
         If no backend is registered under *name*.
     ImportError
-        If the backend is registered but its optional dependency (e.g. CuPy)
-        is not installed.
+        If the backend is registered but its optional dependency is missing.
     """
     factory = _BACKEND_FACTORIES.get(name)
     if factory is None:
