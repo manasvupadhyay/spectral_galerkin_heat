@@ -1,7 +1,7 @@
-"""Math backend container — bundles an array module with its physics kernels."""
+"""Container pairing an array module with its physics kernels."""
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
@@ -26,32 +26,32 @@ import numpy as _np
 
 
 def to_host(arr):
-    """Return a host :class:`numpy.ndarray` for *arr* (NumPy or CuPy).
+    """Return *arr* as a :class:`numpy.ndarray` on the host.
 
-    No-op (a plain ``numpy.asarray``) when *arr* is already a host array;
-    calls ``arr.get()`` when *arr* is a CuPy device array.
+    Calls ``numpy.asarray`` if *arr* is already a host array, or ``arr.get()``
+    if it is a CuPy device array.
     """
     get = getattr(arr, "get", None)
     return get() if callable(get) else _np.asarray(arr)
 
 
 class MathBackend:
-    """Bundles the array module and physics kernels for one execution target.
+    """Hold the array module and physics kernels for one execution target.
 
-    NumPy and CuPy expose the same API, so a backend is a thin container: the
-    solver does ``xp = backend.xp`` and then calls ``xp.zeros(...)``,
-    ``xp.multiply(...)``, etc. directly. Host-transfer is the only operation
-    that differs between targets, so :meth:`to_numpy` is the single method.
+    NumPy and CuPy share the same API, so the solver sets ``xp = backend.xp``
+    and calls ``xp.zeros(...)`` directly. Host transfer is the only operation
+    that differs between the two, which is why :meth:`to_numpy` is the only
+    method.
 
     Parameters
     ----------
     name : str
-        Short identifier of the backend, ``"numpy"`` or ``"cupy"``.
+        Backend identifier, ``"numpy"`` or ``"cupy"``.
     xp : module
-        The array module — :mod:`numpy` or :mod:`cupy`.
+        :mod:`numpy` or :mod:`cupy`.
     kernels : module
-        The physics kernel module matching *xp*
-        (``spectral_cpu_kernels`` or ``spectral_gpu_kernels``).
+        Kernel module matching *xp* (``spectral_cpu_kernels`` or
+        ``spectral_gpu_kernels``).
     """
 
     def __init__(self, name: str, xp, kernels):
@@ -60,10 +60,10 @@ class MathBackend:
         self.kernels = kernels
 
     def to_numpy(self, arr):
-        """Return a host :class:`numpy.ndarray` for *arr*.
+        """Return *arr* as a :class:`numpy.ndarray` on the host.
 
-        No-op (a plain ``numpy.asarray``) when *arr* is already a host array;
-        calls ``arr.get()`` when *arr* is a CuPy device array.
+        Calls ``numpy.asarray`` if *arr* is already a host array, or
+        ``arr.get()`` if it is a CuPy device array.
 
         Parameters
         ----------

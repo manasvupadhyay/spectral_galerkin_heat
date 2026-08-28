@@ -1,8 +1,8 @@
-"""Physics kernels — CPU and GPU spectral method implementations.
+"""Physics kernels: CPU and GPU spectral method implementations.
 
 **Public API:**
 - ``spectral_cpu_kernels``: High-level solver functions for CPU backend
-- ``spectral_gpu_kernels``: High-level solver functions for GPU backend (requires CuPy)
+- ``spectral_gpu_kernels``: GPU-backend solver functions (requires CuPy; import the submodule directly)
 - ``spectral_helpers``: Utility functions for spectral computations
 
 Public symbols from each kernel module are the high-level functions
@@ -14,8 +14,9 @@ Internal helpers (prefixed with ``_``) are not part of the public API.
 - ``_calculate_subgrid_indices``: Fine-mesh box centering (private)
 """
 
+# ``spectral_gpu_kernels`` is deliberately absent: CuPy is an optional
+# dependency.
 __all__ = [
     "spectral_cpu_kernels",
-    "spectral_gpu_kernels",
     "spectral_helpers",
 ]

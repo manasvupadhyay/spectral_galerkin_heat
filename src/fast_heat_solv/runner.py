@@ -6,8 +6,8 @@ from ``SimulationWorkflow``. It is the recommended entry-point for running
 fastHeatSolv in **standalone** mode (i.e. driven by a YAML config file).
 """
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
@@ -28,27 +28,27 @@ fastHeatSolv in **standalone** mode (i.e. driven by a YAML config file).
 __author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
 __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
 
-import time
-import logging
-import os
-import sys
-import shutil
 import datetime
-import subprocess
+import logging
 import multiprocessing
+import os
 import platform
-from typing import Optional, Dict, Any
+import shutil
+import subprocess
+import sys
+import time
+from typing import Any
 
-from fast_heat_solv.solvers.base import HeatSolver
-from fast_heat_solv.io_utils.spectral_fs_io import LocalFSIOManager
 from fast_heat_solv.core.parameters import SimulationContext
+from fast_heat_solv.io_utils.spectral_fs_io import LocalFSIOManager
+from fast_heat_solv.solvers.base import HeatSolver
 
 logger = logging.getLogger(__name__)
 
 _SEP = "=" * 70
 
 
-def initialize_run_logging(config: Dict[str, Any], yaml_path: str, out_dir: str) -> None:
+def initialize_run_logging(config: dict[str, Any], yaml_path: str, out_dir: str) -> None:
     """
     Prepare the run directory for traceability before the simulation starts.
 
@@ -232,12 +232,12 @@ class StandaloneHeatRunner:
         self,
         context: SimulationContext,
         heat_solver: HeatSolver,
-        io_manager: Optional[LocalFSIOManager] = None,
-        config: Optional[Dict[str, Any]] = None,
-        yaml_path: Optional[str] = None,
+        io_manager: LocalFSIOManager | None = None,
+        config: dict[str, Any] | None = None,
+        yaml_path: str | None = None,
     ):
         self.context = context
-        self.config = config        # raw YAML dict — used for the run header
+        self.config = config        # raw YAML dict, used for the run header
         self.yaml_path = yaml_path  # absolute path to the original YAML file
 
         self.heat_solver: HeatSolver = heat_solver
@@ -270,7 +270,7 @@ class StandaloneHeatRunner:
         t: float,
         step: int,
         step_elapsed: float,
-        metrics: Optional[Dict[str, Any]],
+        metrics: dict[str, Any] | None,
     ) -> None:
         """
         Logs ETA, memory usage, and solver metrics at the configured interval.
@@ -312,8 +312,8 @@ class StandaloneHeatRunner:
             if self._psutil_proc is not None:
                 try:
                     mem_mb = self._psutil_proc.memory_info().rss / (1024.0 ** 2)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Could not read process memory: %s", exc)
             avg_step = self._total_step_time / self._n_steps_timed
             logger.info(
                 f"[ETA] Step {step} | t={t:.6e}s | Elapsed: {elapsed:.1f}s | "
@@ -384,7 +384,7 @@ class StandaloneHeatRunner:
         dt_nominal = self.context.num.dt_nominal
         t_end = self.context.num.t_end
         n_steps = self.context.num.n_steps
-        laser_path = getattr(self.context, "laser_path")
+        laser_path = self.context.laser_path
 
         dt_correction = dt - dt_nominal
         if abs(dt_correction) > 1e-6 * dt_nominal:
@@ -410,7 +410,7 @@ class StandaloneHeatRunner:
             # D. Telemetry (internally rate-limited)
             self._log_progress(t + dt, step + 1, step_elapsed, metrics)
 
-        # End-of-simulation outputs — state is at exactly t_end
+        # End-of-simulation outputs; state is at exactly t_end.
         self.io_manager.process_end(t_end, n_steps, state, laser_path)
 
         # 4. Finalize
@@ -424,7 +424,7 @@ class StandaloneHeatRunner:
                 prof_path = os.path.join(run_dir, "diagnostics", "profiler.txt")
                 if os.path.exists(prof_path):
                     logger.info(f"Profiler output written to: {prof_path}")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Could not report the profiler output path: %s", exc)
 
         logger.info("Simulation completed successfully.")

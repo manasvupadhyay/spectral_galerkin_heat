@@ -42,9 +42,8 @@ fastHeatSolv/
 |           ...
 ├── simulations/
 │   ├── main.py                     # CLI entry point: parses YAML, builds solver, runs simulation
-│   ├── examples/                   # Example YAML configs (increasing complexity) + orchestrator.py
-│   │   └── paths/                  # G-code laser paths for the examples
-│   └── research/                   # Author's production/GPU configs + study drivers
+│   └── examples/                   # Example YAML configs (increasing complexity) + orchestrator.py
+│       └── paths/                  # G-code laser paths for the examples
 └── docs/
     └── ARCHITECTURE.md
 ```
@@ -118,7 +117,7 @@ truly depend on the library:
 
 Keep the kernels working for both float32 and float64, and check your backend
 against the CPU one with `test_cpu_gpu_equivalence_e2e` in
-`tests/test_integration.py`.
+`tests/integration/test_pipeline.py`.
 
 ## Architecture Diagram
 

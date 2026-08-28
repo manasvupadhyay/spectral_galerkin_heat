@@ -1,11 +1,5 @@
 # Installation
 
-```{admonition} The code is not yet public
-:class: important
-
-A public release is coming soon — see {doc}`status`. The steps below apply once you have access.
-```
-
 fastHeatSolv uses [uv](https://github.com/astral-sh/uv) to manage its environment.
 
 ## Prerequisites
@@ -19,15 +13,11 @@ fastHeatSolv uses [uv](https://github.com/astral-sh/uv) to manage its environmen
 
 ## Installing the Project
 
-<!-- TODO: restore the clone step once the repository is public.
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/Andrieux-LMS/spectral-galerkin-AM.git
-   cd spectral-galerkin-AM
+   git clone https://github.com/TheoADX/fastHeatSolv.git
+   cd fastHeatSolv
    ```
--->
-
-1. **Enter the project directory.**
 
 2. **Sync the environment (CPU):**
    ```bash

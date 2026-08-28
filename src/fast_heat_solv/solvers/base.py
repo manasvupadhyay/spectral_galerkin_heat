@@ -1,7 +1,7 @@
 """Abstract interface for Heat Equation Solvers."""
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
@@ -23,8 +23,10 @@ __author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
 __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
 
 from abc import ABC, abstractmethod
-from typing import Any, Tuple, Dict
+from typing import Any
+
 from fast_heat_solv.core.parameters import SimulationContext
+
 
 class HeatSolver(ABC):
     """
@@ -58,10 +60,9 @@ class HeatSolver(ABC):
         Any
             The initial state object (implementation-dependent).
         """
-        pass
 
     @abstractmethod
-    def step(self, t: float, dt: float) -> Tuple[Any, Dict[str, float]]:
+    def step(self, t: float, dt: float) -> tuple[Any, dict[str, float]]:
         """
         Advance the simulation by one time step `dt`.
 
@@ -80,7 +81,6 @@ class HeatSolver(ABC):
             metrics : dict
                 Dictionary of scalar diagnostics (e.g., {'P_laser': 50.0, 'T_max': 2000.0}).
         """
-        pass
 
 
 
@@ -89,4 +89,3 @@ class HeatSolver(ABC):
         """
         Clean up resources (GPU memory, thread pools) if necessary.
         """
-        pass

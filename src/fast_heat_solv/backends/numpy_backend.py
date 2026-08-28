@@ -1,7 +1,7 @@
-"""CPU math backend — NumPy arrays with Numba CPU kernels."""
+"""CPU math backend: NumPy arrays with Numba CPU kernels."""
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
@@ -25,8 +25,9 @@ __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), Éc
 import numpy as np
 
 import fast_heat_solv.physics.spectral_cpu_kernels as _cpu_kernels
-from .base import MathBackend
+
 from ._registry import register_backend
+from .base import MathBackend
 
 
 @register_backend("numpy")

@@ -19,7 +19,7 @@ from fast_heat_solv.io_utils import StructuredField, UnstructuredField
 
 from fast_heat_solv.io_utils.compute_L2_error import (
     _evaluate_on_grid,
-    compute_L2,
+    compute_L2_structured,
     compute_L2_unstructured,
     _compute_vertex_volumes,
 )
@@ -46,12 +46,11 @@ def _make_structured(nx, ny, nz, Lx=1.0, Ly=1.0, Lz=1.0):
 
 def _make_unstructured(n_pts, Lx=1.0, Ly=1.0, Lz=1.0, seed=42):
     """Build an UnstructuredField from deterministic scattered points.
-    Includes corners to ensure the convex hull covers the full domain.
     """
     if n_pts < 8:
         raise ValueError("n_pts must be at least 8 to cover the corners")
     
-    # Deterministic sequence (fractional part of irrational steps)
+    # Deterministic sequence 
     i = np.arange(n_pts - 8)
     x = (i * 0.6180339887) % Lx
     y = (i * 0.7320508075) % Ly
@@ -72,7 +71,7 @@ def _make_unstructured(n_pts, Lx=1.0, Ly=1.0, Lz=1.0, seed=42):
 # ---------------------------------------------------------------------------
 
 class TestEvaluateOnGrid:
-    """Tests for ``_evaluate_on_grid`` — the core interpolation dispatch."""
+    """Tests for ``_evaluate_on_grid``"""
 
     def test_structured_exact_match(self):
         """When eval grid == source grid, result should be exact (copy path)."""
@@ -93,10 +92,6 @@ class TestEvaluateOnGrid:
         Zg, Yg, Xg = np.meshgrid(z2, y2, x2, indexing="ij")
         T_ref = _analytical(Xg, Yg, Zg)
 
-        # Trilinear interpolation of a smooth function on a grid with
-        # dx ≈ 1/30 should give errors roughly O(dx²) ~ 1e-3.
-        # We use relative error checks. Note that we provide an absolute
-        # tolerance fallback (abs=1e-5) for values extremely close to zero.
         assert T == pytest.approx(T_ref, rel=5e-3, abs=1e-5)
 
     def test_unstructured_interpolation(self):
@@ -125,7 +120,7 @@ class TestEvaluateOnGrid:
 
 
 class TestComputeL2:
-    """Tests for ``compute_L2`` — numerical integration of error norms."""
+    """Tests for ``compute_L2_structured``: numerical integration of error norms."""
 
     def test_zero_error(self):
         """Identical fields should give L2_abs = 0."""
@@ -135,7 +130,7 @@ class TestComputeL2:
         Zg, Yg, Xg = np.meshgrid(z, y, x, indexing="ij")
         T = _analytical(Xg, Yg, Zg)
 
-        result = compute_L2(T, T, x, y, z)
+        result = compute_L2_structured(T, T, x, y, z)
         assert result["L2_abs"] == pytest.approx(0.0, abs=1e-15)
         assert result["Linf"] == pytest.approx(0.0, abs=1e-15)
 
@@ -151,7 +146,7 @@ class TestComputeL2:
         delta = 0.5
         T_a = T_b + delta
 
-        result = compute_L2(T_a, T_b, x, y, z)
+        result = compute_L2_structured(T_a, T_b, x, y, z)
         expected_L2 = delta * np.sqrt(vol)
         assert result["L2_abs"] == pytest.approx(expected_L2, rel=1e-4)
         assert result["Linf"] == pytest.approx(delta, abs=1e-12)
@@ -180,11 +175,8 @@ class TestStructuredVsUnstructured:
         T_s = _evaluate_on_grid(sf, x, y, z)
         T_u = _evaluate_on_grid(uf, x, y, z)
 
-        result = compute_L2(T_s, T_u, x, y, z)
+        result = compute_L2_structured(T_s, T_u, x, y, z)
         print(f"Structured vs Unstructured L2_rel: {result['L2_rel']:.4f}, pct_valid: {result['pct_valid']:.1f}%")
-        # Both represent the same smooth function, so the relative L2
-        # error should be small (dominated by the unstructured mesh
-        # interpolation accuracy).
         assert result["L2_rel"] < 0.15, (
             f"L2_rel = {result['L2_rel']:.4f} — too large for matching fields"
         )

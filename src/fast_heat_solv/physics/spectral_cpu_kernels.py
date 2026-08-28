@@ -6,8 +6,8 @@ Public functions in this module are called by SpectralSolver (NumpyBackend):
 - ``reconstruct_surface_temperature``: Extract solution on top surface
 """
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
@@ -30,21 +30,21 @@ import scipy.fft
 from numba import njit, prange
 from scipy.ndimage import shift as scipy_shift
 
-from fast_heat_solv.physics import spectral_state as _state
-from fast_heat_solv.physics import spectral_ops as _ops
 from fast_heat_solv.core.laser import super_gaussian_flux as _super_gaussian_flux
+from fast_heat_solv.physics import spectral_ops as _ops
+from fast_heat_solv.physics import spectral_state as _state
 
 __all__ = [
-    "SpectralSolverState",
-    "SpectralGrid",
     "FineMeshState",
-    "update_modes_etd1",
-    "add_source_term_modes",
+    "SpectralGrid",
+    "SpectralSolverState",
     "add_bottom_surface_source",
+    "add_source_term_modes",
     "compute_latent_heat_source",
     "compute_latent_heat_source_grid",
-    "reconstruct_surface_temperature",
     "reconstruct_bottom_temperature",
+    "reconstruct_surface_temperature",
+    "update_modes_etd1",
 ]
 
 # ======================================
@@ -115,29 +115,29 @@ def add_bottom_surface_source(a_temp, KK, Cp_broadcast_bottom, B_scaled):
 @njit(parallel=True, fastmath=True, cache=True)
 def compute_source_term_from_temperature(T_curr, T_prev, T_S, T_L, rho, L, dt, out):
     """
-    Compute Q = - rho * L * (1 / (TL - TS)) * (dT/dt) * Indicator(TS <= T <= TL)
+    Compute Q = - rho * L * (f_l(T_curr) - f_l(T_prev)) / dt, with the liquid
+    fraction f_l clamped to [0, 1].
     Used for latent heat calculation.
     """
     nz, ny, nx = T_curr.shape
+    inv_band = 1.0 / (T_L - T_S)
+    factor = -rho * L / dt
     for k in prange(nz):
         for j in range(ny):
             for i in range(nx):
-                T = T_curr[k, j, i]
-                # Indicator function for mushy zone (inclusive)
-                if T >= T_S and T <= T_L:
-                    T_p = T_prev[k, j, i]
-                    
-                    # Clamp T_prev to [T_S, T_L]
-                    if T_p < T_S:
-                        T_p = T_S
-                    elif T_p > T_L:
-                        T_p = T_L
+                f_c = (T_curr[k, j, i] - T_S) * inv_band
+                if f_c < 0.0:
+                    f_c = 0.0
+                elif f_c > 1.0:
+                    f_c = 1.0
 
-                    dT = T - T_p
-                    factor = -rho * L / ((T_L - T_S) * dt)
-                    out[k, j, i] = factor * dT
-                else:
-                    out[k, j, i] = 0.0
+                f_p = (T_prev[k, j, i] - T_S) * inv_band
+                if f_p < 0.0:
+                    f_p = 0.0
+                elif f_p > 1.0:
+                    f_p = 1.0
+
+                out[k, j, i] = factor * (f_c - f_p)
 
 
 
@@ -166,10 +166,9 @@ def compute_evaporation_flux(T_surface, q_out, P0, T_boil, DeltaH_LV, R_v, T_liq
 def _grad_kprime_cpu(T, kp, inv_dx, inv_dy, inv_dz, gx, gy, gz):
     """First pass of the divergence-form correction: ``g = k'(T) ∇T`` (CPU).
 
-    Central differences in the interior, first-order one-sided at the faces —
+    Central differences in the interior, first-order one-sided at the faces:
     the ``numpy.gradient(.., edge_order=1)`` stencil, fused with the ``k'``
-    multiply so ``∇T`` is never materialised. Mirrors the GPU
-    ``_grad_kprime_kernel`` so the CPU-fallback cases match on-device runs.
+    multiply.
     """
     nz, ny, nx = T.shape
     for z in prange(nz):
@@ -236,18 +235,17 @@ def _div_minus_capacity_cpu(gx, gy, gz, ap, T, Tprev,
 def _correction_source_cpu(T, k_prime, a_prime, T_prev, dt, dx, dy, dz):
     """Divergence-form correction forcing ``f = ∇·(k'∇T) - a'∂_tT`` (CPU).
 
-    Numba-parallel counterpart of the GPU ``_correction_source``: two fused
-    ``prange`` stencil passes replacing the six single-threaded ``xp.gradient``
-    calls of the backend-agnostic fallback (~22× faster on a many-core node).
+    Two fused ``prange`` stencil passes.
     """
     gx = np.empty_like(T)
     gy = np.empty_like(T)
     gz = np.empty_like(T)
     out = np.empty_like(T)
-    inv_dx = np.float32(1.0 / dx)
-    inv_dy = np.float32(1.0 / dy)
-    inv_dz = np.float32(1.0 / dz)
-    inv_dt = np.float32(1.0 / dt)
+    real_t = T.dtype.type
+    inv_dx = real_t(1.0 / dx)
+    inv_dy = real_t(1.0 / dy)
+    inv_dz = real_t(1.0 / dz)
+    inv_dt = real_t(1.0 / dt)
     _grad_kprime_cpu(T, k_prime, inv_dx, inv_dy, inv_dz, gx, gy, gz)
     _div_minus_capacity_cpu(gx, gy, gz, a_prime, T, T_prev,
                             inv_dx, inv_dy, inv_dz, inv_dt, out)
@@ -259,8 +257,7 @@ def compute_gaussian_laser_flux(x, y, laser_x, laser_y, laser_r, laser_coef):
 
     Thin backend wrapper over the shared, backend-agnostic
     :func:`~fast_heat_solv.core.laser.super_gaussian_flux` so the CPU and GPU
-    paths use one definition. The spectral solver calls the profile directly;
-    this is kept for the linear solver's Gaussian-only path.
+    paths use one definition.
     """
     return _super_gaussian_flux(np, x, y, laser_x, laser_y, laser_r, laser_r, 2.0, laser_coef)
 
@@ -307,7 +304,7 @@ def _shift_xy_3d(field, i0y, i1y, w0y, w1y, iny,
                  i0x, i1x, w0x, w1x, inx, nearest, cval, out):
     """Bilinear x/y translation of a 3-D volume (z-shift == 0), parallel over z.
 
-    Each z-slice is translated by the same sub-pixel (y, x) offset, so the
+    Each z-slice is translated by the same (y, x) offset, so the
     per-axis index/weight/in-range tables are shared across all slices.
     """
     nz, ny, nx = field.shape
@@ -335,7 +332,7 @@ def _shift_axis_tables(n, shift, dtype):
     ``out[o] = in(o - shift)``). Returns clamped ``i0``/``i1`` (so the weight-0
     upper neighbour at the far edge never reads out of bounds), the linear
     weights, and a boolean ``in-range`` mask (``0 <= p <= n-1``) used only by
-    'constant' mode — scipy fills the output with ``cval`` when ``p`` leaves the
+    'constant' mode. scipy fills the output with ``cval`` when ``p`` leaves the
     array, rather than blending against the boundary.
     """
     o = np.arange(n, dtype=np.float64)
@@ -353,16 +350,9 @@ def _shift_axis_tables(n, shift, dtype):
 def _ndshift(field, shift_pixels, order, mode, cval):
     """Multi-threaded order-1 ndimage shift for the solver's x/y translations.
 
-    Numba-parallel replacement for the single-threaded ``scipy.ndimage.shift`` on
-    the CPU hot path — the per-step ``fm.T_prev``/``fm.Q_prev`` *volume* shifts
-    (which scale with nz) and the surface evap-flux shift. Handles exactly what
-    the solver uses: 2-D fields and 3-D volumes translated only in (y, x)
-    (z-shift == 0), ``order=1``, modes ``'nearest'``/``'constant'``. Any other
-    request falls back to ``scipy.ndimage.shift`` so behaviour is unchanged.
-
-    Bit-for-bit matches scipy's order-1 result (up to float32 rounding): bilinear
-    interpolation of ``in(o - shift)`` with 'nearest' clamping or 'constant'
-    out-of-range fill.
+    2-D fields and 3-D volumes translated only in (y, x) (z-shift == 0), 
+    ``order=1``, modes ``'nearest'``/``'constant'``. 
+    Any other request falls back to ``scipy.ndimage.shift``.
     """
     if order == 1 and mode in ("nearest", "constant") and field.ndim in (2, 3):
         is_3d = field.ndim == 3
@@ -386,10 +376,6 @@ def DCT_II(q):
 
     Precision-transparent: the transform runs (and returns) in the input
     array's float dtype (float32 or float64).
-
-    Uses ``scipy.fft`` (pocketfft): for the solver's full-volume DCT sizes it is
-    ~20× faster than the ``pyfftw.interfaces`` path, which re-plans on every call
-    (see the CPU profile — the DCT was ~60% of the step time).
     """
     arr = np.ascontiguousarray(q)
     return scipy.fft.dctn(arr, type=2, norm='ortho', axes=tuple(range(arr.ndim)), workers=-1)

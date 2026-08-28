@@ -1,17 +1,11 @@
 """Immutable 3-component value type for coordinate triples.
 
-``Vec3`` groups the ``(x, y, z)`` scalar triples that recur throughout the
-geometry and state-construction code — domain size, mesh counts, grid spacing —
-so they travel as one named object instead of three loose scalars.
-
-It is used at the Python layer only: ``@njit`` / ``@cuda.jit`` kernels cannot
-accept a dataclass, so values are unpacked to plain scalars/arrays at the kernel
-boundary. The ``[z, y, x]`` array-index ordering convention lives in
-:meth:`Vec3.zyx`.
+``Vec3`` groups the ``(x, y, z)`` scalar triples used throughout the
+geometry and state-construction code (domain size, mesh counts, grid spacing).
 """
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
@@ -32,10 +26,11 @@ boundary. The ``[z, y, x]`` array-index ordering convention lives in
 __author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
 __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
 
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Callable, Iterator, Union
+from typing import Union
 
-Number = Union[int, float]
+Number = int | float
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,10 +70,9 @@ class Vec3:
         return (self.x, self.y, self.z)[i]
 
     def zyx(self) -> "Vec3":
-        """Return the triple reversed to ``(z, y, x)`` — array-index order.
+        """Return the triple reversed to ``(z, y, x)``, the array-index order.
 
-        Arrays in the solver are indexed ``[z, y, x]``; call this where per-axis
-        quantities are built in array order to make the reversal explicit.
+        Arrays in the solver are indexed ``[z, y, x]``.
         """
         return Vec3(self.z, self.y, self.x)
 

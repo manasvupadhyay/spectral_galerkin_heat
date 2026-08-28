@@ -48,16 +48,17 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 
 # Import IO utilities from the main package
-from fast_heat_solv.io_utils import (
+# Import from the sibling module, not the package root: this module is itself
+# imported by io_utils/__init__, so going through the package would be a
+# circular import during initialisation.
+from fast_heat_solv.io_utils.xdmf_io import (
     FieldData,
     StructuredField,
     UnstructuredField,
@@ -143,7 +144,7 @@ def _clamp_query_points(query_pts: np.ndarray, sf: StructuredField) -> np.ndarra
 
 
 class VTKUnstructuredInterpolator:
-    def __init__(self, xyz: np.ndarray, values: np.ndarray, connectivity: Optional[np.ndarray]):
+    def __init__(self, xyz: np.ndarray, values: np.ndarray, connectivity: np.ndarray | None):
         import vtk
         from vtk.util.numpy_support import numpy_to_vtk, numpy_to_vtkIdTypeArray
         
@@ -217,7 +218,7 @@ def _build_unstructured_interpolator(uf: UnstructuredField):
     Delaunay triangulation with SciPy which takes hours.
     """
     try:
-        import vtk
+        import vtk  # noqa: F401
         return VTKUnstructuredInterpolator(uf.xyz, uf.T, uf.connectivity)
     except ImportError:
         logger.warning("VTK not found, falling back to extremely slow LinearNDInterpolator...")
@@ -229,7 +230,7 @@ def _build_unstructured_interpolator(uf: UnstructuredField):
 #  Common evaluation grid
 # ---------------------------------------------------------------------------
 
-def _bounding_box(fd: FieldData) -> Tuple[np.ndarray, np.ndarray]:
+def _bounding_box(fd: FieldData) -> tuple[np.ndarray, np.ndarray]:
     """Return (min_xyz, max_xyz) arrays of shape (3,)."""
     if isinstance(fd, StructuredField):
         lo = np.array([fd.x.min(), fd.y.min(), fd.z.min()])
@@ -243,8 +244,8 @@ def _bounding_box(fd: FieldData) -> Tuple[np.ndarray, np.ndarray]:
 def _make_common_grid(
     a: FieldData,
     b: FieldData,
-    resolution: Optional[Tuple[int, int, int]] = None,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    resolution: tuple[int, int, int] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Build a common structured evaluation grid (intersection of domains).
 
     If one of the inputs is structured, its axes are reused (clipped to
@@ -491,7 +492,7 @@ def compute_L2_structured(
     x: np.ndarray,
     y: np.ndarray,
     z: np.ndarray,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Compute error norms on a structured grid using trapezoidal rule."""
     err = T_a - T_b
 
@@ -528,15 +529,12 @@ def compute_L2_structured(
     }
 
 
-# Backwards-compatible alias
-compute_L2 = compute_L2_structured
-
 
 def compute_L2_unstructured(
     T_a: np.ndarray,
     T_b: np.ndarray,
     vertex_volumes: np.ndarray,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Compute error norms on unstructured vertices using lumped mass."""
     err = T_a - T_b
 
@@ -577,12 +575,12 @@ def compute_L2_unstructured(
 def compare(
     path_a: Path,
     path_b: Path,
-    attr_a: Optional[str] = None,
-    attr_b: Optional[str] = None,
+    attr_a: str | None = None,
+    attr_b: str | None = None,
     output_base: Path = Path("research/error"),
-    resolution: Optional[Tuple[int, int, int]] = None,
+    resolution: tuple[int, int, int] | None = None,
     write_error: bool = True,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Full comparison pipeline: load -> align/interpolate -> L2 -> write.
 
     Parameters
@@ -684,7 +682,7 @@ def compare(
             struct_label, unstruct_label = "B", "A"
 
         print(f"  Mode: HYBRID - interpolate structured ({struct_label}) at unstructured vertices ({unstruct_label})")
-        print(f"         No Delaunay triangulation needed!")
+        print("         No Delaunay triangulation needed!")
         print()
 
         # Check connectivity is available
@@ -695,7 +693,7 @@ def compare(
             )
 
         # Build interpolator from structured field (very fast)
-        logger.info(f"Building RegularGridInterpolator from structured field...")
+        logger.info("Building RegularGridInterpolator from structured field...")
         interp = _build_structured_interpolator(struct_field)
 
         # Query at unstructured vertices

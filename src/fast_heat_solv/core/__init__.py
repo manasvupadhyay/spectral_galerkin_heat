@@ -1,23 +1,22 @@
-"""Core package — simulation parameters and laser definitions."""
+"""Core package: simulation parameters and laser definitions."""
 
-from .laser import LaserState, LaserPath
-from .vector import Vec3
+from .laser import LaserPath, LaserState
 from .parameters import (
-    SimulationContext,
-    NumParams,
-    MaterialParams,
     GeomParams,
     LaserParams,
+    MaterialParams,
+    NumParams,
+    SimulationContext,
 )
-
+from .vector import Vec3
 
 __all__ = [
-    "LaserState",
-    "LaserPath",
-    "Vec3",
-    "SimulationContext",
-    "NumParams",
-    "MaterialParams",
     "GeomParams",
     "LaserParams",
+    "LaserPath",
+    "LaserState",
+    "MaterialParams",
+    "NumParams",
+    "SimulationContext",
+    "Vec3",
 ]

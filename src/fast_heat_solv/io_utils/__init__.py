@@ -10,6 +10,9 @@
 - **Visualization**: :func:`generate_plots` (post-processing tool for creating cut-plane visualizations)
 """
 
+from .compute_L2_error import compare, compute_L2_structured, compute_L2_unstructured
+from .gcode_path import GCodeLaserPath
+from .loader import SimulationResult, list_runs, load_run
 from .spectral_fs_io import LocalFSIOManager
 from .xdmf_io import (
     FieldData,
@@ -20,9 +23,7 @@ from .xdmf_io import (
     write_structured_fields,
     write_unstructured_fields,
 )
-from .loader import SimulationResult, list_runs, load_run
-from .gcode_path import GCodeLaserPath
-from .compute_L2_error import compute_L2_structured, compute_L2_unstructured, compare
+
 
 # Deferred: matplotlib import in slices is slow; only load on first use.
 def __getattr__(name: str):

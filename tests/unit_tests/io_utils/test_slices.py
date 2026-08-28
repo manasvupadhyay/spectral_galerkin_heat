@@ -11,7 +11,7 @@ os.environ.setdefault("MPLBACKEND", "Agg")  # no display needed
 
 
 def _ramp_grid():
-    # Structured grid with a linear field T = 2x + 3y + 5z (RGI-linear is exact on it).
+    # Structured grid with a linear field T = 2x + 3y + 5z.
     x = np.linspace(0.0, 1.0, 11)
     y = np.linspace(0.0, 1.0, 11)
     z = np.linspace(0.0, 0.5, 6)

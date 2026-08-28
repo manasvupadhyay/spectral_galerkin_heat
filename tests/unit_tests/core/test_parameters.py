@@ -12,8 +12,8 @@ from fast_heat_solv.core.parameters import (
 )
 from fast_heat_solv.core.vector import Vec3
 
-# `cfg` here is a parsed-YAML config dict (the input to SimulationContext.from_dict):
-# See parameters.py for the full key list. `_cfg()` builds a minimal valid one.
+# `cfg` here is a parsed-YAML config dict 
+# `_cfg()` builds a minimal valid one.
 
 
 def _cfg(**sections):
@@ -175,7 +175,7 @@ def test_branch_material_missing_reference_raises_with_recommendation():
     assert "reference" in msg
     assert "k.reference" in msg and "rho.reference" in msg and "Cp.reference" in msg
     assert "convergence" in msg
-    assert "Recommended" in msg
+    assert "recommended" in msg.lower()
 
 
 def test_mixed_branch_and_scalar_material():
@@ -205,3 +205,57 @@ def test_missing_required_key_raises(drop):
     del cfg[section][key]
     with pytest.raises(KeyError):
         SimulationContext.from_dict(cfg)
+
+def test_convection_faces_are_independent():
+    # Each face is set on its own; an unset face defaults to 0.0 (disabled).
+    ctx = SimulationContext.from_dict(_cfg(material={"h_conv_bottom": 3000.0}))
+    assert float(ctx.mat.h_conv_bottom) == pytest.approx(3000.0)
+    assert float(ctx.mat.h_conv_top) == 0.0
+
+    ctx = SimulationContext.from_dict(_cfg(material={"h_conv_top": 1500.0}))
+    assert float(ctx.mat.h_conv_top) == pytest.approx(1500.0)
+    assert float(ctx.mat.h_conv_bottom) == 0.0
+
+
+@pytest.mark.parametrize(
+    ("section", "key"),
+    [("simulation", "picard_toll"),
+     ("simulation", "max_picard_iters"),
+     ("material", "T_solidius"),
+     ("laser", "absorbtivity"),
+     ("domain", "resolution"),
+     ("material", "h_conv")],
+)
+def test_unknown_config_key_is_rejected(section, key):
+    cfg = _cfg(**{section: {key: 1.0}})
+    with pytest.raises(ValueError, match=key):
+        SimulationContext.from_dict(cfg)
+
+
+def test_unknown_config_section_is_rejected():
+    cfg = _cfg()
+    cfg["simulationn"] = {"dt": 1e-9}
+    with pytest.raises(ValueError, match="simulationn"):
+        SimulationContext.from_dict(cfg)
+
+
+def test_passthrough_sections_are_not_key_checked():
+    cfg = _cfg()
+    cfg["io"] = {"run_tag": "x", "outputs": ["full_volume"]}
+    cfg["post_processing"] = {"auto_visualize": True, "show_gui": False}
+    SimulationContext.from_dict(cfg)
+
+
+def test_shipped_example_configs_validate():
+    # The examples are the documented reference; they must satisfy the schema.
+    import glob
+    import os
+
+    import yaml
+
+    paths = sorted(glob.glob("simulations/examples/*.yaml"))
+    assert paths, "no example configs found"
+    for path in paths:
+        with open(path) as fh:
+            cfg = yaml.safe_load(fh)
+        SimulationContext.from_dict(cfg, config_dir=os.path.dirname(path))

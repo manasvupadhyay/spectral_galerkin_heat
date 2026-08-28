@@ -95,8 +95,12 @@ def test_step_returns_state_and_metrics(tiny_context):
     s.initialize()
     state, metrics = s.step(0.0, tiny_context.num.dt)
     assert state is s.state
-    assert set(metrics) == {"T_surface_max", "P_laser", "n_evap_iter"}
+    assert set(metrics) == {"T_surface_max", "P_laser", "n_evap_iter",
+                            "picard_converged", "picard_rel_err"}
     assert all(np.isfinite(float(v)) for v in metrics.values())
+    # picard_converged says whether the step reached picard_tol or fell out at
+    # max_picard_iter; picard_rel_err is the residual it stopped on.
+    assert isinstance(metrics["picard_converged"], bool)
     # P_laser is the discrete integral of the absorbed Gaussian ≈ A·P.
     a, p = tiny_context.laser.absorptivity, 200.0
     assert float(metrics["P_laser"]) == pytest.approx(a * p, rel=0.1)

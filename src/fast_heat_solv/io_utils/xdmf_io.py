@@ -7,8 +7,8 @@ Uses xml.etree.ElementTree for proper XML generation instead of
 hardcoded string templates.
 """
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
@@ -32,11 +32,9 @@ __author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
 __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
 
 import logging
-import os
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
 
 import h5py
 import numpy as np
@@ -57,7 +55,7 @@ class StructuredField:
     y: np.ndarray
     z: np.ndarray
     T: np.ndarray  # shape (nz, ny, nx)
-    time: Optional[float] = None
+    time: float | None = None
 
     @property
     def grid_type(self) -> str:
@@ -70,15 +68,15 @@ class UnstructuredField:
 
     xyz: np.ndarray  # (N, 3)
     T: np.ndarray  # (N,)
-    connectivity: Optional[np.ndarray] = None  # (M, 4) if available
-    time: Optional[float] = None
+    connectivity: np.ndarray | None = None  # (M, 4) if available
+    time: float | None = None
 
     @property
     def grid_type(self) -> str:
         return "unstructured"
 
 
-FieldData = Union[StructuredField, UnstructuredField]
+FieldData = StructuredField | UnstructuredField
 
 
 # ---------------------------------------------------------------------------
@@ -107,14 +105,14 @@ class XdmfBuilder:
     def add_structured_grid(
         self,
         name: str,
-        dims: Tuple[int, int, int],
+        dims: tuple[int, int, int],
         h5_ref: str,
-        coord_datasets: Tuple[str, str, str] = ("X", "Y", "Z"),
-        attributes: Optional[Dict[str, str]] = None,
-        time: Optional[float] = None,
-        step: Optional[int] = None,
+        coord_datasets: tuple[str, str, str] = ("X", "Y", "Z"),
+        attributes: dict[str, str] | None = None,
+        time: float | None = None,
+        step: int | None = None,
         precision: int = 4,
-        parent: Optional[ET.Element] = None,
+        parent: ET.Element | None = None,
     ) -> ET.Element:
         """Add a structured 3DRectMesh grid to the XDMF document.
 
@@ -164,7 +162,7 @@ class XdmfBuilder:
         # Geometry (VXVYVZ)
         geometry = ET.SubElement(grid, "Geometry", GeometryType="VXVYVZ")
 
-        for coord_name, size in zip(coord_datasets, [nx, ny, nz]):
+        for coord_name, size in zip(coord_datasets, [nx, ny, nz], strict=True):
             self._add_dataitem(
                 geometry,
                 dimensions=str(size),
@@ -197,8 +195,8 @@ class XdmfBuilder:
         geometry_dataset: str = "geometry",
         topology_type: str = "Tetrahedron",
         nodes_per_element: int = 4,
-        attributes: Optional[Dict[str, str]] = None,
-        time: Optional[float] = None,
+        attributes: dict[str, str] | None = None,
+        time: float | None = None,
         geometry_precision: int = 8,
         attribute_precision: int = 4,
     ) -> ET.Element:
@@ -291,7 +289,7 @@ class XdmfBuilder:
         h5_ref: str,
         dataset: str,
         number_type: str = "Float",
-        precision: Optional[int] = 4,
+        precision: int | None = 4,
     ) -> ET.Element:
         """Add a DataItem element pointing to an HDF5 dataset."""
         attribs = {
@@ -372,7 +370,7 @@ class XdmfBuilder:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_h5(xdmf_path: Path, ref: str) -> Tuple[Path, str]:
+def _resolve_h5(xdmf_path: Path, ref: str) -> tuple[Path, str]:
     """Parse ``filename.h5:/dataset`` and resolve relative to XDMF dir."""
     parts = ref.strip().split(":")
     h5_file = parts[0].strip()
@@ -389,8 +387,8 @@ def _read_dataitem(xdmf_path: Path, item: ET.Element) -> np.ndarray:
 
 
 def _find_last_timestep_grid(
-    domain: ET.Element, attr_name: Optional[str] = None
-) -> Tuple[ET.Element, Optional[float]]:
+    domain: ET.Element, attr_name: str | None = None
+) -> tuple[ET.Element, float | None]:
     """Return the <Grid> element corresponding to the **last** time step.
 
     Parameters
@@ -430,7 +428,7 @@ def _find_last_timestep_grid(
         target_collection = collections[-1]
 
     if target_collection is not None:
-        children = [g for g in target_collection.findall("Grid")]
+        children = list(target_collection.findall("Grid"))
         if children:
             last = children[-1]
             time_el = last.find("Time")
@@ -474,7 +472,7 @@ def _resolve_topology_geometry(domain: ET.Element, grid: ET.Element):
     return topo, geo
 
 
-def load_xdmf(xdmf_path: Path, attr_name: Optional[str] = None) -> FieldData:
+def load_xdmf(xdmf_path: Path, attr_name: str | None = None) -> FieldData:
     """Load the **last time step** from an XDMF file.
 
     Parameters
@@ -540,7 +538,6 @@ def load_xdmf(xdmf_path: Path, attr_name: Optional[str] = None) -> FieldData:
 
     # ---- Unstructured: Tetrahedron etc. ----
     else:
-        geo_type = (geo.get("GeometryType") or geo.get("Type") or "").upper()
         geo_item = geo.find("DataItem")
         xyz = _read_dataitem(xdmf_path, geo_item)
         if xyz.ndim == 1:
@@ -554,8 +551,12 @@ def load_xdmf(xdmf_path: Path, attr_name: Optional[str] = None) -> FieldData:
         if conn_item is not None:
             try:
                 conn = np.asarray(_read_dataitem(xdmf_path, conn_item), dtype=np.int64)
-            except Exception:
-                pass
+            except Exception as exc:
+                # conn stays None and the caller falls back to a slower
+                # geometry-only path, so this is recoverable but worth knowing.
+                logger.warning(
+                    "Could not read topology from %s, continuing without "
+                    "connectivity: %s", xdmf_path, exc)
 
         logger.info(
             f"[Unstructured] Loaded {xdmf_path}: " f"{len(T_flat)} nodes, t={time_val}"
@@ -570,12 +571,12 @@ def load_xdmf(xdmf_path: Path, attr_name: Optional[str] = None) -> FieldData:
 
 def write_structured_fields(
     output_base: Path,
-    fields: Dict[str, np.ndarray],
+    fields: dict[str, np.ndarray],
     x: np.ndarray,
     y: np.ndarray,
     z: np.ndarray,
-    time: Optional[float] = None,
-    step: Optional[int] = None,
+    time: float | None = None,
+    step: int | None = None,
 ) -> None:
     """Write multiple structured fields to HDF5 + XDMF.
 
@@ -632,10 +633,10 @@ def write_structured_fields(
 
 def write_unstructured_fields(
     output_base: Path,
-    fields: Dict[str, np.ndarray],
+    fields: dict[str, np.ndarray],
     xyz: np.ndarray,
     connectivity: np.ndarray,
-    time: Optional[float] = None,
+    time: float | None = None,
 ) -> None:
     """Write multiple fields on an unstructured (tetrahedral) mesh to HDF5 + XDMF.
 

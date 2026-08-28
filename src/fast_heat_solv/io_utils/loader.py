@@ -1,13 +1,14 @@
+import logging
 import os
+from typing import Any
+
 import h5py
 import numpy as np
-import logging
-from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
 
-def read_field_h5(path: str) -> Optional[Dict[str, Any]]:
+def read_field_h5(path: str) -> dict[str, Any] | None:
     """Read a saved field HDF5 file into a dict.
 
     Returns ``{'temperature', 'time', 'step', **attrs}`` or ``None`` if the file
@@ -52,7 +53,7 @@ class SimulationResult:
         if not os.path.exists(self.run_root):
             raise FileNotFoundError(f"Run directory not found: {self.run_root}")
 
-    def list_steps(self) -> List[int]:
+    def list_steps(self) -> list[int]:
         """Return a sorted list of available step indices based on profiles."""
         steps = set()
         if os.path.exists(self.profiles_dir):
@@ -64,9 +65,9 @@ class SimulationResult:
                         steps.add(int(part))
                     except (IndexError, ValueError):
                         pass
-        return sorted(list(steps))
+        return sorted(steps)
 
-    def get_profile(self, step: int, direction: str) -> Optional[tuple]:
+    def get_profile(self, step: int, direction: str) -> tuple | None:
         """
         Load 1D profile for a given step and direction.
         Returns (coords, values) tuple, or None if not found.
@@ -86,7 +87,7 @@ class SimulationResult:
             logger.error(f"Error loading profile {path}: {e}")
             return None
 
-    def get_field(self, step: int) -> Optional[Dict[str, Any]]:
+    def get_field(self, step: int) -> dict[str, Any] | None:
         """
         Load full 3D field for a given step if available (HDF5).
         Returns dict containing 'temperature', 'time', etc.
@@ -95,7 +96,7 @@ class SimulationResult:
         return read_field_h5(os.path.join(self.fields_dir, fname))
 
 
-def list_runs(output_root: str = "out") -> List[str]:
+def list_runs(output_root: str = "out") -> list[str]:
     """List all available run IDs in the output root directory."""
     if not os.path.exists(output_root):
         return []

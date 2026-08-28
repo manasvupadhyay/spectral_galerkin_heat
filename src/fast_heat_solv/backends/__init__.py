@@ -1,11 +1,11 @@
-"""Math backends — dispatch array operations and kernels to CPU or GPU.
+"""Math backends: dispatch array operations and kernels to CPU or GPU.
 
 A :class:`MathBackend` bundles an array module (NumPy or CuPy) with its
 matching physics-kernel module. Inject one into
 :class:`~fast_heat_solv.solvers.spectral.SpectralSolver` to run on CPU or GPU
-from the same solver code. To run on a different array library (PyTorch, JAX, …),
-add a :class:`MathBackend` bundling that array module with a matching
-physics-kernel module, see the docs for more details.
+from the same solver code. To run on a different library (PyTorch, JAX, …),
+add a :class:`MathBackend` with a matching physics-kernel module, 
+see the docs for more details.
 
 Examples
 --------
@@ -15,30 +15,8 @@ Examples
 'numpy'
 """
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
-# Route de Saclay, Palaiseau, 91128, France.
-#
-# Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-
-__author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
-__copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
-
-from .base import MathBackend
 from ._registry import get_backend, register_backend
+from .base import MathBackend
 
 # Importing the module runs its ``@register_backend`` decorator.
 from .numpy_backend import NumpyBackend

@@ -81,7 +81,7 @@ material:
   T0:
     value: 293.0
     unit: "K"
-  h_conv:
+  h_conv_bottom:
     value: 3000.0
     unit: "W/(m2.K)"
   DeltaH_LV:

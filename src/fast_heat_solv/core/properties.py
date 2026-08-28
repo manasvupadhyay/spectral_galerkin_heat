@@ -42,12 +42,19 @@ from typing import Any, Optional
 
 import numpy as np
 
-from fast_heat_solv.core.property_expr import PropertyExpr, _xp
+from fast_heat_solv.core.property_expr import (
+    _C_SUFFIX,
+    _C_TYPE,
+    _PY_CAST,
+    PropertyExpr,
+    _precision,
+    _xp,
+)
 
 __all__ = [
-    "liquid_fraction",
-    "TempProperty",
     "MaterialModel",
+    "TempProperty",
+    "liquid_fraction",
 ]
 
 
@@ -61,7 +68,7 @@ def liquid_fraction(T, T_solidus, T_liquidus):
     if T_liquidus <= T_solidus:
         # No mushy band: step from solid to liquid at the solidus.
         xp = _xp(T)
-        return xp.where(xp.asarray(T) >= T_solidus, 1.0, 0.0).astype(np.float32) \
+        return xp.where(xp.asarray(T) >= T_solidus, 1.0, 0.0).astype(T.dtype) \
             if hasattr(T, "shape") else (1.0 if T >= T_solidus else 0.0)
     f = (T - T_solidus) / (T_liquidus - T_solidus)
     if hasattr(f, "clip"):
@@ -79,10 +86,10 @@ class TempProperty:
         Math expression of ``T`` for each phase (see
         :class:`fast_heat_solv.core.property_expr.PropertyExpr`).
     T_solidus, T_liquidus : float
-        Mushy-band limits used to blend the branches via :func:`liquid_fraction`.
+        Mushy-band limits used to blend parameters via :func:`liquid_fraction`.
     is_constant : bool
-        True when both branches are the same single constant — lets the solver
-        take the constant-coefficient fast path.
+        True when both branches are the same single constant, which lets the
+        solver take the constant-coefficient fast path.
     """
 
     solid: PropertyExpr
@@ -109,16 +116,14 @@ class TempProperty:
         - a ``{solid: "<expr of T>", liquid: "<expr of T>"}`` mapping → branch
           expressions (a missing branch falls back to the other).
 
-        A branch mapping may also carry ``reference:`` (the baked reference
-        constant k̄/ρ̄/C̄p, consumed by the material parser, see
-        ``SimulationContext.from_dict``) and ``unit:`` (documentary). Both are
-        metadata for the evaluator and are ignored here.
+        A branch mapping may also carry ``reference:`` (the constant k̄/ρ̄/C̄p,
+        read by the material parser) and ``unit:``. Both are ignored here.
         """
         # {value, unit} or {solid, liquid} mapping.
         if isinstance(spec, dict) and ("solid" in spec or "liquid" in spec):
             solid = PropertyExpr(spec.get("solid", spec.get("liquid")))
             liquid = PropertyExpr(spec.get("liquid", spec.get("solid")))
-            # Degenerate case: both branches are the same single constant — flag
+            # Degenerate case: both branches are the same single constant. Flag
             # it so the solver can still take the constant-coefficient fast path.
             is_const = (solid.is_constant and liquid.is_constant
                         and solid.constant_value == liquid.constant_value)
@@ -137,30 +142,33 @@ class TempProperty:
 # ---------------------------------------------------------------------------
 # Numba-accelerated CPU fast path for the property fluctuations.
 #
-# The plain NumPy evaluator allocates ~25 full-volume temporaries and runs
-# single-threaded; on the CPU backend (used when a case is too large for GPU
-# memory) that single op dominates the per-Picard-iteration cost (~2 s per call
-# on a 34M-cell volume). We evaluate ``k' = k(T)-k̄`` and ``a' = rho·c-ā`` in one
-# fused, ``prange``-parallel pass — in float32, matching the weak-scalar-promotion
-# arithmetic of the GPU ``ElementwiseKernel``. ~100× faster on a many-core CPU.
-#
-# Each property is a free-form expression, not a fixed-shape polynomial, so the
-# kernel can't be a single static ``@njit`` function: it is generated (its
-# source embeds the six branch expressions verbatim, via ``PropertyExpr.to_py_source``)
-# and JIT-compiled once per ``MaterialModel``, then cached on the instance —
-# exactly mirroring how ``_fused_gpu_kernel`` below builds and caches a bespoke
-# CUDA kernel per model. numba is a hard dependency, so this is the only CPU path.
+# We evaluate ``k' = k(T)-k̄`` and ``a' = rho·c-ā`` in one
+# fused, ``prange``-parallel pass at the configured precision.
+# Each property is a free-form expression.
 # ---------------------------------------------------------------------------
-from numba import njit as _njit, prange as _prange
+from numba import njit as _njit  # noqa: E402  (deliberately after the note above)
+from numba import prange as _prange  # noqa: E402
 
 
-def _build_kp_ap_kernel(k_solid, k_liquid, rho_solid, rho_liquid, cp_solid, cp_liquid):
-    """Compile a fused njit ``k'(T), a'(T)`` kernel from six branch expressions."""
+def _build_kp_ap_kernel(k_solid, k_liquid, rho_solid, rho_liquid, cp_solid,
+                        cp_liquid, dtype=np.float32):
+    """Compile a fused njit ``k'(T), a'(T)`` kernel from six branch expressions.
+
+    Parameters
+    ----------
+    k_solid, k_liquid, rho_solid, rho_liquid, cp_solid, cp_liquid : PropertyExpr
+        The six branch expressions written into the kernel source.
+    dtype : data-type, optional
+        Precision of the emitted literals, ``numpy.float32`` (default) or
+        ``numpy.float64``. Must match the dtype of the arrays passed at call
+        time, or numba will compile a second, promoted specialisation.
+    """
+    cast = _precision(dtype, _PY_CAST)
     src = f"""
 def _kp_ap_kernel(Tfield, t_sol, inv_band, degenerate, k_bar, a_bar, kp_out, ap_out):
     nz, ny, nx = Tfield.shape
-    one = np.float32(1.0)
-    zero = np.float32(0.0)
+    one = {cast}(1.0)
+    zero = {cast}(0.0)
     for kk in prange(nz):
         for j in range(ny):
             for i in range(nx):
@@ -174,9 +182,9 @@ def _kp_ap_kernel(Tfield, t_sol, inv_band, degenerate, k_bar, a_bar, kp_out, ap_
                     elif fl > one:
                         fl = one
                 om = one - fl
-                kv = om * ({k_solid.to_py_source()}) + fl * ({k_liquid.to_py_source()})
-                rv = om * ({rho_solid.to_py_source()}) + fl * ({rho_liquid.to_py_source()})
-                cv = om * ({cp_solid.to_py_source()}) + fl * ({cp_liquid.to_py_source()})
+                kv = om * ({k_solid.to_py_source(dtype)}) + fl * ({k_liquid.to_py_source(dtype)})
+                rv = om * ({rho_solid.to_py_source(dtype)}) + fl * ({rho_liquid.to_py_source(dtype)})
+                cv = om * ({cp_solid.to_py_source(dtype)}) + fl * ({cp_liquid.to_py_source(dtype)})
                 kp_out[kk, j, i] = kv - k_bar
                 ap_out[kk, j, i] = rv * cv - a_bar
 """
@@ -185,13 +193,23 @@ def _kp_ap_kernel(Tfield, t_sol, inv_band, degenerate, k_bar, a_bar, kp_out, ap_
     return _njit(parallel=True, fastmath=True)(namespace["_kp_ap_kernel"])
 
 
-def _build_latent_kernel(rho_solid, rho_liquid):
-    """Compile a fused njit latent-heat-source kernel from the rho branches."""
+def _build_latent_kernel(rho_solid, rho_liquid, dtype=np.float32):
+    """Compile a fused njit latent-heat-source kernel from the rho branches.
+
+    Parameters
+    ----------
+    rho_solid, rho_liquid : PropertyExpr
+        The density branches written into the kernel source.
+    dtype : data-type, optional
+        Precision of the emitted literals, ``numpy.float32`` (default) or
+        ``numpy.float64``.
+    """
+    cast = _precision(dtype, _PY_CAST)
     src = f"""
 def _latent_kernel(Tfield, Tprev, t_sol, inv_band, degenerate, Lf, inv_dt, out):
     nz, ny, nx = Tfield.shape
-    one = np.float32(1.0)
-    zero = np.float32(0.0)
+    one = {cast}(1.0)
+    zero = {cast}(0.0)
     for kk in prange(nz):
         for j in range(ny):
             for i in range(nx):
@@ -212,7 +230,7 @@ def _latent_kernel(Tfield, Tprev, t_sol, inv_band, degenerate, Lf, inv_dt, out):
                     elif flp > one:
                         flp = one
                 om = one - flc
-                rho = om * ({rho_solid.to_py_source()}) + flc * ({rho_liquid.to_py_source()})
+                rho = om * ({rho_solid.to_py_source(dtype)}) + flc * ({rho_liquid.to_py_source(dtype)})
                 out[kk, j, i] = -rho * Lf * (flc - flp) * inv_dt
 """
     namespace = {"np": np, "prange": _prange}
@@ -237,7 +255,7 @@ class MaterialModel:
         """Volumetric sensible heat capacity ``a(T) = rho(T) * c(T)``."""
         return self.rho(T) * self.c(T)
 
-    def _cpu_band_params(self):
+    def _cpu_band_params(self, dtype=np.float32):
         """Cached mushy-band parameters (t_sol, inv_band, degenerate) for the CPU kernels.
 
         The fused kernels blend all three properties with one liquid fraction, so
@@ -245,8 +263,12 @@ class MaterialModel:
         builds them from the same solidus/liquidus).
         """
         cache = getattr(self, "_cpu_band_cache", None)
-        if cache is not None:
-            return cache
+        if cache is None:
+            cache = {}
+            object.__setattr__(self, "_cpu_band_cache", cache)
+        hit = cache.get(np.dtype(dtype))
+        if hit is not None:
+            return hit
         bands = {(p.T_solidus, p.T_liquidus) for p in (self.k, self.rho, self.c)}
         if len(bands) != 1:
             raise ValueError(
@@ -254,138 +276,156 @@ class MaterialModel:
                 f"property kernel; got bands {bands}.")
         t_sol, t_liq = self.k.T_solidus, self.k.T_liquidus
         degenerate = t_liq <= t_sol
-        inv_band = np.float32(0.0 if degenerate else 1.0 / (t_liq - t_sol))
-        cache = (np.float32(t_sol), inv_band, bool(degenerate))
-        object.__setattr__(self, "_cpu_band_cache", cache)
-        return cache
+        real_t = np.dtype(dtype).type
+        inv_band = real_t(0.0 if degenerate else 1.0 / (t_liq - t_sol))
+        hit = (real_t(t_sol), inv_band, bool(degenerate))
+        cache[np.dtype(dtype)] = hit
+        return hit
 
-    def _cpu_kp_ap_kernel(self):
-        """Build (and cache) the fused njit ``k',a'`` kernel for this model."""
-        kern = getattr(self, "_kp_ap_cpu_kernel", None)
-        if kern is not None:
-            return kern
-        kern = _build_kp_ap_kernel(self.k.solid, self.k.liquid,
-                                    self.rho.solid, self.rho.liquid,
-                                    self.c.solid, self.c.liquid)
-        object.__setattr__(self, "_kp_ap_cpu_kernel", kern)
+    def _cpu_kp_ap_kernel(self, dtype=np.float32):
+        """Build (and cache) the fused njit ``k',a'`` kernel for this model.
+
+        One kernel is compiled per precision: a float32 and a float64
+        run need different kernels.
+        """
+        cache = getattr(self, "_kp_ap_cpu_kernel", None)
+        if cache is None:
+            cache = {}
+            object.__setattr__(self, "_kp_ap_cpu_kernel", cache)
+        key = np.dtype(dtype)
+        kern = cache.get(key)
+        if kern is None:
+            kern = _build_kp_ap_kernel(self.k.solid, self.k.liquid,
+                                       self.rho.solid, self.rho.liquid,
+                                       self.c.solid, self.c.liquid, dtype=key)
+            cache[key] = kern
         return kern
 
-    def _cpu_latent_kernel(self):
-        """Build (and cache) the fused njit latent-heat-source kernel for this model."""
-        kern = getattr(self, "_latent_cpu_kernel", None)
-        if kern is not None:
-            return kern
-        kern = _build_latent_kernel(self.rho.solid, self.rho.liquid)
-        object.__setattr__(self, "_latent_cpu_kernel", kern)
+    def _cpu_latent_kernel(self, dtype=np.float32):
+        """Build (and cache) the fused njit latent-heat-source kernel per precision."""
+        cache = getattr(self, "_latent_cpu_kernel", None)
+        if cache is None:
+            cache = {}
+            object.__setattr__(self, "_latent_cpu_kernel", cache)
+        key = np.dtype(dtype)
+        kern = cache.get(key)
+        if kern is None:
+            kern = _build_latent_kernel(self.rho.solid, self.rho.liquid, dtype=key)
+            cache[key] = kern
         return kern
 
     def k_prime_a_prime(self, T, k_bar, a_bar):
         """Fluctuations ``(k(T) - k_bar, a(T) - a_bar)`` in a single fused pass.
-
-        The straightforward ``k(T)``/``a(T)`` evaluation allocates ~25 temporary
-        full-volume arrays (Horner + liquid-fraction blend, twice for ``a=rho*c``);
-        on GPU that is ~140 ms per Picard iteration. This fuses the whole thing
-        into one kernel (built once from the model's expressions), cutting it to a
-        few ms: a numba ``prange`` pass on CPU, an ``ElementwiseKernel`` on GPU.
         """
         xp = _xp(T)
+        real_t = np.dtype(getattr(T, "dtype", np.float32))
+        scalar = real_t.type
         if xp is np:
-            t_sol, inv_band, degenerate = self._cpu_band_params()
-            kern = self._cpu_kp_ap_kernel()
-            Tf = np.ascontiguousarray(T, dtype=np.float32)
-            kp = np.empty(Tf.shape, dtype=np.float32)
-            ap = np.empty(Tf.shape, dtype=np.float32)
+            t_sol, inv_band, degenerate = self._cpu_band_params(real_t)
+            kern = self._cpu_kp_ap_kernel(real_t)
+            Tf = np.ascontiguousarray(T, dtype=real_t)
+            kp = np.empty(Tf.shape, dtype=real_t)
+            ap = np.empty(Tf.shape, dtype=real_t)
             kern(Tf, t_sol, inv_band, degenerate,
-                 np.float32(k_bar), np.float32(a_bar), kp, ap)
+                 scalar(k_bar), scalar(a_bar), kp, ap)
             return kp, ap
-        import cupy
-        kern = self._fused_gpu_kernel()
-        kp = cupy.empty(T.shape, dtype=cupy.float32)
-        ap = cupy.empty(T.shape, dtype=cupy.float32)
-        kern(T.astype(cupy.float32, copy=False),
-             cupy.float32(k_bar), cupy.float32(a_bar), kp, ap)
+        kern = self._fused_gpu_kernel(real_t)
+        kp = xp.empty(T.shape, dtype=real_t)
+        ap = xp.empty(T.shape, dtype=real_t)
+        kern(T, scalar(k_bar), scalar(a_bar), kp, ap)
         return kp, ap
 
-    def _fused_gpu_kernel(self):
-        """Build (and cache) the fused CuPy kernel for ``k', a'`` from the expressions."""
-        kern = getattr(self, "_kp_ap_kernel", None)
+    def _fused_gpu_kernel(self, dtype=np.float32):
+        """Build (and cache) the fused CuPy kernel for ``k', a'`` per precision.
+        """
+        cache = getattr(self, "_kp_ap_kernel", None)
+        if cache is None:
+            cache = {}
+            object.__setattr__(self, "_kp_ap_kernel", cache)
+        key = np.dtype(dtype)
+        kern = cache.get(key)
         if kern is not None:
             return kern
         import cupy
 
+        ct = _precision(key, _C_TYPE)
+        sfx = _precision(key, _C_SUFFIX)
         Ts, Tl = float(self.k.T_solidus), float(self.k.T_liquidus)
         if Tl > Ts:
-            fl = (f"float fl = (T-{Ts:.9e}f)*{1.0/(Tl-Ts):.9e}f; "
-                  f"fl = fl<0.0f?0.0f:(fl>1.0f?1.0f:fl);")
+            fl = (f"{ct} fl = (T-{Ts:.9e}{sfx})*{1.0/(Tl-Ts):.9e}{sfx}; "
+                  f"fl = fl<0.0{sfx}?0.0{sfx}:(fl>1.0{sfx}?1.0{sfx}:fl);")
         else:  # degenerate mushy band -> step at the solidus
-            fl = f"float fl = (T>={Ts:.9e}f)?1.0f:0.0f;"
+            fl = f"{ct} fl = (T>={Ts:.9e}{sfx})?1.0{sfx}:0.0{sfx};"
         body = f"""
         {fl}
-        float omfl = 1.0f - fl;
-        float kk  = omfl*({self.k.solid.to_c_source()})   + fl*({self.k.liquid.to_c_source()});
-        float rho = omfl*({self.rho.solid.to_c_source()}) + fl*({self.rho.liquid.to_c_source()});
-        float cc  = omfl*({self.c.solid.to_c_source()})   + fl*({self.c.liquid.to_c_source()});
+        {ct} omfl = 1.0{sfx} - fl;
+        {ct} kk  = omfl*({self.k.solid.to_c_source(key)})   + fl*({self.k.liquid.to_c_source(key)});
+        {ct} rho = omfl*({self.rho.solid.to_c_source(key)}) + fl*({self.rho.liquid.to_c_source(key)});
+        {ct} cc  = omfl*({self.c.solid.to_c_source(key)})   + fl*({self.c.liquid.to_c_source(key)});
         kp = kk - kbar;
         ap = rho*cc - abar;
         """
         kern = cupy.ElementwiseKernel(
-            "float32 T, float32 kbar, float32 abar",
-            "float32 kp, float32 ap", body, "prop_kp_ap")
-        self._kp_ap_kernel = kern
+            f"{key.name} T, {key.name} kbar, {key.name} abar",
+            f"{key.name} kp, {key.name} ap", body, f"prop_kp_ap_{key.name}")
+        cache[key] = kern
         return kern
 
     def latent_heat_source(self, T, T_prev, T_S, T_L, L_f, dt, out):
         """Latent-heat sink ``Q = -rho(T) L_f (f_l(T)-f_l(T_prev))/dt`` into *out*.
-
-        Backend-agnostic like :meth:`k_prime_a_prime`: a fused ``ElementwiseKernel``
-        on GPU (avoiding ~5 box-sized temporaries)
         """
         xp = _xp(T)
         if T_L > T_S:
             inv_band = 1.0 / (T_L - T_S)
         else:  # degenerate mushy band -> step at the solidus
             inv_band = -1.0
+        real_t = np.dtype(getattr(out, "dtype", getattr(T, "dtype", np.float32)))
+        scalar = real_t.type
         if xp is np:
-            f32 = np.float32
             degenerate = inv_band < 0.0
-            kern = self._cpu_latent_kernel()
-            kern(np.ascontiguousarray(T, dtype=f32),
-                 np.ascontiguousarray(T_prev, dtype=f32),
-                 f32(T_S), f32(0.0 if degenerate else inv_band),
-                 bool(degenerate), f32(L_f), f32(1.0 / dt), out)
+            kern = self._cpu_latent_kernel(real_t)
+            kern(np.ascontiguousarray(T, dtype=real_t),
+                 np.ascontiguousarray(T_prev, dtype=real_t),
+                 scalar(T_S), scalar(0.0 if degenerate else inv_band),
+                 bool(degenerate), scalar(L_f), scalar(1.0 / dt), out)
             return
-        import cupy
-        kern = self._latent_source_kernel()
-        kern(T.astype(cupy.float32, copy=False),
-             T_prev.astype(cupy.float32, copy=False),
-             cupy.float32(T_S), cupy.float32(inv_band),
-             cupy.float32(L_f), cupy.float32(dt), out)
+        kern = self._latent_source_kernel(real_t)
+        kern(T, T_prev, scalar(T_S), scalar(inv_band),
+             scalar(L_f), scalar(dt), out)
 
-    def _latent_source_kernel(self):
-        """Build (and cache) the fused CuPy latent-heat-source kernel."""
-        kern = getattr(self, "_lh_kernel", None)
+    def _latent_source_kernel(self, dtype=np.float32):
+        """Build (and cache) the fused CuPy latent-heat-source kernel per precision."""
+        cache = getattr(self, "_lh_kernel", None)
+        if cache is None:
+            cache = {}
+            object.__setattr__(self, "_lh_kernel", cache)
+        key = np.dtype(dtype)
+        kern = cache.get(key)
         if kern is not None:
             return kern
         import cupy
 
+        ct = _precision(key, _C_TYPE)
+        sfx = _precision(key, _C_SUFFIX)
         # Mushy band (Ts, inv) passed at call time; inv < 0 flags the degenerate
-        # no-band case (step at the solidus). Only the rho branches are baked.
-        clc = ("flc = inv<0.0f ? (T>=Ts?1.0f:0.0f) "
-               ": fminf(fmaxf((T-Ts)*inv,0.0f),1.0f);")
-        clp = ("flp = inv<0.0f ? (Tp>=Ts?1.0f:0.0f) "
-               ": fminf(fmaxf((Tp-Ts)*inv,0.0f),1.0f);")
+        # no-band case (step at the solidus). Only the rho branches are inlined.
+        clc = (f"flc = inv<0.0{sfx} ? (T>=Ts?1.0{sfx}:0.0{sfx}) "
+               f": fmin{sfx}(fmax{sfx}((T-Ts)*inv,0.0{sfx}),1.0{sfx});")
+        clp = (f"flp = inv<0.0{sfx} ? (Tp>=Ts?1.0{sfx}:0.0{sfx}) "
+               f": fmin{sfx}(fmax{sfx}((Tp-Ts)*inv,0.0{sfx}),1.0{sfx});")
         body = f"""
-        float flc, flp;
+        {ct} flc, flp;
         {clc}
         {clp}
-        float omfl = 1.0f - flc;
-        float rho = omfl*({self.rho.solid.to_c_source()}) + flc*({self.rho.liquid.to_c_source()});
+        {ct} omfl = 1.0{sfx} - flc;
+        {ct} rho = omfl*({self.rho.solid.to_c_source(key)}) + flc*({self.rho.liquid.to_c_source(key)});
         out = -rho * Lf * (flc - flp) / dt;
         """
         kern = cupy.ElementwiseKernel(
-            "float32 T, float32 Tp, float32 Ts, float32 inv, float32 Lf, float32 dt",
-            "float32 out", body, "latent_heat_source")
-        self._lh_kernel = kern
+            f"{key.name} T, {key.name} Tp, {key.name} Ts, {key.name} inv, "
+            f"{key.name} Lf, {key.name} dt",
+            f"{key.name} out", body, f"latent_heat_source_{key.name}")
+        cache[key] = kern
         return kern
 
     @property
@@ -399,7 +439,7 @@ class MaterialModel:
 
         The user supplies each T-dependent property's reference constant
         explicitly, as a ``reference:`` key inside its config block. This helper
-        only computes a *recommendation* for each: the midpoint of the property's
+        only computes a recommendation for each: the midpoint of the property's
         own extrema sampled across the range, ``½(min p + max p)``. Centering every
         reference in the middle of its working range reduces the peak fluctuations
         and helps convergence.
@@ -420,8 +460,8 @@ class MaterialModel:
         """Build a :class:`MaterialModel` from the ``material`` config section.
 
         Returns ``None`` when none of ``k``, ``rho``, ``Cp`` is given as
-        solid/liquid branch expressions (i.e. the material is fully constant) —
-        the solver then keeps its existing constant-coefficient path.
+        solid/liquid branch expressions, i.e. the material is fully constant.
+        The solver then keeps its existing constant-coefficient path.
         """
         def _has_branches(spec):
             return isinstance(spec, dict) and ("solid" in spec or "liquid" in spec)

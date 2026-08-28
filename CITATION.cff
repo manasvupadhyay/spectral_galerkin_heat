@@ -11,6 +11,6 @@ authors:
     given-names: "Manas V."
     affiliation: "LMS, École Polytechnique"
 title: "fastHeatSolv"
-version: 1.0.0
+version: 0.1.0
 date-released: 2026-04-20
 url: "https://github.com/TheoADX/fastHeatSolv"

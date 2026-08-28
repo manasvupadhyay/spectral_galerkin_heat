@@ -13,8 +13,8 @@ The state is built at the Python layer only: a dataclass cannot enter the
 the kernel boundary.
 """
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
@@ -36,9 +36,10 @@ __author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
 __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from types import ModuleType
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 
@@ -50,10 +51,10 @@ from fast_heat_solv.physics import spectral_helpers as spec_hp
 NDArray = Any
 
 __all__ = [
-    "SpectralGrid",
+    "BackendHooks",
     "FineMeshState",
     "SolverBuffers",
-    "BackendHooks",
+    "SpectralGrid",
     "SpectralSolverState",
     "precompute_K_KK",
 ]
@@ -101,11 +102,11 @@ class SpectralGrid:
 
         # Global mesh coordinates (cell-centered), one array per axis.
         self.x, self.y, self.z = [((xp.arange(n) + 0.5) * d).astype(dtype)
-                                   for n, d in zip(geom.n, geom.d)]
+                                   for n, d in zip(geom.n, geom.d, strict=True)]
 
         # Normalization coefficients (C[0]=x, C[1]=y, C[2]=z).
         self.C = tuple(xp.asarray(spec_hp._C_coef(n, L), dtype=dtype)
-                       for n, L in zip(geom.n, geom.size))
+                       for n, L in zip(geom.n, geom.size, strict=True))
 
         # Scaling factors (scalar math stays on the host via np.sqrt).
         dx, dy = geom.d.x, geom.d.y
@@ -129,7 +130,7 @@ class SpectralGrid:
         dz = geom.d.z
         nz = geom.n.z
         Lz = geom.size.z
-        self.sqrt_dV = xp.float32(np.sqrt(float(dx * dy * dz)))
+        self.sqrt_dV = dtype(np.sqrt(float(dx * dy * dz)))
         # Grid spacings (host floats) for finite-difference gradients in the
         # property correction.
         self.dx, self.dy, self.dz = float(dx), float(dy), float(dz)
@@ -137,9 +138,9 @@ class SpectralGrid:
         # Modal multipliers (m*pi/Lx, n*pi/Ly, p*pi/Lz) as 1-D arrays, used to
         # scale each mixed sine/cosine transform when assembling C^k_mnp. Stored
         # in per-axis order: kx over x-modes, ky over y, kz over z.
-        self.kx = (np.pi * xp.arange(nx, dtype=xp.float32) / Lx).astype(xp.float32)
-        self.ky = (np.pi * xp.arange(ny, dtype=xp.float32) / Ly).astype(xp.float32)
-        self.kz = (np.pi * xp.arange(nz, dtype=xp.float32) / Lz).astype(xp.float32)
+        self.kx = (np.pi * xp.arange(nx, dtype=dtype) / Lx).astype(dtype)
+        self.ky = (np.pi * xp.arange(ny, dtype=dtype) / Ly).astype(dtype)
+        self.kz = (np.pi * xp.arange(nz, dtype=dtype) / Lz).astype(dtype)
 
     def prepare_full_reconstruction(self, geom):
         """Compute node-centered grids and full-domain reconstruction bases on demand.
@@ -156,10 +157,10 @@ class SpectralGrid:
         dx, dy, dz = geom.d
 
         self.coords_rec = [((np.arange(n + 1)) * d).astype(self.dtype)
-                           for n, d in zip((nx, ny, nz), (dx, dy, dz))]
+                           for n, d in zip((nx, ny, nz), (dx, dy, dz), strict=True)]
         C_host = [_asnumpy(self.C[a]) for a in range(3)]
         self.B_recon = [(C_host[a][:, None] * np.cos(np.pi * np.arange(n)[:, None] * self.coords_rec[a][None, :] / L)).astype(self.dtype)
-                        for a, (n, L) in enumerate(zip((nx, ny, nz), (Lx, Ly, Lz)))]
+                        for a, (n, L) in enumerate(zip((nx, ny, nz), (Lx, Ly, Lz), strict=True))]
 
 
 class FineMeshState:
@@ -201,9 +202,9 @@ class FineMeshState:
         self.dx_fine, self.dy_fine, self.dz_fine = dx/self.refinement, dy/self.refinement, dz/self.refinement
         d_fine = [self.dx_fine, self.dy_fine, self.dz_fine]
 
-        self.n_fine_totals = [int(np.ceil(L / d)) for L, d in zip([Lx, Ly, Lz_box], d_fine)]
+        self.n_fine_totals = [int(np.ceil(L / d)) for L, d in zip([Lx, Ly, Lz_box], d_fine, strict=True)]
         self.coords_fine = [((xp.arange(n) + 0.5) * d).astype(dtype)
-                            for n, d in zip(self.n_fine_totals, d_fine)]
+                            for n, d in zip(self.n_fine_totals, d_fine, strict=True)]
 
         z_fine_global = (Lz - Lz_box) + self.coords_fine[2]
 
@@ -249,7 +250,7 @@ class SolverBuffers:
     q_evap_buffer: NDArray = None
     Q_latent_buffer: NDArray = None
 
-    # Picard-iteration scratch (nz, ny, nx) — fixed shape, allocated once here
+    # Picard-iteration scratch (nz, ny, nx). Fixed shape, allocated once here
     # and reused every time step (see SpectralSolver.step).
     a_old: NDArray = None
     residual_curr: NDArray = None
@@ -268,7 +269,7 @@ class SolverBuffers:
         else:
             self.Q_latent_buffer = xp.zeros((fine_mesh.nz_box, fine_mesh.ny_box, fine_mesh.nx_box), dtype=dtype)
 
-        # Per-iteration Picard scratch — same shape as a_temp, never resized.
+        # Per-iteration Picard scratch, same shape as a_temp. Never resized.
         self.a_old = xp.empty((nz, ny, nx), dtype=dtype)
         self.residual_curr = xp.empty((nz, ny, nx), dtype=dtype)
         self.n_elements = dtype(self.a_temp.size)
@@ -287,16 +288,16 @@ class BackendHooks:
     Attributes
     ----------
     idct : callable
-        Inverse (type-III, ortho) DCT — ``IDCT_II`` in the kernel modules.
+        Inverse (type-III, ortho) DCT, ``IDCT_II`` in the kernel modules.
     ndshift : callable
-        ``(field, shift_pixels, order, mode, cval) -> shifted_field`` —
+        ``(field, shift_pixels, order, mode, cval) -> shifted_field``:
         scipy.ndimage on CPU, cupyx.scipy.ndimage on GPU.
     source_term : callable
         Latent-heat source kernel with signature
-        ``(T_curr, T_prev, T_S, T_L, rho, L, dt, out)`` — a plain numba ``@njit``
+        ``(T_curr, T_prev, T_S, T_L, rho, L, dt, out)``. A plain numba ``@njit``
         call on CPU, a ``@cuda.jit`` launch on GPU.
     dct : callable, optional
-        Forward (type-II, ortho) DCT over **all** axes — ``DCT_II`` in the kernel
+        Forward (type-II, ortho) DCT over **all** axes, ``DCT_II`` in the kernel
         modules. Used by the property-correction volume projection.
     corr_source : callable, optional
         ``(T, k', a', T_prev, dt, dx, dy, dz) -> f`` fused property-correction
@@ -336,12 +337,12 @@ class SpectralSolverState:
     K: NDArray = None
     KK: NDArray = None
 
-    # 4. Bound array module (numpy or cupy) — lets backend-agnostic free
+    # 4. Bound array module (numpy or cupy). Lets backend-agnostic free
     # functions in ``spectral_ops`` recover ``xp`` from the state object.
     xp: ModuleType = None
 
     # 5. Floating-point precision (np.float32 / np.float64) used for every
-    # array built below — recoverable by free functions alongside ``xp``.
+    # array built below, recoverable by free functions alongside ``xp``.
     dtype: Any = None
 
     # 6. Backend primitive hooks (FFT / ndimage shift / source-term launch),
@@ -382,7 +383,7 @@ def precompute_K_KK(phys, num, geom, xp, dtype=np.float32):
     # Per-axis wavenumbers in array-index order [z, y, x], kept 1-D and
     # broadcast per z-slab below. Expanding them with meshgrid would hold three
     # extra (nz, ny, nx) grids, and since ``np.pi * xp.arange(n)`` is float64
-    # those intermediates peak at ~7x the two arrays actually returned — the
+    # those intermediates peak at ~7x the two arrays actually returned. The
     # dominant setup cost on large grids.
     #
     # The wide math deliberately stays in float64 even when *dtype* is float32:
@@ -391,7 +392,7 @@ def precompute_K_KK(phys, num, geom, xp, dtype=np.float32):
     # the float64 working set bounded instead, so only K and KK scale with the
     # grid.
     kz, ky, kx = [np.pi * xp.arange(n) / L
-                  for n, L in zip((nz, ny, nx), (Lz, Ly, Lx))]
+                  for n, L in zip((nz, ny, nx), (Lz, Ly, Lx), strict=True)]
     alpha = phys.k / (phys.rho * phys.Cp)
     rho_Cp = phys.rho * phys.Cp
 

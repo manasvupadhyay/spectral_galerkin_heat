@@ -51,7 +51,7 @@ config = {
         "Pa": 101325.0,
         "T_boil": 3090.0,
     },
-    "laser": {   # TODO modify to provide an exampe how to provide a laserPAth it is defined as ABC, would be better to provide a full example how to provide a laser path
+    "laser": {
         "radius": 60.0e-6,
         "absorptivity": 0.30,
         "power_nominal": 200.0,
@@ -69,6 +69,42 @@ config = {
 #    this example's own paths/ folder, regardless of the current directory.
 # ---------------------------------------------------------------------------
 context = SimulationContext.from_dict(config, config_dir=EXAMPLE_DIR)
+
+# ---------------------------------------------------------------------------
+# 2b. (Alternative) Drive the laser from Python instead of a G-code file
+#
+#     `laser.path` above builds a GCodeLaserPath for you. `LaserPath` is an
+#     abstract base class, so any object with a `get_state(time, dt)` returning
+#     a LaserState works just as well. Assign it to `context.laser_path` after
+#     building the context and it replaces whatever the config produced.
+#
+#     Positions are metres, power watts, velocity m/s. Set `is_on=False` (or
+#     power 0.0) once the laser should stop depositing energy.
+# ---------------------------------------------------------------------------
+#
+# from fast_heat_solv.core.laser import LaserPath, LaserState
+#
+# class RasterLaser(LaserPath):
+#     """Back-and-forth scan along x, stepping over in y each pass."""
+#
+#     def __init__(self, x0, y0, vx, power, track_length, pitch):
+#         self.x0, self.y0 = x0, y0
+#         self.vx, self.power = vx, power
+#         self.track_length, self.pitch = track_length, pitch
+#
+#     def get_state(self, time, dt):
+#         pass_index, along = divmod(self.vx * time, self.track_length)
+#         pass_index = int(pass_index)
+#         forward = pass_index % 2 == 0
+#         x = self.x0 + (along if forward else self.track_length - along)
+#         y = self.y0 + pass_index * self.pitch
+#         vx = self.vx if forward else -self.vx
+#         return LaserState(x=x, y=y, power=self.power, is_on=True, v=(vx, 0.0))
+#
+# context.laser_path = RasterLaser(
+#     x0=0.2e-3, y0=0.2e-3, vx=0.5, power=200.0,
+#     track_length=0.6e-3, pitch=80e-6,
+# )
 
 # ---------------------------------------------------------------------------
 # 3. Instantiate and initialize the solver

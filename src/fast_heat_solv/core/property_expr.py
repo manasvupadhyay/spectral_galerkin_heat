@@ -4,21 +4,24 @@ A property branch (e.g. ``k.solid``) is given in config as either a bare
 number (a constant) or a string expression of ``T`` such as
 ``"9.248 + 0.01571 * T"`` or ``"12.41 * exp(-T / 3000.0)"``. :class:`PropertyExpr`
 parses that string once against a small node/name/function whitelist using
-Python's ``ast`` module — it never calls ``eval``/``exec`` on the expression
-itself, so there is no sandbox-escape surface (unlike a restricted-namespace
-``eval``, which is escapable through attribute access on any in-scope object).
+Python's ``ast`` module. It never calls ``eval`` or ``exec`` on the expression
+itself, so there is no sandbox-escape surface. (A restricted-namespace ``eval``
+would be escapable through attribute access on any in-scope object.)
 
-The validated AST is then rendered to three different targets so the
-temperature-dependent solver hot path stays fully fused instead of falling
-back to a slow per-property Python callback:
+The validated AST is then rendered to three targets, so the temperature-dependent
+hot path stays fully fused rather than falling back to a per-property Python
+callback:
 
-* :meth:`PropertyExpr.__call__` — a NumPy/CuPy-broadcasting evaluator (works
-  on a scalar or a full field, on host or device);
-* :meth:`PropertyExpr.to_py_source` — a numba-``njit``-compatible Python
-  source snippet (``math.<fn>`` calls, which numba compiles natively), used
-  to build the fused CPU kernel;
-* :meth:`PropertyExpr.to_c_source` — a CUDA C expression, used to build the
-  fused GPU ``ElementwiseKernel``.
+* :meth:`PropertyExpr.__call__`, a NumPy/CuPy-broadcasting evaluator that works
+  on a scalar or a full field, on host or device;
+* :meth:`PropertyExpr.to_py_source`, a numba-``njit``-compatible Python source
+  snippet using ``math.<fn>`` calls, which numba compiles natively, to build
+  the fused CPU kernel;
+* :meth:`PropertyExpr.to_c_source`, a CUDA C expression, to build the fused GPU
+  ``ElementwiseKernel``.
+
+Both source renderers take the target precision, since the literals they emit
+are what fixes the precision of the generated kernel.
 """
 
 # Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
@@ -144,41 +147,80 @@ def _eval(node, T, xp):
     return fn(*(_eval(a, T, xp) for a in node.args))
 
 
-def _render_py(node):
-    """Render as a numba-``njit``-compatible Python source expression."""
+# Precision-dependent rendering. Every literal is wrapped in an explicit
+# ``np.floatNN()`` so numba does not promote the whole expression to double;
+# CUDA C selects both the literal suffix and the intrinsic name from the same
+# suffix ('sqrtf' in single precision, 'sqrt' in double).
+_PY_CAST = {np.dtype(np.float32): "np.float32", np.dtype(np.float64): "np.float64"}
+_C_SUFFIX = {np.dtype(np.float32): "f", np.dtype(np.float64): ""}
+_C_TYPE = {np.dtype(np.float32): "float", np.dtype(np.float64): "double"}
+
+
+def _precision(dtype, table):
+    """Look *dtype* up in a precision table, with a clear error if unsupported."""
+    key = np.dtype(dtype)
+    try:
+        return table[key]
+    except KeyError:
+        raise ValueError(
+            f"Unsupported property precision {key.name!r}; "
+            f"expected one of {sorted(t.name for t in table)}."
+        ) from None
+
+
+def _render_py(node, cast):
+    """Render as a numba-``njit``-compatible Python source expression.
+
+    Parameters
+    ----------
+    node : ast.AST
+        A node of the validated expression tree.
+    cast : str
+        Literal wrapper to emit, ``"np.float32"`` or ``"np.float64"``.
+    """
     if isinstance(node, ast.Constant):
-        return f"np.float32({node.value!r})"
+        return f"{cast}({node.value!r})"
     if isinstance(node, ast.Name):
-        return "T" if node.id == "T" else f"np.float32({_ALLOWED_CONSTANTS[node.id]!r})"
+        return "T" if node.id == "T" else f"{cast}({_ALLOWED_CONSTANTS[node.id]!r})"
     if isinstance(node, ast.BinOp):
-        left, right = _render_py(node.left), _render_py(node.right)
+        left, right = _render_py(node.left, cast), _render_py(node.right, cast)
         sym = "**" if isinstance(node.op, ast.Pow) else _BINOP_SYMBOL[type(node.op)]
         return f"({left} {sym} {right})"
     if isinstance(node, ast.UnaryOp):
-        val = _render_py(node.operand)
+        val = _render_py(node.operand, cast)
         return f"(-{val})" if isinstance(node.op, ast.USub) else f"(+{val})"
-    # ast.Call — numba's `math` module mirrors Python's math module naming.
-    args = ", ".join(_render_py(a) for a in node.args)
+    # ast.Call: numba's `math` module mirrors Python's math module naming.
+    args = ", ".join(_render_py(a, cast) for a in node.args)
     return f"math.{node.func.id}({args})"
 
 
-def _render_c(node):
-    """Render as a single-precision CUDA C expression."""
+def _render_c(node, suffix):
+    """Render as a CUDA C expression.
+
+    Parameters
+    ----------
+    node : ast.AST
+        A node of the validated expression tree.
+    suffix : str
+        ``"f"`` for single-precision literals and intrinsics, ``""`` for double.
+    """
     if isinstance(node, ast.Constant):
-        return f"{float(node.value):.9e}f"
+        return f"{float(node.value):.9e}{suffix}"
     if isinstance(node, ast.Name):
-        return "T" if node.id == "T" else f"{_ALLOWED_CONSTANTS[node.id]:.9e}f"
+        if node.id == "T":
+            return "T"
+        return f"{_ALLOWED_CONSTANTS[node.id]:.9e}{suffix}"
     if isinstance(node, ast.BinOp):
-        left, right = _render_c(node.left), _render_c(node.right)
+        left, right = _render_c(node.left, suffix), _render_c(node.right, suffix)
         if isinstance(node.op, ast.Pow):
-            return f"powf({left}, {right})"
+            return f"pow{suffix}({left}, {right})"
         return f"({left} {_BINOP_SYMBOL[type(node.op)]} {right})"
     if isinstance(node, ast.UnaryOp):
-        val = _render_c(node.operand)
+        val = _render_c(node.operand, suffix)
         return f"(-{val})" if isinstance(node.op, ast.USub) else f"(+{val})"
-    # ast.Call — CUDA single-precision intrinsics are the libm name + 'f'.
-    args = ", ".join(_render_c(a) for a in node.args)
-    return f"{node.func.id}f({args})"
+    # ast.Call: CUDA single-precision intrinsics are the libm name + 'f'.
+    args = ", ".join(_render_c(a, suffix) for a in node.args)
+    return f"{node.func.id}{suffix}({args})"
 
 
 class PropertyExpr:
@@ -187,12 +229,12 @@ class PropertyExpr:
     ``str(expr)`` must either parse as a plain number (a constant) or as an
     expression using ``T``, ``+ - * / **``, the constants ``pi``/``e``, and
     calls to a fixed whitelist of math functions (``sqrt``, ``exp``, ``log``,
-    trig/hyperbolic functions, ...). Anything else — attribute access,
-    subscripts, comprehensions, unknown names or functions — raises
-    ``ValueError`` at construction time.
+    trig/hyperbolic functions, and so on). Anything else raises ``ValueError``
+    at construction time: attribute access, subscripts, comprehensions, and
+    unknown names or functions.
     """
 
-    __slots__ = ("source", "_const", "_tree")
+    __slots__ = ("_const", "_tree", "source")
 
     def __init__(self, expr):
         self.source = str(expr).strip()
@@ -226,17 +268,33 @@ class PropertyExpr:
             return T * 0.0 + self._const
         return _eval(self._tree, T, _xp(T))
 
-    def to_py_source(self) -> str:
-        """Numba-``njit``-compatible Python source, ``T`` free, float32 literals."""
-        if self._const is not None:
-            return f"np.float32({self._const!r})"
-        return _render_py(self._tree)
+    def to_py_source(self, dtype=np.float32) -> str:
+        """Return numba-``njit``-compatible Python source with ``T`` free.
 
-    def to_c_source(self) -> str:
-        """Single-precision CUDA C expression, ``T`` free."""
+        Parameters
+        ----------
+        dtype : data-type, optional
+            Precision of the emitted literals, ``numpy.float32`` (default) or
+            ``numpy.float64``.
+        """
+        cast = _precision(dtype, _PY_CAST)
         if self._const is not None:
-            return f"{self._const:.9e}f"
-        return _render_c(self._tree)
+            return f"{cast}({self._const!r})"
+        return _render_py(self._tree, cast)
+
+    def to_c_source(self, dtype=np.float32) -> str:
+        """Return a CUDA C expression with ``T`` free.
+
+        Parameters
+        ----------
+        dtype : data-type, optional
+            Precision of the emitted literals and intrinsics,
+            ``numpy.float32`` (default) or ``numpy.float64``.
+        """
+        suffix = _precision(dtype, _C_SUFFIX)
+        if self._const is not None:
+            return f"{self._const:.9e}{suffix}"
+        return _render_c(self._tree, suffix)
 
     def __repr__(self):
         return f"PropertyExpr({self.source!r})"

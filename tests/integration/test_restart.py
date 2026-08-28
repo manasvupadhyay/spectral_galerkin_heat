@@ -1,10 +1,7 @@
 """Restart / state-injection round-trip.
 
-Run a few steps, snapshot the reconstructed field, build a fresh solver,
-``set_state`` the snapshot back, and assert the reconstruction is unchanged
-within float32.  This pins the DCT/IDCT scaling constants that ``set_state``
-(forward ``DCT_II``·√(dx·dy·dz)) and ``reconstruct_temperature_DCT`` share — a
-mismatch there would silently corrupt every restart.
+Run a few steps, save reconstructed field, build a fresh solver,
+``set_state`` the snapshot back, and assert the reconstruction is unchanged.
 """
 
 import copy

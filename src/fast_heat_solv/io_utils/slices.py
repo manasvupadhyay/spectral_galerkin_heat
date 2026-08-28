@@ -1,7 +1,7 @@
 """2D slice plotting utilities for evaluating simulation exports."""
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
@@ -23,14 +23,15 @@ __author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
 __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
 
 import argparse
-from pathlib import Path
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.interpolate import RegularGridInterpolator, griddata
-import os
 import logging
+import os
+from pathlib import Path
 
-from .xdmf_io import load_xdmf, StructuredField, UnstructuredField
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.interpolate import RegularGridInterpolator, griddata
+
+from .xdmf_io import StructuredField, load_xdmf
 
 logger = logging.getLogger(__name__)
 
@@ -42,16 +43,19 @@ logger = logging.getLogger(__name__)
 
 def _load_data(xdmf_path):
     """
-    Loads XDMF data using the consolidated load_xdmf function.
+    Load an XDMF file and flatten it to the dict this module works in.
 
-    Returns a dict compatible with the legacy format:
-    - For structured: {'x', 'y', 'z', 'T', 'type': 'structured'}
-    - For unstructured: {'xyz', 'T', 'type': 'unstructured'}
+    :func:`load_xdmf` returns a typed ``StructuredField`` or
+    ``UnstructuredField``; the slicing and interpolation code below branches on
+    a ``type`` string instead, so this adapts one to the other:
+
+    - structured: ``{'x', 'y', 'z', 'T', 'type': 'structured'}``
+    - unstructured: ``{'xyz', 'T', 'type': 'unstructured'}``
     """
     field = load_xdmf(xdmf_path)
 
     if isinstance(field, StructuredField):
-        logger.info(f"Detected Format: Structured Grid (3DRectMesh)")
+        logger.info("Detected Format: Structured Grid (3DRectMesh)")
         return {
             "x": field.x,
             "y": field.y,
@@ -60,7 +64,7 @@ def _load_data(xdmf_path):
             "type": "structured",
         }
     else:
-        logger.info(f"Detected Format: Unstructured Grid (Tetrahedron)")
+        logger.info("Detected Format: Unstructured Grid (Tetrahedron)")
         return {
             "xyz": field.xyz,
             "T": field.T,
@@ -68,14 +72,9 @@ def _load_data(xdmf_path):
         }
 
 # ==========================================
-# 2. INTERPOLATION ENGINE
+# 2. INTERPOLATION
 # ==========================================
 
-# Presentation metadata per slice normal: (xlabel, ylabel, h_axis, v_axis).
-# Purely geometric: labels name the physical axes spanned by the plane, with no
-# application-specific terminology. Kept separate from the slice geometry so the
-# labelling/axis-mapping is independently testable and the "valid normal" check
-# lives in one place.
 _PLANE_LABELS = {
     "z": ("X (m)", "Y (m)", "x", "y"),
     "y": ("X (m)", "Z (m)", "x", "z"),
@@ -88,7 +87,7 @@ def _axis_labels(normal):
     try:
         return _PLANE_LABELS[normal]
     except KeyError:
-        raise ValueError("Normal must be x, y, or z")
+        raise ValueError("Normal must be x, y, or z") from None
 
 
 def _parse_normal(normal):
@@ -267,7 +266,7 @@ def _plot_meltpool(U, V, T_grid, xlabel, ylabel, isotherms, title, output_file):
     cmap_plot = plt.get_cmap('jet', 11)
     levels_plot = np.linspace(500, 2500, 12) 
     
-    contour_filled = ax.contourf(U, V, T_plot, levels=levels_plot, cmap=cmap_plot, extend='neither')
+    ax.contourf(U, V, T_plot, levels=levels_plot, cmap=cmap_plot, extend='neither')
     
     # Colorbar: Continuous colormap
     cmap_bar = plt.get_cmap('jet')
@@ -325,10 +324,9 @@ def _plot_meltpool(U, V, T_grid, xlabel, ylabel, isotherms, title, output_file):
         # Downsample for vector plotting so it isn't too crowded
         skip = (slice(None, None, 30), slice(None, None, 15)) # Adjust as needed 
         
-        # Calculate magnitude for arrow scaling and normalization
-        mag = np.sqrt(dT_dU**2 + dT_dV**2)
-        avg_mag = 1.0 #np.mean(mag) if np.mean(mag) > 0 else 1.0
-        print(f"Average gradient magnitude: {avg_mag:.2f} K/µm")
+        # Arrow scaling: fixed normalisation, so arrows stay comparable
+        # between frames rather than rescaling to each frame's own gradient.
+        avg_mag = 1.0
         
         # Normalize vectors against the average gradient magnitude
         # We plot negative gradient (heat flow direction)

@@ -1,7 +1,7 @@
 """Main entry point for running fastHeatSolv simulations."""
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
@@ -138,7 +138,9 @@ def main():
     viz_cfg = config.get('post_processing', {})
     
     
-    # Determine if we should visualize TODO : The function save_step already exports profiles and slice, this is redundant (in workflow)
+    # Note: with the default IO settings, save_step already writes profiles and
+    # slices during the run, so this pass re-renders data that is already on
+    # disk. It is kept because it also works on a run whose IO was disabled.
     should_visualize = viz_cfg.get('auto_visualize', False)
     if args.viz:
         should_visualize = True

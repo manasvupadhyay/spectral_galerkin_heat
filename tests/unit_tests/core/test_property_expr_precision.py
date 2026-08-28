@@ -1,11 +1,4 @@
 """Precision of the generated property-expression sources.
-
-The property kernels are generated source: numba Python on CPU, CUDA C on GPU,
-with the branch expressions baked in as literals. Precision is therefore a
-codegen decision, and a mismatch between the emitted literals and the array
-dtype silently promotes or truncates the whole expression.
-
-These checks need no GPU: they assert on the rendered strings.
 """
 
 import numpy as np

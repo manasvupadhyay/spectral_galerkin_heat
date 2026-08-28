@@ -1,5 +1,5 @@
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
@@ -19,8 +19,8 @@
 import numpy as np
 import scipy.fft
 
-from fast_heat_solv.physics import spectral_ops as _ops
 from fast_heat_solv.backends.base import to_host
+from fast_heat_solv.physics import spectral_ops as _ops
 
 
 def _C_coef(N, L, xp=np):
@@ -66,11 +66,11 @@ def _calculate_subgrid_indices(pos, dx, n_total_fine, n_box):
     Returns
     -------
     tuple of int
-        ``(idx_start, idx_end, idx_relative)`` — box start/end indices and the
+        ``(idx_start, idx_end, idx_relative)``: box start/end indices and the
         position's index relative to the box start.
     """
     # Nearest global index for the center position, clamped to the fine grid.
-    idx_global = int(round(max(0.0, min(pos / dx, n_total_fine - 1))))
+    idx_global = round(max(0.0, min(pos / dx, n_total_fine - 1)))
 
     # Desired start index to center the box, clamped to [0, max_start].
     idx_start = idx_global - n_box // 2
@@ -109,11 +109,12 @@ def reconstruct_temperature_volume(a, SsState):
     """
     Reconstruct the temperature field on the full simulation grid.
     
-    note : the reconstruction bases (Bx, By, Bz) must be precomputed before.
-    The reconstruction grid is node centered in x, y, z.
-    
-    This function is now legacy, can be still used for exact reconstruction 
-    but DCT version is faster. (DCT can be tested against this for correctness).
+    The reconstruction bases (Bx, By, Bz) must be precomputed first. The
+    reconstruction grid is node centered in x, y, z.
+
+    Evaluates the cosine series directly as an O(N^4) tensor product. This is
+    the reference implementation: :func:`reconstruct_temperature_DCT` computes
+    the same thing in O(N^3 log N) and is what the solver calls.
 
     Parameters
     ----------
@@ -179,17 +180,14 @@ def reconstruct_temperature_DCT(a, SsState):
     grid = SsState.grid
     nz, ny, nx = a.shape
 
-    # ── Fused 1-D weight vectors: normalization × DCT-I halving ──────
-    # Combined weight[i] = C[i] * (0.5 if i>0 else 1.0)
-    # Precomputed as 1-D vectors (6 elements total).
+    # Fused 1-D weights: weight[i] = C[i] * (0.5 if i>0 else 1.0).
     wx, wy, wz = (np.array(to_host(c), dtype=out_dtype) for c in grid.C)
     wx[1:] *= 0.5
     wy[1:] *= 0.5
     wz[1:] *= 0.5
 
-    # ── Scale on contiguous memory, then copy once into padded ───────
-    # Working on a contiguous copy of `a` is faster than writing
-    # through the non-contiguous slice padded[:nz,:ny,:nx].
+    # Scale a contiguous copy, then copy once into padded: writing through
+    # the non-contiguous slice padded[:nz,:ny,:nx] is slower.
     b = a.copy()                         # contiguous (nz,ny,nx)
     b *= wz[:, None, None]
     b *= wy[None, :, None]
@@ -201,12 +199,11 @@ def reconstruct_temperature_DCT(a, SsState):
     padded[:, ny, :] = 0.0
     padded[:, :, nx] = 0.0
 
-    # ── 3-D DCT-I (type 1, unnorm) → node-centred values ────────────
-    # scipy.fft.dctn (pocketfft) is ~4× faster than pyfftw for these sizes.
+    # 3-D DCT-I (type 1, unnormalised) -> node-centred values.
     T = scipy.fft.dctn(padded, type=1, norm=None, axes=(0, 1, 2),
                         overwrite_x=True, workers=-1)
 
-    # ── Transpose (nz+1, ny+1, nx+1) → (N_x+1, N_y+1, N_z+1) ─────────
+    # Transpose (nz+1, ny+1, nx+1) -> (N_x+1, N_y+1, N_z+1).
     return np.ascontiguousarray(T.transpose(2, 1, 0), dtype=out_dtype)
 
 def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):

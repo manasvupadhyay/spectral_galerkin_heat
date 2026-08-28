@@ -1,8 +1,7 @@
 name: Build & deploy docs
 
-# Builds the Sphinx site from this (private) repo and publishes the rendered
-# HTML to the public `hsg-docs` repo, which serves it via GitHub Pages.
-# Source stays private; only the built HTML is made public.
+# Builds the Sphinx site and publishes the rendered HTML to the `hsg-docs`
+# repo, which serves it via GitHub Pages.
 
 on:
   push:
@@ -34,7 +33,7 @@ jobs:
 
       - name: Install docs toolchain
         # The full docs stack (mermaid, autoapi, rtd-theme) lives in the
-        # uv `docs` dependency-group — matches the local `uv run make` build.
+        # uv `docs` dependency-group, matching the local `uv run make` build.
         run: uv sync --no-dev --group docs
 
       - name: Build HTML

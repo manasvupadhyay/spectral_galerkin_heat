@@ -45,7 +45,6 @@ non-linear case and then library mode:
 - **Tutorial & configuration reference**: see the
   [documentation](https://theoadx.github.io/hsg-docs/) (`examples` and `configuration` pages).
 
-Production and GPU configurations and the study drivers are in `simulations/research/`.
 
 ## Installation & Environments
 
@@ -65,9 +64,8 @@ Production and GPU configurations and the study drivers are in `simulations/rese
 | --- | --- |
 | `uv sync` | CPU core (default; sufficient to run the examples) |
 | `uv sync --group gpu` | CuPy GPU backend *(requires system CUDA 13.x)* |
-| `uv sync --group viz` | Plotting / visualization helpers |
 | `uv sync --group docs` | Sphinx toolchain to build the docs |
-| `uv sync --group dev` | Test + lint tooling (`pytest`, `black`, …) |
+| `uv sync --group dev` | Test + lint tooling (`pytest`, `ruff`) |
 | `uv sync --all-groups` | Everything above |
 
 Build the documentation locally:

@@ -16,11 +16,9 @@ class _Ctx:
 
 @pytest.fixture
 def linear_state(tiny_context):
-    # Pure-NumPy state with `a` set to the ambient IC (no numba involved).
+    # Pure-NumPy state.
     return SpectralSolverCPULinear(tiny_context).initialize()
 
-
-# --- path / lifecycle (fast) ------------------------------------------------
 
 def test_get_output_path_before_init_raises():
     # Paths are only meaningful once initialize() has created the run dir.
@@ -149,9 +147,7 @@ def test_save_modes_appends_across_calls(tmp_path, monkeypatch, tiny_context, li
 
 
 def test_save_slices_writes_png(tmp_path, monkeypatch, tiny_context, linear_state):
-    # _save_slices must hand load_xdmf a Path, not a bare string. A string
-    # reached _resolve_h5's `.resolve()` and raised AttributeError, which
-    # generate_plots swallowed -> the slice image was silently never written.
+    # _save_slices must hand load_xdmf a Path, not a string.
     monkeypatch.chdir(tmp_path)
 
     class _Laser:

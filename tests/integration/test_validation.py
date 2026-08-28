@@ -1,7 +1,7 @@
 """Physics validation: linear analytical + non-linear sanity.
 
 The linear tests anchor *correctness* against the closed-form Eagar-Tsai moving
-heat-source solution (``tests/eagar_tsai.py``, method-of-images corrected for the
+heat-source solution (``tests/integration/eagar_tsai.py``, method-of-images corrected for the
 solver's six insulated walls); the non-linear test guards against regressions
 with loose physical bounds (no analytical reference once latent heat /
 evaporation are active).
@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 
 from fast_heat_solv.core.parameters import SimulationContext
-from fast_heat_solv.io_utils.compute_L2_error import compute_L2
+from fast_heat_solv.io_utils.compute_L2_error import compute_L2_structured
 
 # ---------------------------------------------------------------------------
 # Physical case — the convergence-study setup the Eagar-Tsai solution
@@ -73,7 +73,7 @@ def _run_linear_field(ctx):
     for step in range(ctx.num.n_steps):
         solver.step(step * dt, dt)
     # reconstruct_temperature_DCT returns [x, y, z]; transpose to [z, y, x] to
-    # match the Eagar-Tsai reference and compute_L2's weight ordering.
+    # match the Eagar-Tsai reference and compute_L2_structured's weight ordering.
     T_xyz = reconstruct_temperature_DCT(solver.state.a, solver.state)
     return np.ascontiguousarray(T_xyz.transpose(2, 1, 0))
 
@@ -86,7 +86,7 @@ def _run_linear_field(ctx):
 @pytest.mark.slow
 def test_linear_matches_eagar_tsai(constant_velocity_laser):
     """Linear solver vs the method-of-images Eagar-Tsai field."""
-    from tests.eagar_tsai import eagar_tsai_field
+    from tests.integration.eagar_tsai import eagar_tsai_field
 
     x = np.linspace(0.0, _LX, _NX + 1)
     y = np.linspace(0.0, _LY, _NY + 1)
@@ -95,12 +95,6 @@ def test_linear_matches_eagar_tsai(constant_velocity_laser):
     laser = constant_velocity_laser(_X_START, _LY / 2, _V, 0.0, _P)
     T = _run_linear_field(_context(_config(), laser))
 
-    # Time-centering: the solver holds the source piecewise-constant over each
-    # ETD1 step (sampled at the step start), so the field at t_total corresponds
-    # to the source at the *midpoint* of the last interval, x_end − ½·v·dt — not
-    # at x_end. 
-    # Verified: the L2 error is parabolic in the shift with a sharp minimum 
-    # at exactly ½·v·dt.
     # The ETD1 field equals the field of a source whose entire trajectory 
     # is shifted back by dt/2 if we change to ETD2 or RK4, reconsider this 
     # time-centering correction then.
@@ -116,7 +110,7 @@ def test_linear_matches_eagar_tsai(constant_velocity_laser):
     assert T.max() > _T0
     assert T.min() >= _T0 - 1.0  # linear problem cannot cool below ambient
 
-    res = compute_L2(T_ref, T, x, y, z)
+    res = compute_L2_structured(T_ref, T, x, y, z)
     peak = float(T.max() - _T0)
     assert res["L2_rel"] < 0.002, f"L2_rel={res['L2_rel']:.5f}"
     assert res["Linf"] / peak < 0.10, f"Linf/peak={res['Linf'] / peak:.4f}"

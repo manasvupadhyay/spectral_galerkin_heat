@@ -8,12 +8,11 @@ __pycache__/
 *.py[cod]
 *.pyc
 
-# Explicitly ignore compiled python cache directories
-__pycache__/
-
-# Output artifacts
+# Output artifacts. Runs write under out/, which is already ignored; these
+# patterns only catch runs pointed at a different output directory.
 *.log
-*.txt
+*_step[0-9][0-9][0-9][0-9][0-9][0-9].txt
+profiler.txt
 *.png
 !docs/_images/*.png
 *.h5
@@ -29,5 +28,12 @@ docs/api/
 *.egg-info/_build/
 *.egg-info
 
-# Scratch config written by simulations/research/run_convergence.py
-simulations/research/tmp_convergence.yaml
+# Test and tooling caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Editor settings
+.vscode/

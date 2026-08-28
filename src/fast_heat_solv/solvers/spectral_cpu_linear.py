@@ -2,8 +2,8 @@
 Spectral CPU Linear Solver Implementation.
 """
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
@@ -24,12 +24,14 @@ Spectral CPU Linear Solver Implementation.
 __author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
 __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
 
+
 import numpy as np
+
 import fast_heat_solv.physics.spectral_cpu_kernels as kernels
+from fast_heat_solv.core.laser import LaserPath, LaserState
 from fast_heat_solv.core.parameters import SimulationContext
 from fast_heat_solv.solvers.base import HeatSolver
-from fast_heat_solv.core.laser import LaserState, LaserPath
-from typing import Optional
+
 
 class SpectralSolverCPULinear(HeatSolver):
     """
@@ -39,7 +41,7 @@ class SpectralSolverCPULinear(HeatSolver):
     It disables latent heat and evaporation, applying only the laser source.
     Useful for testing against exact linear analytical solutions.
     """
-    def __init__(self, context: Optional[SimulationContext] = None):
+    def __init__(self, context: SimulationContext | None = None):
         """
         Initializes the SpectralSolverCPULinear.
 
@@ -52,10 +54,10 @@ class SpectralSolverCPULinear(HeatSolver):
         context : SimulationContext, optional
             A dataclass containing complete simulation parameters, by default None.
         """
-        self.context: Optional[SimulationContext] = context
-        self.state: Optional[kernels.SpectralSolverState] = None
+        self.context: SimulationContext | None = context
+        self.state: kernels.SpectralSolverState | None = None
         
-    def initialize(self, context: Optional[SimulationContext] = None):
+    def initialize(self, context: SimulationContext | None = None):
         """
         Set up the spectral solver state, allocate buffers, and set the initial condition.
 
@@ -185,4 +187,3 @@ class SpectralSolverCPULinear(HeatSolver):
         """
         Clean up CPU resources.
         """
-        pass

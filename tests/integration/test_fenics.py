@@ -1,34 +1,11 @@
 """FEniCS / dolfinx finite-element cross-validation (integration + fenics).
 
-Cross-validates the spectral solver (SG) against an *independent* numerical
-method — a P1 backward-Euler finite-element solve in dolfinx — in the **nonlinear
-constant-property** regime: latent heat of fusion + Hertz-Knudsen evaporation +
-bottom-face convection, with temperature-independent typical 316L properties
-(values at T0=293 K). This is **not** a golden file (the FE reference is recomputed
-each run). BEWARE the run takes ~25 min on a laptop CPU
+Cross-validates the spectral solver (SG) against an independent numerical
+method in the nonlinear constant-property case: latent heat of fusion +
+evaporation + bottom convection, with temperature-independent 316L properties
+(values at T0=293 K). This is not a golden file. 
 
-(fine ``h_fine`` strip along the laser path, coarse elsewhere),
-Newton-solved, with the Gaussian laser + evaporation on the top face and
-convection on the bottom — the same physics the SG solver applies. 
-
-Achievable agreement
---------------------
-On this 400×400×100 µm domain with a ~150-step (600 µs) developed melt track,
-SG-vs-FE agree to **L2_rel ≈ 0.88 %** (peaks match to ~0.15 %), computed by the
-library's dedicated ``compute_L2_error.compare()`` on the FE mesh.
-
-Dependency
------------------
-FEniCS/gmsh are heavy and not project dependencies — install via **conda only**
-(no usable PyPI wheels for dolfinx), conda-forge channel::
-
-    conda install -c conda-forge fenics-dolfinx=0.9.0 fenics-basix=0.9.0 \\
-        fenics-ffcx=0.9.0 fenics-ufl=2024.2.0 mpi4py petsc4py python-gmsh
-
-The test ``importorskip``s them and is ``@pytest.mark.fenics`` so a CI FEniCS
-job can select it
-(``pytest -m "integration and fenics"``).  It is heavy (~25 min: the nonlinear SG
-solve dominates) — run only in the dedicated FEniCS job.
+BEWARE the run takes ~25 min on a laptop CPU
 """
 
 import math
@@ -58,7 +35,8 @@ _SG_NX, _SG_NY, _SG_NZ = 96, 96, 128
 _MAT = {
     "name": "316L", "rho": _RHO, "k": _K, "Cp": _CP, "L_f": _L_F,
     "T_solidus": _T_SOL, "T_liquidus": _T_LIQ, "T0": _T0,
-    "DeltaH_LV": _DHLV, "R_v": _RV, "Pa": _PA, "T_boil": _T_BOIL, "h_conv": _H_CONV,
+    "DeltaH_LV": _DHLV, "R_v": _RV, "Pa": _PA, "T_boil": _T_BOIL,
+    "h_conv_bottom": _H_CONV,
 }
 
 
@@ -71,7 +49,7 @@ def _laser_x(t):
 # ---------------------------------------------------------------------------
 
 def _build_and_solve_fe():
-    """Graded gmsh box + Newton-solved nonlinear FE; return (domain, T_solution)."""
+    """Newton-solved nonlinear FE; return (domain, T_solution)."""
     import gmsh
     import ufl
     from dolfinx import fem
@@ -155,7 +133,7 @@ def _build_and_solve_fe():
     solver.atol = 1e-8; solver.rtol = 1e-6; solver.max_it = 200; solver.report = False
 
     for n in range(_N_STEPS):
-        set_laser(n * _DT)             # start-of-step laser → matches SG
+        set_laser(n * _DT)
         Ts.x.array[:] = Tn.x.array
         _, converged = solver.solve(Ts)
         if not converged:
@@ -176,7 +154,7 @@ def _write_fe_xdmf(domain, Ts, path):
 
 
 # ---------------------------------------------------------------------------
-# SG (spectral) run — identical physics
+# SG (spectral) run
 # ---------------------------------------------------------------------------
 
 def _run_sg():
@@ -238,18 +216,12 @@ def test_matches_fenics_nonlinear(tmp_path):
     sg_base = tmp_path / "sg"
     write_structured_fields(sg_base, {"temperature": T_sg}, x, y, z, time=_N_STEPS * _DT)
 
-    assert T_sg.max() > _T_LIQ and T_fe_max > _T_LIQ   # melt + evaporation engaged
+    assert T_sg.max() > _T_LIQ and T_fe_max > _T_LIQ  
 
-    # Dedicated comparison: load both, interpolate the structured SG field at the
-    # FE vertices (the library's "HYBRID" fast path), integrate the error on the
-    # FE mesh with lumped vertex volumes. FE is the reference (file A).
     res = compare(fe_path, sg_base.with_suffix(".xmf"),
                   attr_a="Temperature", attr_b="temperature", write_error=False)
 
     assert res["pct_valid"] > 99.0, f"only {res['pct_valid']:.1f}% of points valid"
-    # Peaks must agree tightly (the evaporation balance pins the surface T).
+    # Peaks must agree tightly.
     assert abs(float(T_sg.max()) - T_fe_max) < 30.0
-    # Cross-method L2 band (computed on the FE mesh via the dedicated unstructured
-    # comparison). Verified ≈ 0.88 % on this config; <0.5 % needs the full long-
-    # track campaign. Freeze the *band*, not the value.
     assert res["L2_rel"] < 0.012, f"L2_rel={res['L2_rel']:.5f}"

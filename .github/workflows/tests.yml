@@ -2,7 +2,7 @@ name: Tests
 
 # Unit suite on every push and pull request. Integration tests are excluded by
 # the `addopts` in pyproject.toml: they run full simulations, and the GPU and
-# FEniCS ones need hardware and toolchains no hosted runner has.
+
 
 on:
   push:

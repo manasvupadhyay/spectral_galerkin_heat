@@ -16,7 +16,7 @@ def test_list_runs_empty_and_sorted(tmp_path):
 
 
 def test_load_run_missing_dir_raises(tmp_path):
-    # Loading a non-existent run is an error, not an empty result.
+    # Loading a non-existent run is an error.
     with pytest.raises(FileNotFoundError):
         load_run("nope", output_root=str(tmp_path))
 

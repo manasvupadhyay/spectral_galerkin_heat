@@ -94,7 +94,8 @@ contour marks the solidus/liquidus.
 ## 2. Single track with latent heat
 
 {download}`02_single_track.yaml <../simulations/examples/02_single_track.yaml>` adds the two
-effects that example 1 omits — latent heat of fusion (`L_f`) and surface convection (`h_conv`).
+effects that example 1 omits: latent heat of fusion (`L_f`) and bottom-face convection
+(`h_conv_bottom`).
 Properties remain constant (the reference 316L values used by the spectral-Galerkin solver).
 The domain is small with a fine $z$-grid ($\Delta z \approx 1.25\ \mu\text{m}$) so the narrow 316L
 mushy zone is resolved. The run takes a few minutes on one CPU core.
@@ -137,8 +138,7 @@ uv run python simulations/main.py simulations/examples/03_nonlinear_tdep.yaml
 Melt-pool section for the temperature-dependent run. The red line marks the solidus/liquidus.
 ```
 
-This is a reduced-grid version of the finite-element comparison case; the full GPU configuration
-is `simulations/research/temp_dep_316L.yaml`.
+This is a reduced-grid version of the finite-element comparison case.
 
 (example-library)=
 ## 4. Library mode
@@ -206,5 +206,4 @@ while t < t_end:
 ## Further reading
 
 Every configuration key is documented in {doc}`configuration`, and the output formats in
-{doc}`outputs`. The GPU/production configurations and the convergence and tolerance study drivers
-are in `simulations/research/`.
+{doc}`outputs`.

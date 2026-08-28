@@ -7,8 +7,10 @@ segments, timing, and laser power commands and exposes them via the
 """
 
 
-from fast_heat_solv.core.laser import LaserPath, LaserState
 import numpy as np
+
+from fast_heat_solv.core.laser import LaserPath, LaserState
+
 
 class GCodeLaserPath(LaserPath):
     def __init__(self, gcode_file: str, initial_position=(0.0, 0.0)):
@@ -27,11 +29,10 @@ class GCodeLaserPath(LaserPath):
         current_power = 0.0
         is_on = False
         feedrate = 0.0  # mm/min
-        t = 0.0
         last_pos = None
         last_t = 0.0
         unit_scale = 1.0  # Default: mm (will convert to meters)
-        with open(filepath, 'r') as f:
+        with open(filepath) as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith(';'):
@@ -44,7 +45,7 @@ class GCodeLaserPath(LaserPath):
                     # Set units to inches, but solver expects meters, so scale = 25.4/1000
                     unit_scale = 25.4 / 1000.0
                     continue
-                if line.startswith('G0') or line.startswith('G1'):
+                if line.startswith(('G0', 'G1')):
                     # Extract X, Y, F
                     tokens = line.split()
                     x = y = None

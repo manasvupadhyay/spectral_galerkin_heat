@@ -78,20 +78,20 @@ def state_with_modes(tiny_context):
 
 
 def test_reconstruct_volume_requires_prepared_bases(state_with_modes):
-    # The legacy reconstruction needs prepare_full_reconstruction() called first.
+    # The tensor-product reconstruction needs prepare_full_reconstruction() first.
     with pytest.raises(RuntimeError):
         hp.reconstruct_temperature_volume(state_with_modes.a, state_with_modes)
 
 
-def test_dct_reconstruction_matches_legacy_tensor_product(tiny_context, state_with_modes):
+def test_dct_reconstruction_matches_tensor_product(tiny_context, state_with_modes):
     # The fast DCT path must equal the explicit tensor-product reconstruction
     # Important to check that the DCT's implicit normalization matches the C_coef normalization
     # (easy source of error)
     state_with_modes.grid.prepare_full_reconstruction(tiny_context.geom)
     T_dct = hp.reconstruct_temperature_DCT(state_with_modes.a, state_with_modes)
-    T_leg = hp.reconstruct_temperature_volume(state_with_modes.a, state_with_modes)
-    assert T_dct.shape == T_leg.shape
-    np.testing.assert_allclose(T_dct, T_leg, rtol=1e-3, atol=1.0)
+    T_ref = hp.reconstruct_temperature_volume(state_with_modes.a, state_with_modes)
+    assert T_dct.shape == T_ref.shape
+    np.testing.assert_allclose(T_dct, T_ref, rtol=1e-3, atol=1.0)
 
 
 def test_save_temp_profiles_laser_center_requires_position():

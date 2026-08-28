@@ -1,8 +1,8 @@
 """
 Unified Spectral Solver (CPU and GPU).
 """
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
@@ -25,11 +25,11 @@ __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), Éc
 
 import logging
 import math
-from typing import Optional, Any, Tuple, Dict
+from typing import Any
 
 from fast_heat_solv.backends.base import MathBackend
+from fast_heat_solv.core.laser import LaserPath, LaserState, build_laser_profile
 from fast_heat_solv.core.parameters import SimulationContext
-from fast_heat_solv.core.laser import LaserState, LaserPath, build_laser_profile
 from fast_heat_solv.solvers.base import HeatSolver
 
 logger = logging.getLogger(__name__)
@@ -52,11 +52,11 @@ class SpectralSolver(HeatSolver):
     def __init__(
         self,
         backend: MathBackend,
-        context: Optional[SimulationContext] = None,
+        context: SimulationContext | None = None,
         *,
-        mixing_omega: Optional[float] = None,
-        convergence_tol: Optional[float] = None,
-        max_picard_iter: Optional[int] = None,
+        mixing_omega: float | None = None,
+        convergence_tol: float | None = None,
+        max_picard_iter: int | None = None,
     ):
         """
         Initialize the SpectralSolver.
@@ -74,7 +74,7 @@ class SpectralSolver(HeatSolver):
             convergence tolerance, iteration cap). 
         """
         self.backend: MathBackend = backend
-        self.context: Optional[SimulationContext] = context
+        self.context: SimulationContext | None = context
         self.state = None
         # Picard fixed-point controls. 
         #   explicit constructor arg  >  config (NumParams)  >  built-in default.
@@ -82,6 +82,7 @@ class SpectralSolver(HeatSolver):
         self._omega_req = mixing_omega
         self._tol_req = convergence_tol
         self._maxit_req = max_picard_iter
+        # Re-resolved in initialize() once the configured precision is known.
         self._resolve_picard_params(backend.xp.float32)
         self.track_picard_history: bool = False
         self.picard_history = []
@@ -96,6 +97,8 @@ class SpectralSolver(HeatSolver):
         self._kbar = None          # reference conductivity k̄ (= propagator const)
         self._abar = None          # reference volumetric capacity ā
         self._latent_truncation_warned = False  # fine-box truncation warned once
+        self._picard_cap_warned = False
+        self._Q_latent_modes_prev = None
 
         # Beam profile (shape + energy-conserving normalization); resolved from
         # the config in initialize(). Default keeps a usable solver before then.
@@ -119,7 +122,7 @@ class SpectralSolver(HeatSolver):
         self.convergence_tol = dtype(pick(self._tol_req, "picard_tol", 1e-4))
         self.max_picard_iter = int(pick(self._maxit_req, "max_picard_iter", 30))
 
-    def initialize(self, context: Optional[SimulationContext] = None) -> Any:
+    def initialize(self, context: SimulationContext | None = None) -> Any:
         """
         Set up the spectral solver state, allocate buffers, and set the initial condition.
 
@@ -188,16 +191,17 @@ class SpectralSolver(HeatSolver):
         if self._property_correction:
             # The reference constants k̄, ā used in the fluctuations
             # k'=k(T)-k̄ and a'=a(T)-ā must equal the constants used in the propagators.
-            self._kbar = xp.float32(float(mat.k))
-            self._abar = xp.float32(float(mat.rho) * float(mat.Cp))
+            self._kbar = dtype(float(mat.k))
+            self._abar = dtype(float(mat.rho) * float(mat.Cp))
 
 
-        # Previous converged full-volume field, shared by the property correction
-        # (∂_t T) and grid-mode latent heat (f_l(T_prev)); starts at uniform T0.
+        # Previous converged full-volume field
         if self._property_correction or self._grid_latent:
             self._T_prev_full = xp.full(
-                (num.nz, num.ny, num.nx), xp.float32(T0), dtype=xp.float32
+                (num.nz, num.ny, num.nx), dtype(T0), dtype=dtype
             )
+        # No latent history yet on the first step, in either mode.
+        self._Q_latent_modes_prev = None
 
         # Guardrail: in grid mode the sharp mushy-zone latent source is projected
         # by the full-volume DCT, which on a coarse grid can create ringing; 
@@ -212,7 +216,7 @@ class SpectralSolver(HeatSolver):
 
         return self.state
 
-    def step(self, t: float, dt: float) -> Tuple[Any, Dict[str, float]]:
+    def step(self, t: float, dt: float) -> tuple[Any, dict[str, float]]:
         """
         Advance the spectral solution by one time step using ETD1 and nonlinear evaporation correction.
 
@@ -321,6 +325,13 @@ class SpectralSolver(HeatSolver):
                 buffers.a_temp, SsState.KK,
                 kernels.project_box_to_modes(Q_latent, SsState),
             )
+        elif self._grid_latent and self._Q_latent_modes_prev is not None:
+            # Grid-mode counterpart: replay the previous step's converged latent
+            # modes. Stored already projected (no moving window to re-shift), so
+            # this costs an axpy instead of box mode's re-projection.
+            kernels.add_source_term_modes(
+                buffers.a_temp, SsState.KK, self._Q_latent_modes_prev,
+            )
         if h_conv_top > 0:
             # Same face as the laser/evaporation flux. add_bottom_surface_source
             # is a generic Cp-weighted 2D-surface accumulator (nothing
@@ -370,6 +381,8 @@ class SpectralSolver(HeatSolver):
         # ================================================================
         # 5. Fixed-point (Picard) iteration
         # ================================================================
+        iter_k, true_rel_err, picard_converged = -1, float("nan"), False
+        Q_latent_raw = Q_latent_modes = None   # defined even if the cap is 0
         for iter_k in range(self.max_picard_iter):
             xp.copyto(a_old, buffers.a_temp)
 
@@ -452,7 +465,7 @@ class SpectralSolver(HeatSolver):
             rms_old = xp.sqrt(xp.vdot(a_old, a_old) / n_elements)
             # Form the ratio on the device so the convergence check costs a single
             # host sync per Picard iteration instead of two.
-            true_rel_err = float(rms_diff / xp.maximum(rms_old, xp.float32(1e-9)))
+            true_rel_err = float(rms_diff / xp.maximum(rms_old, xp.asarray(1e-9, dtype=rms_old.dtype)))
 
             if self.track_picard_history:
                 rho_k = None
@@ -468,11 +481,30 @@ class SpectralSolver(HeatSolver):
                 })
 
             if true_rel_err < float(self.convergence_tol):
+                picard_converged = True
                 break
+        else:
+            # Fell through the cap without meeting the tolerance. The step still
+            # returns a field, but it is not the fixed point, so say so instead
+            # of letting a wrong answer look like a converged one.
+            picard_converged = False
+            if not self._picard_cap_warned:
+                self._picard_cap_warned = True
+                logger.warning(
+                    "Picard iteration hit max_picard_iter=%d at t=%.6g s without "
+                    "reaching picard_tol=%g (last relative residual %.3g). The "
+                    "returned field is not converged. Raise max_picard_iter, lower "
+                    "picard_omega, or shorten dt. Warned once per run.",
+                    self.max_picard_iter, t, float(self.convergence_tol), true_rel_err,
+                )
 
         # Restore variables needed below
         T_temp = kernels.reconstruct_surface_temperature(buffers.a_temp, SsState)
         Q_latent = Q_latent_raw
+        # Carry the latent modes into the next step's initial guess (grid mode;
+        # box mode carries the real-space Q_prev instead, which it must re-shift).
+        if self._grid_latent:
+            self._Q_latent_modes_prev = Q_latent_modes
 
         # ================================================================
         # 6. Commit converged state
@@ -505,6 +537,8 @@ class SpectralSolver(HeatSolver):
             'T_surface_max': xp.max(T_temp),
             'P_laser': P_laser,
             'n_evap_iter': iter_k + 1,
+            'picard_converged': picard_converged,
+            'picard_rel_err': true_rel_err,
         }
         return SsState, metrics
 
@@ -585,11 +619,10 @@ class SpectralSolver(HeatSolver):
         self.state.a = kernels.DCT_II(T) * scale
 
     def finalize(self) -> None:
-        """No-op teardown.
+        """Release nothing and return.
 
         The spectral solver holds no resources requiring explicit release
         (CuPy frees device memory on garbage collection). This override is
         present only to satisfy the abstract :meth:`HeatSolver.finalize`
         interface so the class is instantiable.
         """
-        pass

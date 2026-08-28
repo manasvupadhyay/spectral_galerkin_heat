@@ -49,24 +49,17 @@ def test_map():
     assert Vec3(1, 2, 3).map(lambda c: c * c) == Vec3(1, 4, 9)
 
 
-# A Vec3 built on `geom` (size/n/d) is handed out and shared by reference across
-# the solver, never copied. We don't want to drops `frozen`
-
-
 def test_frozen():
-    # Immutable -> a shared geom.d can't be mutated through one holder and
-    # corrupt every other holder. Writing a component must raise, not alias.
+    # Immutable.
     v = Vec3(1, 2, 3)
     with pytest.raises(FrozenInstanceError):
         v.x = 99
 
 
 def test_slots_no_dict():
-    # slots -> no per-instance __dict__
     assert not hasattr(Vec3(1, 2, 3), "__dict__")
 
 
 def test_hashable():
-    # frozen -> hashable, so a Vec3 can key a dict / live in a set safely
-    # (a mutable key would be a bug
+    # frozen -> hashable
     assert {Vec3(1, 2, 3): "a"}[Vec3(1, 2, 3)] == "a"

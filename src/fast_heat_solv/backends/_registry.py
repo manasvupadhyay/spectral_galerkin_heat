@@ -1,13 +1,13 @@
-"""Backend registry — map names to backend factories and resolve them.
+"""Backend registry: map names to backend factories and resolve them.
 
 The registry keeps the *catalog* of available backends separate from the
-solver code that consumes them. New backends register themselves with the
+solver code that uses them. New backends register themselves with the
 :func:`register_backend` decorator (or by inserting a factory directly), so
 adding one never requires editing :func:`get_backend`.
 """
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay

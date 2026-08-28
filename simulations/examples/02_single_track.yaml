@@ -3,7 +3,8 @@
 # Same single-track setup as example 01, but with two effects switched on that
 # example 01 disabled:
 #   - latent heat of fusion (L_f > 0): energy absorbed/released on melting,
-#   - surface convection (h_conv > 0): convective heat loss at the top face.
+#   - surface convection (h_conv_bottom > 0): convective heat loss at the z=0
+#     bottom face (h_conv_top would set it on the laser-facing z=Lz face).
 # Material properties are still CONSTANT (reference 316L evaluated at T0 = 293 K);
 # example 03 makes them temperature-dependent. Runs on CPU in a few minutes.
 # 
@@ -63,7 +64,7 @@ material:
   T0:
     value: 293.0
     unit: "K"
-  h_conv:                     # Surface convection — ON in this example.
+  h_conv_bottom:              # Bottom-face convection — ON in this example.
     value: 3000.0
     unit: "W/(m2.K)"
   DeltaH_LV:                  # Evaporative cooling (as in example 01).

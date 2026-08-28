@@ -1,7 +1,7 @@
 """Core parameters and SimulationContext definition."""
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
@@ -22,14 +22,15 @@
 __author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
 __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
 
-from dataclasses import dataclass, field
-from typing import Optional, Any, Dict, TYPE_CHECKING
-import numpy as np
 import os
 import re
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Optional
 
-from fast_heat_solv.core.vector import Vec3
+import numpy as np
+
 from fast_heat_solv.core.properties import MaterialModel
+from fast_heat_solv.core.vector import Vec3
 
 if TYPE_CHECKING:
     from fast_heat_solv.core.laser import LaserPath
@@ -205,9 +206,9 @@ class NumParams:
     # Optional Picard fixed-point controls (None -> use the solver defaults).
     # The temperature-dependent property correction needs a higher cap than the
     # base 30; expose them so the config can raise it.
-    max_picard_iter: Optional[int] = None
-    picard_tol: Optional[float] = None
-    picard_omega: Optional[float] = None
+    max_picard_iter: int | None = None
+    picard_tol: float | None = None
+    picard_omega: float | None = None
     dtype: Any = np.float32
 
 @dataclass
@@ -249,13 +250,10 @@ class MaterialParams:
         Standard: 101325 Pa, by default 0.
     R_v : float, optional
         Specific gas constant of the vapor in J/(kg·K). For Ar or vapor phase.
-        by default 0. **Must be > 0 for any run that melts** — the evaporation
-        kernel divides by it (see :func:`compute_evaporation_flux`); 0 is only
-        safe when the surface never reaches ``T_liquidus``.
+        by default 0.
     T_boil : float, optional
         Boiling temperature in Kelvin. Above this, material evaporates.
-        For 316L steel: ~3090 K, by default 0. **Must be > 0 for any melting
-        run** (same evaporation-kernel division as ``R_v``).
+        For 316L steel: ~3090 K, by default 0. 
     DeltaH_LV : float, optional
         Latent heat of vaporization in J/kg. Energy released during liquid→vapor
         transition. Typically 1–10 MJ/kg depending on material, by default 0.
@@ -269,16 +267,14 @@ class MaterialParams:
     h_conv_bottom : float, optional
         Convective heat transfer coefficient in W/(m²·K) at the bottom surface
         (z = 0). 0.0 disables it. Typical: 50-5000 W/(m²·K), by default 0.0.
-        A bare ``h_conv`` key in a config dict is a legacy alias for this one
-        (see ``SimulationContext.from_dict``).
     model : MaterialModel, optional
         Temperature-dependent property model (``k(T)``, ``rho(T)``, ``c(T)``
         solid/liquid branch expressions). ``None`` for a constant-property material, in which
         case the solver uses the scalar ``rho``/``k``/``Cp`` directly. When
         present, the scalar ``rho``/``k``/``Cp`` fields hold the user-supplied
-        **reference constants** (each property's in-block ``reference:`` key) that
-        are baked into the ETD1 propagators; the property-correction path
-        reinstates the fluctuations about them.
+        **reference constants** (each property's in-block ``reference:`` key) used
+        by the ETD1 propagators; the property-correction path reinstates the
+        fluctuations about them.
     """
     name: str = "Material"
     rho: float = 1.0
@@ -396,7 +392,8 @@ class LaserParams:
 
 @dataclass
 class FineMeshParams:
-    """Moving fine-mesh parameters — a refined, laser-following sub-box of the domain — for latent-heat / nonlinear terms.
+    """Refined, laser-following sub-box of the domain, for the latent-heat and
+    nonlinear terms.
 
     The solver reconstructs temperature on a refined box that tracks the laser,
     to resolve the sharp mushy-zone gradients the coarse spectral grid cannot.
@@ -412,7 +409,71 @@ class FineMeshParams:
         depth. By default ``Vec3(0.9e-3, 0.9e-3, 0.04e-3)``.
     """
     refinement: int = 4
-    box_size: Vec3 = Vec3(0.9e-3, 0.9e-3, 0.04e-3)
+    # Vec3 is frozen and slotted, so one shared default instance is safe.
+    box_size: Vec3 = Vec3(0.9e-3, 0.9e-3, 0.04e-3)  # noqa: RUF009
+
+# ---------------------------------------------------------------------------
+# Config schema. Every key the parser reads, by section. Anything else in a
+# config is a mistake.
+# ---------------------------------------------------------------------------
+
+_SECTION_KEYS = {
+    "simulation": {
+        "name", "backend", "dtype", "dt", "duration", "update_interval",
+        "max_picard_iter", "picard_tol", "picard_omega",
+    },
+    "domain": {"size", "mesh"},
+    "material": {
+        "name", "rho", "k", "Cp", "L_f", "T_solidus", "T_liquidus", "T0",
+        "Pa", "R_v", "T_boil", "DeltaH_LV", "h_conv_top", "h_conv_bottom",
+    },
+    "laser": {
+        "radius", "absorptivity", "power_nominal", "profile", "r_x", "r_y",
+        "super_gaussian_order", "cell_integrated", "path",
+    },
+    "fine_mesh": {"refinement", "box_size"},
+}
+# Sections this parser does not read.
+_PASSTHROUGH_SECTIONS = {"io", "post_processing"}
+_LASER_PATH_KEYS = {"type", "file", "initial_position"}
+
+
+def _reject_unknown(section: str, keys, allowed) -> None:
+    """Raise on any key not in *allowed*, listing the keys the section accepts."""
+    for key in keys:
+        if key in allowed:
+            continue
+        raise ValueError(
+            f"Unknown key {key!r} in the {section!r} config section. "
+            f"Valid keys: {', '.join(sorted(allowed))}."
+        )
+
+
+def _validate_config(cfg: dict) -> None:
+    """Check section names and their keys before any of them is read.
+
+    Runs first so an unrecognised key is reported as such, instead of
+    surfacing later as a default that was silently left in place.
+    """
+    known_sections = set(_SECTION_KEYS) | _PASSTHROUGH_SECTIONS
+    for section in cfg:
+        if section in known_sections:
+            continue
+        raise ValueError(
+            f"Unknown config section {section!r}. "
+            f"Valid sections: {', '.join(sorted(known_sections))}."
+        )
+
+    for section, allowed in _SECTION_KEYS.items():
+        body = cfg.get(section)
+        if not isinstance(body, dict):
+            continue
+        _reject_unknown(section, body, allowed)
+
+    path_cfg = cfg.get("laser", {}).get("path") if isinstance(cfg.get("laser"), dict) else None
+    if isinstance(path_cfg, dict):
+        _reject_unknown("laser.path", path_cfg, _LASER_PATH_KEYS)
+
 
 @dataclass
 class SimulationContext:
@@ -436,7 +497,7 @@ class SimulationContext:
     backend : str, optional
         Compute backend ('cpu', 'gpu', or 'cpu_linear'), by default 'cpu'.
     fine : FineMeshParams, optional
-        Moving fine-mesh parameters — the refined, laser-following sub-box
+        Moving fine-mesh parameters: the refined, laser-following sub-box
         (refinement, box extents). Defaults to
         :class:`FineMeshParams` defaults.
     """
@@ -447,13 +508,13 @@ class SimulationContext:
     laser_path: 'LaserPath' # Use forward reference
 
     # Existing fields
-    io: Dict[str, Any]  # Flat dict with new keys
+    io: dict[str, Any]  # Flat dict with new keys
     # Execution configuration
     backend: str = "cpu"      # "cpu", "gpu", or "cpu_linear"
     fine: 'FineMeshParams' = field(default_factory=FineMeshParams)
 
     @classmethod
-    def from_dict(cls, cfg: Dict[str, Any], config_dir: Optional[str] = None) -> 'SimulationContext':
+    def from_dict(cls, cfg: dict[str, Any], config_dir: str | None = None) -> 'SimulationContext':
         """
         Parses a nested dictionary and instantiates a full `SimulationContext`.
 
@@ -473,6 +534,8 @@ class SimulationContext:
         SimulationContext
             A populated simulation context ready to build and initialize a solver.
         """
+        _validate_config(cfg)
+
         real_t = _resolve_dtype(cfg.get('simulation', {}).get('dtype', 'float32'))
         sim_cfg = cfg.get('simulation', {})
         domain_cfg = cfg.get('domain', {})
@@ -563,9 +626,9 @@ class SimulationContext:
                     f"explicit 'reference:' key inside its block. It fixes the "
                     f"implicit/explicit split of the property correction; centering "
                     f"it in the middle of the working range matters for better "
-                    f"convergence. Recommended — the average of each property's two "
-                    f"extrema over [T0, T_boil] "
-                    f"K — are: {rec_str}."
+                    f"convergence. The recommended values, each the average of "
+                    f"that property's two extrema over [T0, T_boil] K, "
+                    f"are: {rec_str}."
                 )
             k_ref, rho_ref, cp_ref = refs['k'], refs['rho'], refs['Cp']
 
@@ -582,11 +645,8 @@ class SimulationContext:
             T_boil=T_boil,
             DeltaH_LV=real_t(_get_value(mat_cfg.get('DeltaH_LV', 0.0), "J / kg")),
             T0=T0,
-            # 'h_conv' is a legacy alias for the bottom face (its only meaning
-            # before top/bottom were split out); 'h_conv_bottom' overrides it.
             h_conv_top=real_t(_get_value(mat_cfg.get('h_conv_top', 0.0), "W / (m**2 * K)")),
-            h_conv_bottom=real_t(_get_value(
-                mat_cfg.get('h_conv_bottom', mat_cfg.get('h_conv', 0.0)), "W / (m**2 * K)")),
+            h_conv_bottom=real_t(_get_value(mat_cfg.get('h_conv_bottom', 0.0), "W / (m**2 * K)")),
             model=material_model,
         )
 

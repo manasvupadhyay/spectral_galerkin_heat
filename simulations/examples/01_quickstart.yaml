@@ -2,7 +2,7 @@
 #
 # The simplest case: a single laser track on a small 316L cuboid at coarse
 # resolution with CONSTANT material properties. Latent heat of fusion and
-# surface convection are switched off (L_f = 0, h_conv = 0); only evaporative
+# surface convection are switched off (L_f = 0, h_conv_bottom = 0); only evaporative
 # losses are active. The laser path is a straight line along the x-axis.
 #
 # Run:    uv run python simulations/main.py simulations/examples/01_quickstart.yaml
@@ -55,7 +55,7 @@ material:
   T0:                         # Initial / ambient temperature.
     value: 293.0
     unit: "K"
-  h_conv:                     # Convective surface loss. 0 here: convection off.
+  h_conv_bottom:              # Convective loss at the z=0 face. 0 here: off.
     value: 0.0
     unit: "W/(m2.K)"
 # Evaporation constants

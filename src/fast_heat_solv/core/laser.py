@@ -1,8 +1,8 @@
 """
 Laser path and state definitions.
 """
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), 
-# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, 
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
 # Route de Saclay, Palaiseau, 91128, France.
 #
 # Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
@@ -26,8 +26,6 @@ __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), Éc
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, Optional
-
 
 # Beam profiles. The absorbed surface flux ``q = I₀ · s`` splits into the total
 # power (``∬ q dA = A·P`` fixes ``I₀``) and the peak-normalized shape ``s``.
@@ -65,7 +63,7 @@ def _erf(xp, z):
 
 
 def gaussian_cell_integrated_flux(xp, x, y, x0, y0, r_x, r_y, hx, hy, peak_intensity):
-    """Cell-mean Gaussian flux — exact analytic integral over each cell.
+    """Return the cell-mean Gaussian flux, integrated analytically over each cell.
 
     Each node ``(x_i, y_j)`` stores the *mean* of ``q = I₀·exp(-2 ρ²)`` over its
     cell ``[x_i ± hx/2] × [y_j ± hy/2]`` instead of the point sample. The integral
@@ -96,8 +94,7 @@ def gaussian_cell_integrated_flux(xp, x, y, x0, y0, r_x, r_y, hx, hy, peak_inten
 class LaserProfile:
     """A beam profile: spatial shape and its energy-conserving normalization.
 
-    ``order`` is the single source of truth — both the area factor ``f`` and the
-    spatial shape derive from it.
+    Both the area factor ``f`` and the spatial shape derive from ``order``.
     """
     name: str
     order: float
@@ -141,7 +138,7 @@ class LaserProfile:
 # Canonical order per named profile; ``None`` means take it from the config.
 # flat-top is a high-order super-Gaussian (n≈12) rather than a discontinuous
 # step, which would ring (Gibbs) in the spectral solver.
-_PROFILE_ORDERS: Dict[str, Optional[float]] = {
+_PROFILE_ORDERS: dict[str, float | None] = {
     "gaussian": 2.0,
     "flat_top": 12.0,
     "super_gaussian": None,
@@ -218,4 +215,3 @@ class LaserPath(ABC):
         dt : float
             Current time-step length in seconds.
         """
-        pass

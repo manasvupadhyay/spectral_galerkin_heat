@@ -4,6 +4,8 @@
 
 ## Code availability
 
-The source code is not yet public. A public release is coming soon. 
+The source code is available under the Apache-2.0 licence at
+[github.com/TheoADX/fastHeatSolv](https://github.com/TheoADX/fastHeatSolv).
 
-The {doc}`installation` instructions apply once you have access.
+See {doc}`installation` to get set up, and {doc}`citing` if you use it in
+published work.

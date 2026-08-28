@@ -6,7 +6,7 @@ CPU-side checks that must pass before any GPU / FE-reference comparison:
   (constant-coefficient) solver bit-for-bit;
 * stability / physicality — the correction keeps the field finite, positive
   properties, surface bounded, and the Picard loop converging;
-* convergence parameter ε stays in the modest regime.
+* convergence parameter eps stays in the modest regime.
 
 Run with::
 
@@ -23,8 +23,6 @@ import pytest
 from fast_heat_solv.core.parameters import SimulationContext
 
 # 316L typical T-dependent properties
-# Branch properties carry an in-block `reference` (½(min+max) over [T0, T_boil]),
-# required for any genuinely T-dependent branch material.
 _K_BR = {"solid": "9.248 + 0.01571 * T", "liquid": "12.41 + 0.003279 * T",
          "reference": 24.5075, "unit": "W/(m.K)"}
 _RHO_BR = {"solid": "8084.2 - 0.42086 * T - 3.8942e-5 * T**2",
@@ -40,7 +38,8 @@ _X_START = _LX / 4
 _T_TOTAL = 1.0e-3
 
 
-def _cfg(material, mesh=(48, 24, 32), n_steps=20, backend="cpu", fine=None):
+def _cfg(material, mesh=(48, 24, 32), n_steps=20, backend="cpu", fine=None,
+         dtype=None):
     cfg = {
         "simulation": {"backend": backend,
                        "duration": _T_TOTAL, "dt": _T_TOTAL / n_steps},
@@ -51,6 +50,8 @@ def _cfg(material, mesh=(48, 24, 32), n_steps=20, backend="cpu", fine=None):
     }
     if fine is not None:
         cfg["fine_mesh"] = fine
+    if dtype is not None:
+        cfg["simulation"]["dtype"] = dtype
     return cfg
 
 
@@ -139,9 +140,6 @@ def test_temperature_dependent_run_is_physical(constant_velocity_laser):
     laser = constant_velocity_laser(_X_START, _LY / 2, _V, 0.0, _P)
     ctx = _context(cfg, laser)
 
-    # The correction is a stable, monotone fixed point but, at the solver's
-    # conservative mixing (ω=0.1, contraction ≈ 1−ω), it needs ~2× the base
-    # iteration count; raise the cap so convergence is actually reached.
     solver, T, surf_max, picard, history = _run(
         ctx, max_picard_iter=80, track_history=True)
     assert solver._property_correction is True
@@ -149,10 +147,6 @@ def test_temperature_dependent_run_is_physical(constant_velocity_laser):
     # Finite, surface bounded by the evaporation cap.
     assert not np.isnan(T).any() and not np.isinf(T).any()
     assert max(surf_max) < 1.5 * 3090.0
-    # Sub-ambient undershoot is bounded *relative to the peak excursion* — i.e.
-    # Gibbs ringing, not divergence. (The absolute floor → <1 K only on a
-    # resolved grid; that is the refinement gate, deferred to the GPU machine.
-    # The base solver shows the same coarse-grid ringing: test_validation.py.)
     peak_excursion = float(T.max()) - _T0
     assert T.min() >= _T0 - 0.05 * peak_excursion, (
         f"undershoot {(_T0 - float(T.min())):.1f} K > 5% of peak "
@@ -199,3 +193,129 @@ def test_epsilon_in_safe_regime(constant_velocity_laser):
     k_prime = ctx.mat.model.k(T) - float(solver._kbar)
     eps = float(np.sqrt(np.mean((k_prime / float(solver._kbar)) ** 2)))
     assert eps < 0.3, f"ε={eps:.4f} outside the modest regime — series may diverge"
+
+
+# ---------------------------------------------------------------------------
+# precision — the T-dependent path must honour simulation.dtype
+# ---------------------------------------------------------------------------
+#
+# The property kernels are generated source (numba on CPU, ElementwiseKernel on
+# GPU) emitting the branch expressions and their literals directly, so precision
+# is a codegen decision rather than an array-dtype one. Nothing else in the suite
+# exercises dtype together with T-dependent properties: the other dtype tests
+# use scalar k/rho/Cp, which never reach this path.
+
+_TDEP_FINE = {"refinement": 2, "box_size": [0.4e-3, 0.3e-3, 0.06e-3]}
+
+
+def _tdep_run(backend, dtype, laser, n_steps=6, cap=80):
+    """Run a T-dependent case at one precision; return (solver, T, picard).
+    """
+    cfg = _cfg(_base_material(k=_K_BR, rho=_RHO_BR, Cp=_CP_BR),
+               n_steps=n_steps, backend=backend, fine=_TDEP_FINE, dtype=dtype)
+    solver, T, surf_max, picard = _run(_context(cfg, laser), max_picard_iter=cap)
+    assert solver._property_correction is True
+    return solver, T, picard
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize("dtype_name, np_dtype", [
+    ("float32", np.float32),
+    ("float64", np.float64),
+])
+def test_tdep_cpu_honours_dtype(constant_velocity_laser, dtype_name, np_dtype):
+    """The configured precision reaches the generated property kernels."""
+    laser = constant_velocity_laser(_X_START, _LY / 2, _V, 0.0, _P)
+    solver, T, _ = _tdep_run("cpu", dtype_name, laser)
+
+    assert solver.state.dtype == np_dtype
+    assert solver.state.a.dtype == np.dtype(np_dtype)
+    assert T.dtype == np.dtype(np_dtype)
+    assert solver._T_prev_full.dtype == np.dtype(np_dtype)
+    assert not np.isnan(T).any() and not np.isinf(T).any()
+    assert T.max() > _T0
+
+    # The generated kernels are cached per precision, not per model.
+    model = solver.context.mat.model
+    assert np.dtype(np_dtype) in model._kp_ap_cpu_kernel
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_tdep_cpu_float64_matches_float32(constant_velocity_laser):
+    """Both precisions solve the same problem, so the fields must agree.
+
+    float32 sets the error floor; the bound is a small fraction of the peak
+    excursion.
+    """
+    laser = constant_velocity_laser(_X_START, _LY / 2, _V, 0.0, _P)
+    s32, T32, p32 = _tdep_run("cpu", "float32", laser, n_steps=20)
+    s64, T64, p64 = _tdep_run("cpu", "float64", laser, n_steps=20)
+
+    assert p32[-1] < s32.max_picard_iter and p64[-1] < s64.max_picard_iter, (
+        f"a run bailed at the Picard cap (f32={p32[-1]}, f64={p64[-1]}, "
+        f"cap={s32.max_picard_iter}); the comparison below would be meaningless")
+
+    assert T32.shape == T64.shape
+    excursion = float(T64.max()) - _T0
+    max_abs_diff = float(np.max(np.abs(T64 - T32.astype(np.float64))))
+    assert max_abs_diff <= 1e-3 * excursion, (
+        f"float32 and float64 T-dependent runs differ by {max_abs_diff:.3e} K, "
+        f"exceeding 1e-3 * peak excursion = {1e-3 * excursion:.3e} K")
+
+
+@pytest.mark.integration
+@pytest.mark.gpu
+@pytest.mark.slow
+@pytest.mark.parametrize("dtype_name, np_dtype", [
+    ("float32", np.float32),
+    ("float64", np.float64),
+])
+def test_tdep_gpu_honours_dtype(constant_velocity_laser, dtype_name, np_dtype):
+    """The configured precision reaches the generated property kernels.
+    """
+    try:
+        import cupy
+        cupy.cuda.Device(0).compute_capability
+    except Exception:
+        pytest.skip("CuPy not available or no CUDA device found")
+
+    laser = constant_velocity_laser(_X_START, _LY / 2, _V, 0.0, _P)
+    solver, T, _ = _tdep_run("gpu", dtype_name, laser)
+
+    assert solver.state.a.dtype == np.dtype(np_dtype)
+    T_host = cupy.asnumpy(T) if hasattr(T, "get") else T
+    assert T_host.dtype == np.dtype(np_dtype)
+    assert not np.isnan(T_host).any() and not np.isinf(T_host).any()
+    assert T_host.max() > _T0
+
+    model = solver.context.mat.model
+    assert np.dtype(np_dtype) in model._kp_ap_kernel
+
+
+@pytest.mark.integration
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_tdep_cpu_gpu_float64_equivalence(constant_velocity_laser):
+    """CPU and GPU must agree in double precision on the T-dependent path.
+    """
+    try:
+        import cupy
+        cupy.cuda.Device(0).compute_capability
+    except Exception:
+        pytest.skip("CuPy not available or no CUDA device found")
+
+    laser = constant_velocity_laser(_X_START, _LY / 2, _V, 0.0, _P)
+    s_cpu, T_cpu, p_cpu = _tdep_run("cpu", "float64", laser, n_steps=20)
+    s_gpu, T_gpu, p_gpu = _tdep_run("gpu", "float64", laser, n_steps=20)
+    T_gpu = cupy.asnumpy(T_gpu) if hasattr(T_gpu, "get") else T_gpu
+
+    assert p_cpu[-1] < s_cpu.max_picard_iter and p_gpu[-1] < s_gpu.max_picard_iter, (
+        f"a run bailed at the Picard cap (cpu={p_cpu[-1]}, gpu={p_gpu[-1]})")
+    assert T_cpu.shape == T_gpu.shape
+    excursion = float(T_cpu.max()) - _T0
+    max_abs_diff = float(np.max(np.abs(T_gpu - T_cpu)))
+    assert max_abs_diff <= 1e-4 * excursion, (
+        f"CPU and GPU float64 T-dependent fields differ by {max_abs_diff:.3e} K, "
+        f"exceeding 1e-4 * peak excursion = {1e-4 * excursion:.3e} K")

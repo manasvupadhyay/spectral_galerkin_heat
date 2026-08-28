@@ -1,4 +1,4 @@
-"""fast_heat_solv — spectral heat solver for additive manufacturing.
+"""fast_heat_solv: spectral heat solver for additive manufacturing.
 
 Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
 École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
@@ -39,14 +39,20 @@ phase change and evaporation.
 
 __version__ = "0.1.0"
 
+from .backends import (
+    MathBackend,
+    NumpyBackend,
+    get_backend,
+    register_backend,
+)
 from .core import (
-    LaserState,
-    LaserPath,
-    SimulationContext,
-    NumParams,
-    MaterialParams,
     GeomParams,
     LaserParams,
+    LaserPath,
+    LaserState,
+    MaterialParams,
+    NumParams,
+    SimulationContext,
 )
 from .io_utils import (
     LocalFSIOManager,
@@ -54,14 +60,8 @@ from .io_utils import (
     write_structured_fields,
     write_unstructured_fields,
 )
-from .backends import (
-    MathBackend,
-    NumpyBackend,
-    get_backend,
-    register_backend,
-)
 
-# Solver and runner imports are deferred — they pull in numba which is
+# Solver and runner imports are deferred because they pull in numba, which is
 # expensive to compile. Use __getattr__ so `from fast_heat_solv import
 # SpectralSolver` still works but only loads the solvers on first access.
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {

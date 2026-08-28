@@ -1,11 +1,12 @@
-import os
 import logging
+import os
 from collections import namedtuple
-import h5py
-import numpy as np
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any
+
+import h5py
+import numpy as np
 
 from fast_heat_solv.backends.base import to_host
 
@@ -83,8 +84,8 @@ class LocalFSIOManager:
 
     def __init__(self):
         self.output_root: str = "out"
-        self.run_id: Optional[str] = None
-        self.base_dir: Optional[str] = None
+        self.run_id: str | None = None
+        self.base_dir: str | None = None
         self.format_version: str = "1.0"
         self._saved_xmf_steps = []
         
@@ -146,7 +147,7 @@ class LocalFSIOManager:
             logger.error(f"Failed to create output directories at {self.base_dir}: {e}")
             raise
 
-    def get_output_path(self, filename: str, subdir: Optional[str] = None) -> str:
+    def get_output_path(self, filename: str, subdir: str | None = None) -> str:
         """Construct full path."""
         if self.base_dir is None:
             raise RuntimeError("IOManager not initialized. Call initialize() first.")
@@ -215,8 +216,8 @@ class LocalFSIOManager:
             if ds_name not in f:
                 # Create resizable datasets (time, nz, ny, nx)
                 # We use maxshape=(None, ...) to allow resizing along the first dimension
-                shape = (0,) + modes_data.shape
-                maxshape = (None,) + modes_data.shape
+                shape = (0, *modes_data.shape)
+                maxshape = (None, *modes_data.shape)
                 # Enable compression for efficiency
                 f.create_dataset(ds_name, shape=shape, maxshape=maxshape, dtype=modes_data.dtype, chunks=True, compression="gzip")
                 f.create_dataset("time", shape=(0,), maxshape=(None,), dtype='f8', chunks=True)
@@ -351,7 +352,7 @@ class LocalFSIOManager:
             )
             logger.info(f"Saved slice {plane.name} for step {step} to {output_file}")
 
-    def load_step(self, step: Union[int, str] = 'latest') -> Optional[Dict[str, Any]]:
+    def load_step(self, step: int | str = 'latest') -> dict[str, Any] | None:
         """
         Load back a full field h5 file.
         """
@@ -405,7 +406,12 @@ class LocalFSIOManager:
         if self._interval is not None:
             try:
                 self._next_output_step += int(self._interval)
-            except Exception:
+            except Exception as exc:
+                # Falling through to inf disables every later output for the
+                # rest of the run, so say so rather than going quiet.
+                logger.warning(
+                    "Invalid output interval %r (%s); no further steps will be "
+                    "written this run.", self._interval, exc)
                 self._next_output_step = float('inf')
         else:
             self._next_output_step = float('inf')
@@ -429,8 +435,9 @@ class LocalFSIOManager:
             return
             
         out_path = self.get_output_path("temperature_series.xmf", subdir="fields")
-        from .xdmf_io import XdmfBuilder
         import xml.etree.ElementTree as ET
+
+        from .xdmf_io import XdmfBuilder
         
         builder = XdmfBuilder(version="2.0")
         collection = ET.SubElement(builder.domain, "Grid", Name="TimeSeries", GridType="Collection", CollectionType="Temporal")
