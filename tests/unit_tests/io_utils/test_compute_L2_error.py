@@ -15,9 +15,9 @@ import numpy as np
 import pytest
 
 # Import data classes from io_utils
-from fast_heat_solv.io_utils import StructuredField, UnstructuredField
+from spectral_galerkin_heat.io_utils import StructuredField, UnstructuredField
 
-from fast_heat_solv.io_utils.compute_L2_error import (
+from spectral_galerkin_heat.io_utils.compute_L2_error import (
     _evaluate_on_grid,
     compute_L2_structured,
     compute_L2_unstructured,

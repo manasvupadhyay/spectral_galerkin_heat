@@ -27,10 +27,10 @@ import logging
 import math
 from typing import Any
 
-from fast_heat_solv.backends.base import MathBackend
-from fast_heat_solv.core.laser import LaserPath, LaserState, build_laser_profile
-from fast_heat_solv.core.parameters import SimulationContext
-from fast_heat_solv.solvers.base import HeatSolver
+from spectral_galerkin_heat.backends.base import MathBackend
+from spectral_galerkin_heat.core.laser import LaserPath, LaserState, build_laser_profile
+from spectral_galerkin_heat.core.parameters import SimulationContext
+from spectral_galerkin_heat.solvers.base import HeatSolver
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class SpectralSolver(HeatSolver):
 
     Uses fast cosine transforms (DCT) and exponential time differencing (ETD1).
     Runs on CPU (NumPy/Numba) or GPU (CuPy/CUDA) depending on the injected
-    :class:`~fast_heat_solv.backends.base.MathBackend`: use
+    :class:`~spectral_galerkin_heat.backends.base.MathBackend`: use
     ``NumpyBackend()`` for CPU and ``get_backend("cupy")`` for GPU.
 
     Every numerical operation goes through ``self.backend.xp`` (the array

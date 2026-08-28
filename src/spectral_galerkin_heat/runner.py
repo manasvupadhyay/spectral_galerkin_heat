@@ -2,7 +2,7 @@
 StandaloneHeatRunner: self-contained simulation runner.
 
 Owns the time-stepping loop, I/O and telemetry. This is the entry point for
-running fastHeatSolv from a YAML config file.
+running spectral_galerkin_heat from a YAML config file.
 """
 
 # Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
@@ -38,9 +38,9 @@ import sys
 import time
 from typing import Any
 
-from fast_heat_solv.core.parameters import SimulationContext
-from fast_heat_solv.io_utils.spectral_fs_io import LocalFSIOManager
-from fast_heat_solv.solvers.base import HeatSolver
+from spectral_galerkin_heat.core.parameters import SimulationContext
+from spectral_galerkin_heat.io_utils.spectral_fs_io import LocalFSIOManager
+from spectral_galerkin_heat.solvers.base import HeatSolver
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +222,7 @@ class StandaloneHeatRunner:
         Fully populated simulation parameters.
     heat_solver : HeatSolver
         The solver to run; build one with
-        :func:`fast_heat_solv.solvers.build_solver`.
+        :func:`spectral_galerkin_heat.solvers.build_solver`.
     io_manager : LocalFSIOManager, optional
         Output handler. Defaults to a fresh :class:`LocalFSIOManager`.
     """

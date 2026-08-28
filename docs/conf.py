@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath('../src'))
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = 'fastHeatSolv'
+project = 'spectral_galerkin_heat'
 copyright = '2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, Route de Saclay, Palaiseau, 91128, France'
 author = 'Théo Andrieux, Jules Dichamp, Manas V. Upadhyay'
 
@@ -29,7 +29,7 @@ extensions = [
     'sphinx_design',
 ]
 
-autoapi_dirs = ['../src/fast_heat_solv']
+autoapi_dirs = ['../src/spectral_galerkin_heat']
 autoapi_type = 'python'
 autoapi_options = [
     'members',

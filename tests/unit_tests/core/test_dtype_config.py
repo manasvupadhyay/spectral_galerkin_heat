@@ -9,7 +9,7 @@ import copy
 import numpy as np
 import pytest
 
-from fast_heat_solv.core.parameters import SimulationContext, _resolve_dtype
+from spectral_galerkin_heat.core.parameters import SimulationContext, _resolve_dtype
 
 
 _BASE_CFG = {

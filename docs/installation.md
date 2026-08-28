@@ -1,6 +1,6 @@
 # Installation
 
-fastHeatSolv uses [uv](https://github.com/astral-sh/uv) to manage its environment.
+spectral_galerkin_heat uses [uv](https://github.com/astral-sh/uv) to manage its environment.
 
 ## Prerequisites
 
@@ -15,8 +15,8 @@ fastHeatSolv uses [uv](https://github.com/astral-sh/uv) to manage its environmen
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/TheoADX/fastHeatSolv.git
-   cd fastHeatSolv
+   git clone https://github.com/theo-andrieux/spectral_galerkin_heat.git
+   cd spectral_galerkin_heat
    ```
 
 2. **Sync the environment (CPU):**

@@ -2,9 +2,9 @@
 
 import pytest
 
-from fast_heat_solv.backends import NumpyBackend
-from fast_heat_solv.solvers import SpectralSolver, build_solver
-from fast_heat_solv.solvers.spectral_cpu_linear import SpectralSolverCPULinear
+from spectral_galerkin_heat.backends import NumpyBackend
+from spectral_galerkin_heat.solvers import SpectralSolver, build_solver
+from spectral_galerkin_heat.solvers.spectral_cpu_linear import SpectralSolverCPULinear
 
 
 class _Ctx:

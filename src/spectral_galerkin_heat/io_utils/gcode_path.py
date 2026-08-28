@@ -9,7 +9,7 @@ segments, timing, and laser power commands and exposes them via the
 
 import numpy as np
 
-from fast_heat_solv.core.laser import LaserPath, LaserState
+from spectral_galerkin_heat.core.laser import LaserPath, LaserState
 
 
 class GCodeLaserPath(LaserPath):

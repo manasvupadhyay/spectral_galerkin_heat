@@ -5,8 +5,8 @@ import math
 import numpy as np
 import pytest
 
-from fast_heat_solv.backends import NumpyBackend
-from fast_heat_solv.solvers.spectral import SpectralSolver
+from spectral_galerkin_heat.backends import NumpyBackend
+from spectral_galerkin_heat.solvers.spectral import SpectralSolver
 
 
 def test_defaults():
@@ -23,7 +23,7 @@ def test_defaults():
 def test_initialize_applies_picard_config_overrides(tiny_config):
     # initialize() overrides the Picard defaults from the simulation block
     # (max_picard_iter / picard_tol / picard_omega); absent keys keep the defaults.
-    from fast_heat_solv.core.parameters import SimulationContext
+    from spectral_galerkin_heat.core.parameters import SimulationContext
 
     tiny_config["simulation"].update(
         max_picard_iter=55, picard_tol=1e-6, picard_omega=0.25)
@@ -37,7 +37,7 @@ def test_initialize_applies_picard_config_overrides(tiny_config):
 
 def test_initialize_keeps_picard_defaults_when_unset(tiny_config):
     # No Picard keys in the config -> the constructor defaults survive initialize().
-    from fast_heat_solv.core.parameters import SimulationContext
+    from spectral_galerkin_heat.core.parameters import SimulationContext
 
     ctx = SimulationContext.from_dict(tiny_config)
     s = SpectralSolver(NumpyBackend(), ctx)
@@ -62,7 +62,7 @@ def test_set_state_before_init_raises():
 def test_initialize_sets_uniform_ambient_field(tiny_context):
     # IC lives entirely in mode (0,0,0); the reconstructed surface must be T0
     # everywhere. Guards the sqrt(V) scaling of the mean mode.
-    from fast_heat_solv.physics import spectral_cpu_kernels as k
+    from spectral_galerkin_heat.physics import spectral_cpu_kernels as k
 
     s = SpectralSolver(NumpyBackend(), tiny_context)
     state = s.initialize()
@@ -77,7 +77,7 @@ def test_initialize_sets_uniform_ambient_field(tiny_context):
 @pytest.mark.slow
 def test_set_state_roundtrip(tiny_context):
     # set_state(uniform T) -> reconstructed surface == T (DCT scaling round-trip).
-    from fast_heat_solv.physics import spectral_cpu_kernels as k
+    from spectral_galerkin_heat.physics import spectral_cpu_kernels as k
 
     s = SpectralSolver(NumpyBackend(), tiny_context)
     s.initialize()
@@ -110,7 +110,7 @@ def test_step_returns_state_and_metrics(tiny_context):
 @pytest.mark.slow
 def test_step_laser_off_stays_ambient(make_tiny_context):
     # Laser off -> zero source -> the field stays at ambient T0.
-    from fast_heat_solv.physics import spectral_cpu_kernels as k
+    from spectral_galerkin_heat.physics import spectral_cpu_kernels as k
 
     ctx = make_tiny_context(is_on=False)
     s = SpectralSolver(NumpyBackend(), ctx)

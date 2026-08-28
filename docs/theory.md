@@ -1,6 +1,6 @@
 # Theory & Physics
 
-fastHeatSolv solves the **non-linear transient heat equation** with a *semi-analytical
+spectral_galerkin_heat solves the **non-linear transient heat equation** with a *semi-analytical
 spectral Galerkin* (SG) method. Following reference-medium methods from computational
 mechanics, the problem is split into a linear, constant-coefficient reference operator and a
 collection of non-linear forcing terms. The reference operator is represented in an eigenbasis
@@ -139,7 +139,7 @@ relative change of the modes falls below a tolerance $\epsilon$ (`picard_tol`).
 
 Naively, evaluating the non-linear sources would need a full 3-D transform every iteration,
 costing $\mathcal{O}(N_{\text{vol}}\log N_{\text{vol}})$ with $N_{\text{vol}} = N_x N_y N_z$.
-fastHeatSolv avoids this by exploiting the separability of the basis and the *locality* of
+spectral_galerkin_heat avoids this by exploiting the separability of the basis and the *locality* of
 the physics:
 
 - **Surface fluxes → 2-D transform.** The vertical factor of $\Phi_{mnp}$ evaluates to a

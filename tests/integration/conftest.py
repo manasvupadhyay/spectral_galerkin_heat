@@ -12,7 +12,7 @@ import logging
 import numpy as np
 import pytest
 
-from fast_heat_solv.core.laser import LaserPath, LaserState
+from spectral_galerkin_heat.core.laser import LaserPath, LaserState
 
 logger = logging.getLogger(__name__)
 

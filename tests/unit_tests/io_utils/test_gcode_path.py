@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from fast_heat_solv.io_utils.gcode_path import GCodeLaserPath
+from spectral_galerkin_heat.io_utils.gcode_path import GCodeLaserPath
 
 
 def _write(tmp_path, text):

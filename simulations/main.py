@@ -1,4 +1,4 @@
-"""Main entry point for running fastHeatSolv simulations."""
+"""Main entry point for running spectral_galerkin_heat simulations."""
 
 # Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
 # École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
@@ -30,12 +30,12 @@ import os
 import shutil
 from typing import Dict, Any
 
-from fast_heat_solv.runner import StandaloneHeatRunner
-from fast_heat_solv.solvers import build_solver
-from fast_heat_solv.core.parameters import (
+from spectral_galerkin_heat.runner import StandaloneHeatRunner
+from spectral_galerkin_heat.solvers import build_solver
+from spectral_galerkin_heat.core.parameters import (
     SimulationContext
 )
-from fast_heat_solv.io_utils.slices import generate_plots
+from spectral_galerkin_heat.io_utils.slices import generate_plots
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -49,7 +49,7 @@ def load_config(path: str) -> Dict[str, Any]:
         return yaml.safe_load(f)
 
 def main():
-    parser = argparse.ArgumentParser(description="FastHeatSolv: Spectral Heat Equation Solver")
+    parser = argparse.ArgumentParser(description="spectral_galerkin_heat: Spectral Heat Equation Solver")
     parser.add_argument("config",default='examples/01_quickstart.yaml', help="Path to YAML configuration file")
     parser.add_argument("--backend", default=None, choices=["cpu", "gpu", "cpu_linear"], help="Override backend (cpu/gpu/cpu_linear)")
     parser.add_argument("--viz", action="store_true", help="Force visualization after simulation")

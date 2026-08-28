@@ -4,7 +4,7 @@
 import numpy as np
 import pytest
 
-from fast_heat_solv.core.property_expr import PropertyExpr
+from spectral_galerkin_heat.core.property_expr import PropertyExpr
 
 
 @pytest.mark.parametrize("dtype, cast", [

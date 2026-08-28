@@ -1,6 +1,6 @@
 # Validation & Results
 
-fastHeatSolv has been checked against three references: closed-form analytical solutions in the
+spectral_galerkin_heat has been checked against three references: closed-form analytical solutions in the
 linear regime, a finite-element (FE) model in the non-linear regime, and a published case study.
 In each case it reproduces the reference temperature field at a lower computational cost than an
 implicit FE solver.

@@ -1,7 +1,7 @@
 """GPU math backend: CuPy arrays with Numba CUDA kernels.
 
 This module imports :mod:`cupy`, so it is imported lazily (only from
-:func:`fast_heat_solv.backends.get_backend`) to keep CuPy an optional
+:func:`spectral_galerkin_heat.backends.get_backend`) to keep CuPy an optional
 dependency.
 """
 
@@ -29,7 +29,7 @@ __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), Éc
 
 import cupy as cp
 
-import fast_heat_solv.physics.spectral_gpu_kernels as _gpu_kernels
+import spectral_galerkin_heat.physics.spectral_gpu_kernels as _gpu_kernels
 
 from .base import MathBackend
 

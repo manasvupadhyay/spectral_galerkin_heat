@@ -8,7 +8,7 @@ from typing import Any
 import h5py
 import numpy as np
 
-from fast_heat_solv.backends.base import to_host
+from spectral_galerkin_heat.backends.base import to_host
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +189,7 @@ class LocalFSIOManager:
 
     def _save_full_volume(self, time: float, step: int, state: Any) -> None:
         """Reconstruct the full temperature volume and write HDF5 + XDMF."""
-        from fast_heat_solv.physics.spectral_helpers import reconstruct_temperature_DCT
+        from spectral_galerkin_heat.physics.spectral_helpers import reconstruct_temperature_DCT
 
         grid = state.grid
 
@@ -244,7 +244,7 @@ class LocalFSIOManager:
                        profiles_locations: Any) -> None:
         """Compute 1-D temperature profiles and write them to the profiles/ subfolder."""
         # Compute 1D profiles using the helper (no I/O in helper)
-        from fast_heat_solv.physics.spectral_helpers import save_temp_profiles
+        from spectral_galerkin_heat.physics.spectral_helpers import save_temp_profiles
 
         # Determine center and laser position.
         laser_position = None
@@ -291,7 +291,7 @@ class LocalFSIOManager:
     def _save_slices(self, time: float, step: int, state: Any, laser_path: Any,
                         slice_planes: Any) -> None:
         """Ensure the step's XDMF exists, then render a cut-plane image per plane."""
-        from fast_heat_solv.physics.spectral_helpers import reconstruct_temperature_DCT
+        from spectral_galerkin_heat.physics.spectral_helpers import reconstruct_temperature_DCT
 
         # 1. Ensure XDMF exists for this step. load_xdmf expects a Path, so build
         #    one here rather than passing a bare string down the slice pipeline.
@@ -311,7 +311,7 @@ class LocalFSIOManager:
             logger.info(f"Generated XDMF for slices at {xdmf_path}")
 
         # 2. Generate slices for each plane
-        from fast_heat_solv.io_utils.slices import generate_plots
+        from spectral_galerkin_heat.io_utils.slices import generate_plots
         slices_dir = self.get_output_path('', subdir='slices')
         surf_z = self.context.geom.size.z
         laser_state = laser_path.get_state(time, 0.0)
@@ -380,7 +380,7 @@ class LocalFSIOManager:
             return None
             
         # Shared reader (see io_utils.loader) keeps load_step / get_field in sync.
-        from fast_heat_solv.io_utils.loader import read_field_h5
+        from spectral_galerkin_heat.io_utils.loader import read_field_h5
         return read_field_h5(os.path.join(fields_dir, target_file))
 
     # ------------------------------------------------------------------

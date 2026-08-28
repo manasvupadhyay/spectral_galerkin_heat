@@ -1,6 +1,6 @@
 """Backend-agnostic spectral free functions (shared by CPU and GPU kernels).
 
-These operate on a :class:`~fast_heat_solv.physics.spectral_state.SpectralSolverState`
+These operate on a :class:`~spectral_galerkin_heat.physics.spectral_state.SpectralSolverState`
 and are pure ``einsum`` / array-copy logic: they take the array module from
 ``SsState.xp``, so both kernel modules import them from here.
 

@@ -7,7 +7,7 @@ import h5py
 import numpy as np
 import pytest
 
-from fast_heat_solv.io_utils import (
+from spectral_galerkin_heat.io_utils import (
     XdmfBuilder,
     StructuredField,
     load_xdmf,

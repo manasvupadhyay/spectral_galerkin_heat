@@ -319,102 +319,6 @@ wheels = [
 ]
 
 [[package]]
-name = "fastheatsolv"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "h5py" },
-    { name = "matplotlib" },
-    { name = "numba" },
-    { name = "numpy" },
-    { name = "pint" },
-    { name = "pyfftw" },
-    { name = "pyyaml" },
-    { name = "scipy" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
-docs = [
-    { name = "myst-parser" },
-    { name = "sphinx" },
-    { name = "sphinx-autoapi" },
-    { name = "sphinx-design" },
-    { name = "sphinx-rtd-theme" },
-    { name = "sphinxcontrib-mermaid" },
-]
-fenics = [
-    { name = "fenics-ufl" },
-    { name = "gmsh" },
-]
-gpu = [
-    { name = "cupy-cuda13x" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
-docs = [
-    { name = "myst-parser" },
-    { name = "sphinx" },
-    { name = "sphinx-autoapi" },
-    { name = "sphinx-design" },
-    { name = "sphinx-rtd-theme" },
-    { name = "sphinxcontrib-mermaid" },
-]
-gpu = [
-    { name = "cupy-cuda13x" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "cupy-cuda13x", marker = "extra == 'gpu'", specifier = ">=14.1.1" },
-    { name = "fenics-ufl", marker = "extra == 'fenics'", specifier = ">=2024.2.0" },
-    { name = "gmsh", marker = "extra == 'fenics'", specifier = ">=4.13" },
-    { name = "h5py", specifier = ">=3.16.0" },
-    { name = "matplotlib", specifier = ">=3.10.8" },
-    { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=4.0.0" },
-    { name = "numba", specifier = ">=0.64.0" },
-    { name = "numpy", specifier = ">=2.4.3" },
-    { name = "pint", specifier = ">=0.23" },
-    { name = "pyfftw", specifier = ">=0.15.1" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.2" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.1.0" },
-    { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
-    { name = "scipy", specifier = ">=1.17.1" },
-    { name = "sphinx", marker = "extra == 'docs'", specifier = ">=8.1.3" },
-    { name = "sphinx-autoapi", marker = "extra == 'docs'", specifier = ">=3.8.0" },
-    { name = "sphinx-design", marker = "extra == 'docs'", specifier = ">=0.6.1" },
-    { name = "sphinx-rtd-theme", marker = "extra == 'docs'", specifier = ">=3.0.1" },
-    { name = "sphinxcontrib-mermaid", marker = "extra == 'docs'", specifier = ">=2.0.1" },
-]
-provides-extras = ["gpu", "fenics", "docs", "dev"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=9.0.2" },
-    { name = "pytest-cov", specifier = ">=7.1.0" },
-    { name = "ruff", specifier = ">=0.9" },
-]
-docs = [
-    { name = "myst-parser", specifier = ">=4.0.0" },
-    { name = "sphinx", specifier = ">=8.1.3" },
-    { name = "sphinx-autoapi", specifier = ">=3.8.0" },
-    { name = "sphinx-design", specifier = ">=0.6.1" },
-    { name = "sphinx-rtd-theme", specifier = ">=3.0.1" },
-    { name = "sphinxcontrib-mermaid", specifier = ">=2.0.1" },
-]
-gpu = [{ name = "cupy-cuda13x", specifier = ">=14.1.1" }]
-
-[[package]]
 name = "fenics-ufl"
 version = "2026.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1315,6 +1219,102 @@ sdist = { url = "https://files.pythonhosted.org/packages/75/a7/9810d872919697c9d
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/78/3565d011c61f5a43488987ee32b6f3f656e7f107ac2782dd57bdd7d91d9a/snowballstemmer-3.0.1-py3-none-any.whl", hash = "sha256:6cd7b3897da8d6c9ffb968a6781fa6532dce9c3618a4b127d920dab764a19064", size = 103274, upload-time = "2025-05-09T16:34:50.371Z" },
 ]
+
+[[package]]
+name = "spectral-galerkin-heat"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "h5py" },
+    { name = "matplotlib" },
+    { name = "numba" },
+    { name = "numpy" },
+    { name = "pint" },
+    { name = "pyfftw" },
+    { name = "pyyaml" },
+    { name = "scipy" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+docs = [
+    { name = "myst-parser" },
+    { name = "sphinx" },
+    { name = "sphinx-autoapi" },
+    { name = "sphinx-design" },
+    { name = "sphinx-rtd-theme" },
+    { name = "sphinxcontrib-mermaid" },
+]
+fenics = [
+    { name = "fenics-ufl" },
+    { name = "gmsh" },
+]
+gpu = [
+    { name = "cupy-cuda13x" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+docs = [
+    { name = "myst-parser" },
+    { name = "sphinx" },
+    { name = "sphinx-autoapi" },
+    { name = "sphinx-design" },
+    { name = "sphinx-rtd-theme" },
+    { name = "sphinxcontrib-mermaid" },
+]
+gpu = [
+    { name = "cupy-cuda13x" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cupy-cuda13x", marker = "extra == 'gpu'", specifier = ">=14.1.1" },
+    { name = "fenics-ufl", marker = "extra == 'fenics'", specifier = ">=2024.2.0" },
+    { name = "gmsh", marker = "extra == 'fenics'", specifier = ">=4.13" },
+    { name = "h5py", specifier = ">=3.16.0" },
+    { name = "matplotlib", specifier = ">=3.10.8" },
+    { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=4.0.0" },
+    { name = "numba", specifier = ">=0.64.0" },
+    { name = "numpy", specifier = ">=2.4.3" },
+    { name = "pint", specifier = ">=0.23" },
+    { name = "pyfftw", specifier = ">=0.15.1" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.2" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.1.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
+    { name = "scipy", specifier = ">=1.17.1" },
+    { name = "sphinx", marker = "extra == 'docs'", specifier = ">=8.1.3" },
+    { name = "sphinx-autoapi", marker = "extra == 'docs'", specifier = ">=3.8.0" },
+    { name = "sphinx-design", marker = "extra == 'docs'", specifier = ">=0.6.1" },
+    { name = "sphinx-rtd-theme", marker = "extra == 'docs'", specifier = ">=3.0.1" },
+    { name = "sphinxcontrib-mermaid", marker = "extra == 'docs'", specifier = ">=2.0.1" },
+]
+provides-extras = ["gpu", "fenics", "docs", "dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=9.0.2" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "ruff", specifier = ">=0.9" },
+]
+docs = [
+    { name = "myst-parser", specifier = ">=4.0.0" },
+    { name = "sphinx", specifier = ">=8.1.3" },
+    { name = "sphinx-autoapi", specifier = ">=3.8.0" },
+    { name = "sphinx-design", specifier = ">=0.6.1" },
+    { name = "sphinx-rtd-theme", specifier = ">=3.0.1" },
+    { name = "sphinxcontrib-mermaid", specifier = ">=2.0.1" },
+]
+gpu = [{ name = "cupy-cuda13x", specifier = ">=14.1.1" }]
 
 [[package]]
 name = "sphinx"

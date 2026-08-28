@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 
-import fast_heat_solv.physics.spectral_cpu_kernels as cpu_kernels
-from fast_heat_solv.backends import MathBackend, NumpyBackend, get_backend
-from fast_heat_solv.backends.base import to_host
+import spectral_galerkin_heat.physics.spectral_cpu_kernels as cpu_kernels
+from spectral_galerkin_heat.backends import MathBackend, NumpyBackend, get_backend
+from spectral_galerkin_heat.backends.base import to_host
 
 
 def test_backend_container_stores_fields():

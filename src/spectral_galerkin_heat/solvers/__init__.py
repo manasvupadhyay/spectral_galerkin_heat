@@ -19,10 +19,10 @@ def build_solver(context) -> HeatSolver:
     """
     match context.backend:
         case "cpu":
-            from fast_heat_solv.backends import NumpyBackend
+            from spectral_galerkin_heat.backends import NumpyBackend
             return SpectralSolver(backend=NumpyBackend())
         case "gpu":
-            from fast_heat_solv.backends import get_backend
+            from spectral_galerkin_heat.backends import get_backend
             return SpectralSolver(backend=get_backend("cupy"))
         case "cpu_linear":
             from .spectral_cpu_linear import SpectralSolverCPULinear

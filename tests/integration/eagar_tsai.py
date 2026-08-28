@@ -216,7 +216,7 @@ def _save_field(T_data, basename, *, x, y, z, t_total, v, x_laser, y_laser, out_
         ds.attrs["x_laser"] = x_laser
         ds.attrs["y_laser"] = y_laser
 
-    from fast_heat_solv.io_utils import XdmfBuilder
+    from spectral_galerkin_heat.io_utils import XdmfBuilder
 
     builder = XdmfBuilder(version="2.0")
     builder.add_structured_grid(

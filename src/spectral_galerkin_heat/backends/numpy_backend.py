@@ -24,7 +24,7 @@ __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), Éc
 
 import numpy as np
 
-import fast_heat_solv.physics.spectral_cpu_kernels as _cpu_kernels
+import spectral_galerkin_heat.physics.spectral_cpu_kernels as _cpu_kernels
 
 from ._registry import register_backend
 from .base import MathBackend

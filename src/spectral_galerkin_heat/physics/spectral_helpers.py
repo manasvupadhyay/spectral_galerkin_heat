@@ -19,8 +19,8 @@
 import numpy as np
 import scipy.fft
 
-from fast_heat_solv.backends.base import to_host
-from fast_heat_solv.physics import spectral_ops as _ops
+from spectral_galerkin_heat.backends.base import to_host
+from spectral_galerkin_heat.physics import spectral_ops as _ops
 
 
 def _C_coef(N, L, xp=np):
@@ -120,7 +120,7 @@ def reconstruct_temperature_volume(a, SsState):
     ----------
     a : ndarray
         Spectral coefficients.
-    SsState : fast_heat_solv.physics.spectral_cpu_kernels.SpectralSolverState
+    SsState : spectral_galerkin_heat.physics.spectral_cpu_kernels.SpectralSolverState
         The solver state containing grid reconstruction bases.
 
     Returns
@@ -166,7 +166,7 @@ def reconstruct_temperature_DCT(a, SsState):
     ----------
     a : ndarray, shape (N_z, N_y, N_x)
         Spectral coefficients (CuPy arrays are moved to CPU automatically).
-    SsState : fast_heat_solv.physics.spectral_cpu_kernels.SpectralSolverState
+    SsState : spectral_galerkin_heat.physics.spectral_cpu_kernels.SpectralSolverState
         Must have ``grid.C`` normalization tuple (C[0]=x, C[1]=y, C[2]=z).
 
     Returns
@@ -218,7 +218,7 @@ def reconstruct_temperature_volume_at_points(a, num, geom, SsState, coords):
         Simulation numerical parameters containing mesh discretizations.
     geom : GeomParams
         Simulation domain geometry.
-    SsState : fast_heat_solv.physics.spectral_cpu_kernels.SpectralSolverState
+    SsState : spectral_galerkin_heat.physics.spectral_cpu_kernels.SpectralSolverState
         Current solver state.
     coords : ndarray
         The (N, 3) shaped array containing float coordinates to evaluate at.
@@ -269,7 +269,7 @@ def save_temp_profiles(
         a: Spectral coefficients (N_z, N_y, N_x).
         num: Numerical params (N_x, N_y, N_z).
         geom: Geometric params (Lx, Ly, Lz).
-        SsState: fast_heat_solv.physics.spectral_cpu_kernels.SpectralSolverState
+        SsState: spectral_galerkin_heat.physics.spectral_cpu_kernels.SpectralSolverState
         laser: Laser object (for centering).
         center: "laser", "hotspot", or tuple (x, y).
         num_points: Number of sampling points along each axis.

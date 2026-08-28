@@ -2,14 +2,14 @@
 
 A :class:`MathBackend` bundles an array module (NumPy or CuPy) with its
 matching physics-kernel module. Inject one into
-:class:`~fast_heat_solv.solvers.spectral.SpectralSolver` to run on CPU or GPU
+:class:`~spectral_galerkin_heat.solvers.spectral.SpectralSolver` to run on CPU or GPU
 from the same solver code. To run on a different library (PyTorch, JAX, …),
 add a :class:`MathBackend` with a matching physics-kernel module, 
 see the docs for more details.
 
 Examples
 --------
->>> from fast_heat_solv.backends import get_backend
+>>> from spectral_galerkin_heat.backends import get_backend
 >>> backend = get_backend("numpy")
 >>> backend.name
 'numpy'

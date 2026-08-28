@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from fast_heat_solv.runner import StandaloneHeatRunner, initialize_run_logging
+from spectral_galerkin_heat.runner import StandaloneHeatRunner, initialize_run_logging
 
 
 def _ctx(n_steps=3, dt=1e-6, dt_nominal=1e-6):
@@ -54,7 +54,7 @@ class _IO:
 
 def test_runner_defaults_io_manager():
     # With no io_manager passed, the runner builds a default LocalFSIOManager.
-    from fast_heat_solv.io_utils.spectral_fs_io import LocalFSIOManager
+    from spectral_galerkin_heat.io_utils.spectral_fs_io import LocalFSIOManager
 
     r = StandaloneHeatRunner(_ctx(), _Solver())
     assert isinstance(r.io_manager, LocalFSIOManager)
@@ -78,7 +78,7 @@ def test_run_io_lifecycle_order_and_finalize():
 
 
 def test_dt_correction_is_logged(caplog):
-    caplog.set_level(logging.INFO, logger="fast_heat_solv.runner")
+    caplog.set_level(logging.INFO, logger="spectral_galerkin_heat.runner")
     StandaloneHeatRunner(_ctx(dt=1.0e-6, dt_nominal=1.1e-6), _Solver(), io_manager=_IO()).run()
     assert "dt correction" in caplog.text
 
@@ -86,7 +86,7 @@ def test_dt_correction_is_logged(caplog):
 def test_telemetry_runs_without_psutil(caplog, monkeypatch):
     # Make `import psutil` fail so the _psutil_proc-is-None branch is exercised.
     monkeypatch.setitem(sys.modules, "psutil", None)
-    caplog.set_level(logging.INFO, logger="fast_heat_solv.runner")
+    caplog.set_level(logging.INFO, logger="spectral_galerkin_heat.runner")
     io = _IO()
     StandaloneHeatRunner(_ctx(), _Solver(), io_manager=io).run()
     assert "[ETA]" in caplog.text   # telemetry produced a finite ETA line

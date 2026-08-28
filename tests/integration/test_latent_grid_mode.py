@@ -14,7 +14,7 @@ import copy
 import numpy as np
 import pytest
 
-from fast_heat_solv.core.parameters import SimulationContext
+from spectral_galerkin_heat.core.parameters import SimulationContext
 
 _T_S, _T_L, _T0 = 1674.15, 1697.15, 293.0
 _LX, _LY, _LZ = 0.6e-3, 0.4e-3, 0.15e-3
@@ -40,8 +40,8 @@ def _cfg(fine=None):
 
 
 def _run(cfg, laser, n=12):
-    from fast_heat_solv.physics.spectral_helpers import reconstruct_temperature_DCT
-    from fast_heat_solv.solvers import build_solver
+    from spectral_galerkin_heat.physics.spectral_helpers import reconstruct_temperature_DCT
+    from spectral_galerkin_heat.solvers import build_solver
     ctx = SimulationContext.from_dict(copy.deepcopy(cfg))
     ctx.laser_path = laser
     solver = build_solver(ctx)
@@ -115,7 +115,7 @@ def test_grid_mode_is_default_without_fine_mesh(constant_velocity_laser):
     ctx = SimulationContext.from_dict(_cfg(fine=None))
     ctx.laser_path = laser
     assert ctx.fine is None
-    from fast_heat_solv.solvers import build_solver
+    from spectral_galerkin_heat.solvers import build_solver
     solver = build_solver(ctx)
     solver.initialize(ctx)
     assert solver.state.fine_mesh is None

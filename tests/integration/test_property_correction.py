@@ -20,7 +20,7 @@ import copy
 import numpy as np
 import pytest
 
-from fast_heat_solv.core.parameters import SimulationContext
+from spectral_galerkin_heat.core.parameters import SimulationContext
 
 # 316L typical T-dependent properties
 _K_BR = {"solid": "9.248 + 0.01571 * T", "liquid": "12.41 + 0.003279 * T",
@@ -70,8 +70,8 @@ def _context(cfg, laser):
 
 
 def _run(ctx, max_picard_iter=None, track_history=False):
-    from fast_heat_solv.physics.spectral_helpers import reconstruct_temperature_DCT
-    from fast_heat_solv.solvers import build_solver
+    from spectral_galerkin_heat.physics.spectral_helpers import reconstruct_temperature_DCT
+    from spectral_galerkin_heat.solvers import build_solver
 
     solver = build_solver(ctx)
     solver.initialize(ctx)
@@ -174,7 +174,7 @@ def test_temperature_dependent_run_is_physical(constant_velocity_laser):
 @pytest.mark.slow
 def test_epsilon_in_safe_regime(constant_velocity_laser):
     """The controlling parameter ε stays modest, so the series converges."""
-    from fast_heat_solv.physics.spectral_ops import reconstruct_volume
+    from spectral_galerkin_heat.physics.spectral_ops import reconstruct_volume
 
     # This short track stays cold in the bulk, so the reference that keeps the
     # fluctuation k'=k(T)-k̄ modest is the cold-side value k(T0) (= the 316L solid

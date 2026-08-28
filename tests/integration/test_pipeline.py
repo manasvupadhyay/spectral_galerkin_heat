@@ -1,4 +1,4 @@
-"""End-to-end pipeline tests for the FastHeatSolv CPU & GPU backends.
+"""End-to-end pipeline tests for the spectral_galerkin_heat CPU & GPU backends.
 
 Covers SimulationContext construction → build_solver → StandaloneHeatRunner time
 loop → LocalFSIOManager XDMF / HDF5 output → physics-sanity checks on the saved
@@ -29,7 +29,7 @@ import h5py
 import numpy as np
 import pytest
 
-from fast_heat_solv.core.parameters import SimulationContext
+from spectral_galerkin_heat.core.parameters import SimulationContext
 
 # 400 µm domain, 32×32×16 mesh → dx ≈ 4.7 µm; the 120 µm spot is resolved by
 # ~25 cells.  20 steps at dt = 3 µs over 60 µs.
@@ -62,8 +62,8 @@ def _build_context(cfg, fixed_laser) -> SimulationContext:
 
 def _run_final_field(cfg, run_dir, monkeypatch, fixed_laser) -> np.ndarray:
     """Run one full simulation under *run_dir*, return its final field array."""
-    from fast_heat_solv.runner import StandaloneHeatRunner
-    from fast_heat_solv.solvers import build_solver
+    from spectral_galerkin_heat.runner import StandaloneHeatRunner
+    from spectral_galerkin_heat.solvers import build_solver
 
     run_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.chdir(run_dir)
@@ -83,8 +83,8 @@ def test_cpu_simulation_e2e(tmp_path, monkeypatch, fixed_laser,
                             assert_field_sane, assert_final_step_converged,
                             log_picard_iterations):
     """Full CPU pipeline: config → solver → 10-step loop → XDMF output."""
-    from fast_heat_solv.runner import StandaloneHeatRunner
-    from fast_heat_solv.solvers import build_solver
+    from spectral_galerkin_heat.runner import StandaloneHeatRunner
+    from spectral_galerkin_heat.solvers import build_solver
 
     monkeypatch.chdir(tmp_path)
     context = _build_context(_CONFIG, fixed_laser)
@@ -121,8 +121,8 @@ def test_gpu_simulation_e2e(tmp_path, monkeypatch, fixed_laser,
     except Exception:
         pytest.skip("CuPy not available or no CUDA device found")
 
-    from fast_heat_solv.runner import StandaloneHeatRunner
-    from fast_heat_solv.solvers import build_solver
+    from spectral_galerkin_heat.runner import StandaloneHeatRunner
+    from spectral_galerkin_heat.solvers import build_solver
 
     monkeypatch.chdir(tmp_path)
     gpu_cfg = copy.deepcopy(_CONFIG)

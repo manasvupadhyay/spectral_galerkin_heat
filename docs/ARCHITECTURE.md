@@ -8,11 +8,11 @@ avoided.
 ## Directory Structure
 
 ```text
-fastHeatSolv/
+spectral_galerkin_heat/
 ├── pyproject.toml                  # Package definition and dependencies
 ├── README.md
 ├── src/
-│   └── fast_heat_solv/
+│   └── spectral_galerkin_heat/
 │       ├── __init__.py             # Package version + public API
 │       ├── runner.py               # StandaloneHeatRunner: simulation loop orchestrator
 │       ├── core/

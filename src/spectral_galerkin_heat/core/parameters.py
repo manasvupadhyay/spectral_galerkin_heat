@@ -29,11 +29,11 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 
-from fast_heat_solv.core.properties import MaterialModel
-from fast_heat_solv.core.vector import Vec3
+from spectral_galerkin_heat.core.properties import MaterialModel
+from spectral_galerkin_heat.core.vector import Vec3
 
 if TYPE_CHECKING:
-    from fast_heat_solv.core.laser import LaserPath
+    from spectral_galerkin_heat.core.laser import LaserPath
 
 # ``cfg`` throughout is the parsed-YAML configuration dict consumed
 # by ``SimulationContext.from_dict``.
@@ -347,7 +347,7 @@ class LaserParams:
         via :class:`LaserPath.get_state`.
     profile : str, optional
         Beam-profile name (``"gaussian"`` / ``"flat_top"`` / ``"super_gaussian"``)
-        resolved to a :class:`fast_heat_solv.core.laser.LaserProfile`, by default
+        resolved to a :class:`spectral_galerkin_heat.core.laser.LaserProfile`, by default
         ``"gaussian"``. Set via the ``laser.profile`` config key.
     r_x, r_y : float, optional
         Beam radii along x and y (metres). Default to ``radius`` (circular beam);
@@ -663,7 +663,7 @@ class SimulationContext:
         path_cfg = laser_cfg.get('path', {})
         laser_path = None
         if path_cfg.get('type', '').lower() == 'gcode':
-            from fast_heat_solv.io_utils.gcode_path import GCodeLaserPath
+            from spectral_galerkin_heat.io_utils.gcode_path import GCodeLaserPath
             gcode_file = path_cfg.get('file', None)
             initial_position = tuple(path_cfg.get('initial_position', [0.0, 0.0]))
             if gcode_file is not None:

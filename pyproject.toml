@@ -1,5 +1,5 @@
 [project]
-name = "fastheatsolv"
+name = "spectral_galerkin_heat"
 version = "0.1.0"
 description = "A fast solver for the heat equation using spectral methods and GPU acceleration."
 readme = "README.md"
@@ -36,10 +36,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/TheoADX/fastHeatSolv"
-Repository = "https://github.com/TheoADX/fastHeatSolv"
-Documentation = "https://theoadx.github.io/hsg-docs/"
-Issues = "https://github.com/TheoADX/fastHeatSolv/issues"
+Homepage = "https://github.com/theo-andrieux/spectral_galerkin_heat"
+Repository = "https://github.com/theo-andrieux/spectral_galerkin_heat"
+Documentation = "https://theo-andrieux.github.io/hsg-docs/"
+Issues = "https://github.com/theo-andrieux/spectral_galerkin_heat/issues"
 
 
 #Install with:
@@ -149,7 +149,7 @@ ignore = [
 "tests/**" = ["F811", "B011"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["fast_heat_solv"]
+known-first-party = ["spectral_galerkin_heat"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

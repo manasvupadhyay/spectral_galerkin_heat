@@ -16,7 +16,7 @@ def cupy_backend():
         cupy.cuda.Device(0).compute_capability
     except Exception:
         pytest.skip("No CUDA device")
-    from fast_heat_solv.backends import get_backend
+    from spectral_galerkin_heat.backends import get_backend
     return get_backend("cupy")
 
 
@@ -24,8 +24,8 @@ def cupy_backend():
 def test_get_backend_cupy(cupy_backend):
     import cupy
 
-    from fast_heat_solv.backends.cupy_backend import CupyBackend
-    from fast_heat_solv.physics import spectral_gpu_kernels
+    from spectral_galerkin_heat.backends.cupy_backend import CupyBackend
+    from spectral_galerkin_heat.physics import spectral_gpu_kernels
 
     assert isinstance(cupy_backend, CupyBackend)
     assert cupy_backend.name == "cupy"
@@ -50,7 +50,7 @@ def test_get_backend_cupy_importerror_without_cupy():
 
     if importlib.util.find_spec("cupy") is not None:
         pytest.skip("CuPy is installed; the absent-CuPy path can't be exercised")
-    from fast_heat_solv.backends import get_backend
+    from spectral_galerkin_heat.backends import get_backend
 
     with pytest.raises(ImportError):
         get_backend("cupy")

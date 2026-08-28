@@ -1,4 +1,4 @@
-"""fast_heat_solv: spectral heat solver for additive manufacturing.
+"""spectral_galerkin_heat: spectral heat solver for additive manufacturing.
 
 Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
 École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
@@ -25,16 +25,16 @@ phase change and evaporation.
 
 **Public API:**
 
-- **Core interfaces**: :class:`~fast_heat_solv.core.parameters.SimulationContext`,
-  :class:`~fast_heat_solv.core.laser.LaserPath`, :class:`~fast_heat_solv.core.laser.LaserState`
-- **Backends**: :class:`~fast_heat_solv.backends.MathBackend`,
-  :func:`~fast_heat_solv.backends.get_backend`,
-  :func:`~fast_heat_solv.backends.register_backend`
-- **Solvers**: :class:`~fast_heat_solv.solvers.HeatSolver`,
-  :class:`~fast_heat_solv.solvers.spectral.SpectralSolver`
-- **I/O**: :class:`~fast_heat_solv.io_utils.LocalFSIOManager`,
-  :func:`~fast_heat_solv.io_utils.load_xdmf`, :func:`~fast_heat_solv.io_utils.write_structured_fields`
-- **Runner**: :class:`~fast_heat_solv.runner.StandaloneHeatRunner`
+- **Core interfaces**: :class:`~spectral_galerkin_heat.core.parameters.SimulationContext`,
+  :class:`~spectral_galerkin_heat.core.laser.LaserPath`, :class:`~spectral_galerkin_heat.core.laser.LaserState`
+- **Backends**: :class:`~spectral_galerkin_heat.backends.MathBackend`,
+  :func:`~spectral_galerkin_heat.backends.get_backend`,
+  :func:`~spectral_galerkin_heat.backends.register_backend`
+- **Solvers**: :class:`~spectral_galerkin_heat.solvers.HeatSolver`,
+  :class:`~spectral_galerkin_heat.solvers.spectral.SpectralSolver`
+- **I/O**: :class:`~spectral_galerkin_heat.io_utils.LocalFSIOManager`,
+  :func:`~spectral_galerkin_heat.io_utils.load_xdmf`, :func:`~spectral_galerkin_heat.io_utils.write_structured_fields`
+- **Runner**: :class:`~spectral_galerkin_heat.runner.StandaloneHeatRunner`
 """
 
 __version__ = "0.1.0"
@@ -62,7 +62,7 @@ from .io_utils import (
 )
 
 # Solver and runner imports are deferred because they pull in numba, which is
-# expensive to compile. Use __getattr__ so `from fast_heat_solv import
+# expensive to compile. Use __getattr__ so `from spectral_galerkin_heat import
 # SpectralSolver` still works but only loads the solvers on first access.
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "HeatSolver":           (".solvers.base",    "HeatSolver"),

@@ -42,7 +42,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from fast_heat_solv.core.property_expr import (
+from spectral_galerkin_heat.core.property_expr import (
     _C_SUFFIX,
     _C_TYPE,
     _PY_CAST,
@@ -84,7 +84,7 @@ class TempProperty:
     ----------
     solid, liquid : PropertyExpr
         Math expression of ``T`` for each phase (see
-        :class:`fast_heat_solv.core.property_expr.PropertyExpr`).
+        :class:`spectral_galerkin_heat.core.property_expr.PropertyExpr`).
     T_solidus, T_liquidus : float
         Mushy-band limits used to blend parameters via :func:`liquid_fraction`.
     is_constant : bool

@@ -13,7 +13,7 @@ import math
 import numpy as np
 import pytest
 
-from fast_heat_solv.core.parameters import SimulationContext
+from spectral_galerkin_heat.core.parameters import SimulationContext
 
 # ---------------------------------------------------------------------------
 # Shared physical case (constant-property 316L; nonlinearities on)
@@ -158,9 +158,9 @@ def _write_fe_xdmf(domain, Ts, path):
 # ---------------------------------------------------------------------------
 
 def _run_sg():
-    from fast_heat_solv.core.laser import LaserPath, LaserState
-    from fast_heat_solv.physics.spectral_helpers import reconstruct_temperature_DCT
-    from fast_heat_solv.solvers import build_solver
+    from spectral_galerkin_heat.core.laser import LaserPath, LaserState
+    from spectral_galerkin_heat.physics.spectral_helpers import reconstruct_temperature_DCT
+    from spectral_galerkin_heat.solvers import build_solver
 
     class _CVLaser(LaserPath):
         def get_state(self, t, dt):
@@ -198,8 +198,8 @@ def test_matches_fenics_nonlinear(tmp_path):
     pytest.importorskip("ufl")
     pytest.importorskip("petsc4py")
 
-    from fast_heat_solv.io_utils import write_structured_fields
-    from fast_heat_solv.io_utils.compute_L2_error import compare
+    from spectral_galerkin_heat.io_utils import write_structured_fields
+    from spectral_galerkin_heat.io_utils.compute_L2_error import compare
 
     # FE reference → native dolfinx XDMF (unstructured, with connectivity).
     domain, Ts = _build_and_solve_fe()

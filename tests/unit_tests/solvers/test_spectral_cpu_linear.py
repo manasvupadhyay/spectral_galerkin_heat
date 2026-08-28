@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from fast_heat_solv.solvers.spectral_cpu_linear import SpectralSolverCPULinear
+from spectral_galerkin_heat.solvers.spectral_cpu_linear import SpectralSolverCPULinear
 
 
 def test_initialize_requires_context():
@@ -26,7 +26,7 @@ def test_step_reports_no_evaporation(tiny_context):
 @pytest.mark.slow
 def test_zero_power_stays_ambient(make_tiny_context):
     # Zero laser power -> no heating -> stays at T0.
-    from fast_heat_solv.physics import spectral_cpu_kernels as k
+    from spectral_galerkin_heat.physics import spectral_cpu_kernels as k
 
     ctx = make_tiny_context(power=0.0)
     s = SpectralSolverCPULinear(ctx)

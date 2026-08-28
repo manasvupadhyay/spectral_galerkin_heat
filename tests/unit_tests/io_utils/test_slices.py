@@ -20,7 +20,7 @@ def _ramp_grid():
 
 
 def test_get_slice_recovers_linear_field_z_normal():
-    from fast_heat_solv.io_utils.slices import _get_slice
+    from spectral_galerkin_heat.io_utils.slices import _get_slice
 
     data = _ramp_grid()
     cz = 0.25
@@ -32,14 +32,14 @@ def test_get_slice_recovers_linear_field_z_normal():
 
 def test_get_slice_bad_normal_raises():
     # Only x/y/z planes exist; any other normal is a clear error.
-    from fast_heat_solv.io_utils.slices import _get_slice
+    from spectral_galerkin_heat.io_utils.slices import _get_slice
 
     with pytest.raises(ValueError):
         _get_slice(_ramp_grid(), "w", center=(0.5, 0.5, 0.25), width=0.4, height=0.4)
 
 
 def test_axis_labels_mapping_and_bad_normal():
-    from fast_heat_solv.io_utils.slices import _axis_labels
+    from spectral_galerkin_heat.io_utils.slices import _axis_labels
 
     assert _axis_labels("z") == ("X (m)", "Y (m)", "x", "y")
     with pytest.raises(ValueError):
@@ -47,7 +47,7 @@ def test_axis_labels_mapping_and_bad_normal():
 
 
 def test_get_slice_returns_labels_for_normal():
-    from fast_heat_solv.io_utils.slices import _get_slice
+    from spectral_galerkin_heat.io_utils.slices import _get_slice
 
     *_, xlabel, ylabel = _get_slice(_ramp_grid(), "z", center=(0.5, 0.5, 0.25),
                                     width=0.4, height=0.4, resolution=10)
@@ -55,7 +55,7 @@ def test_get_slice_returns_labels_for_normal():
 
 
 def test_get_slice_reverse_axis_flips_horizontally():
-    from fast_heat_solv.io_utils.slices import _get_slice
+    from spectral_galerkin_heat.io_utils.slices import _get_slice
 
     data, kw = _ramp_grid(), dict(center=(0.5, 0.5, 0.25), width=0.4, height=0.4, resolution=20)
     _, _, base, *_ = _get_slice(data, "z", **kw)

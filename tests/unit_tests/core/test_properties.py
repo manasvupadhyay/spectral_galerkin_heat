@@ -8,7 +8,7 @@ the spectral solver be compared to the FE field.
 import numpy as np
 import pytest
 
-from fast_heat_solv.core.properties import (
+from spectral_galerkin_heat.core.properties import (
     MaterialModel,
     TempProperty,
     liquid_fraction,

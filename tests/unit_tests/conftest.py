@@ -4,8 +4,8 @@ import copy
 
 import pytest
 
-from fast_heat_solv.core.laser import LaserPath, LaserState
-from fast_heat_solv.core.parameters import SimulationContext
+from spectral_galerkin_heat.core.laser import LaserPath, LaserState
+from spectral_galerkin_heat.core.parameters import SimulationContext
 
 
 class FixedLaser(LaserPath):

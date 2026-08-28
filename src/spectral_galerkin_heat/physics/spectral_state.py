@@ -1,7 +1,7 @@
 """Backend-parametrized spectral-solver state (shared by CPU and GPU kernels).
 
 These classes hold the precomputed grid, fine-mesh bases, working buffers and
-spectral propagators for :class:`~fast_heat_solv.solvers.spectral.SpectralSolver`,
+spectral propagators for :class:`~spectral_galerkin_heat.solvers.spectral.SpectralSolver`,
 parametrized by the array module ``xp`` (NumPy or CuPy).
 
 Each kernel module exposes a thin :class:`SpectralSolverState` subclass that
@@ -43,7 +43,7 @@ from typing import Any
 
 import numpy as np
 
-from fast_heat_solv.physics import spectral_helpers as spec_hp
+from spectral_galerkin_heat.physics import spectral_helpers as spec_hp
 
 # Backend-agnostic array type: a ``numpy.ndarray`` or a ``cupy.ndarray``.
 # Aliased to ``Any`` rather than a union so importing this module never pulls in

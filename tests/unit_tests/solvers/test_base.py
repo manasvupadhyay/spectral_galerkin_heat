@@ -2,7 +2,7 @@
 
 import pytest
 
-from fast_heat_solv.solvers.base import HeatSolver
+from spectral_galerkin_heat.solvers.base import HeatSolver
 
 
 def test_heatsolver_is_abstract():

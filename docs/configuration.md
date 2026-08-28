@@ -144,10 +144,10 @@ All configuration sections are deserialized into a unified `SimulationContext` o
 ```python
 from dataclasses import dataclass, field
 from typing import Any, Dict
-from fast_heat_solv.core.parameters import (
+from spectral_galerkin_heat.core.parameters import (
     NumParams, GeomParams, MaterialParams, LaserParams, FineMeshParams
 )
-from fast_heat_solv.core.laser import LaserPath
+from spectral_galerkin_heat.core.laser import LaserPath
 
 @dataclass
 class SimulationContext:

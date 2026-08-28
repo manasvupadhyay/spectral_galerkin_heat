@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from fast_heat_solv.physics import spectral_cpu_kernels as k
+from spectral_galerkin_heat.physics import spectral_cpu_kernels as k
 
 
 @pytest.fixture
@@ -11,7 +11,7 @@ def state(tiny_context):
     # Building the state is pure NumPy (einsum/precompute). These tests exercise
     # the fine-box path, so build an explicit box (the default config is now
     # grid mode, i.e. fine is None).
-    from fast_heat_solv.core.parameters import FineMeshParams
+    from spectral_galerkin_heat.core.parameters import FineMeshParams
     c = tiny_context
     return k.SpectralSolverState(c.mat, c.geom, c.num, FineMeshParams())
 

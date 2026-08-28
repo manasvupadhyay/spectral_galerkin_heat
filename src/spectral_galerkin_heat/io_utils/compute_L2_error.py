@@ -58,7 +58,7 @@ import numpy as np
 # Import from the sibling module, not the package root: this module is itself
 # imported by io_utils/__init__, so going through the package would be a
 # circular import during initialisation.
-from fast_heat_solv.io_utils.xdmf_io import (
+from spectral_galerkin_heat.io_utils.xdmf_io import (
     FieldData,
     StructuredField,
     UnstructuredField,

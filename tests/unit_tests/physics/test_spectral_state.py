@@ -6,9 +6,9 @@ Pure NumPy (no numba/FFT), so these stay fast and run by default.
 import numpy as np
 import pytest
 
-from fast_heat_solv.core.parameters import GeomParams, MaterialParams, NumParams
-from fast_heat_solv.core.vector import Vec3
-from fast_heat_solv.physics.spectral_state import SpectralGrid, precompute_K_KK
+from spectral_galerkin_heat.core.parameters import GeomParams, MaterialParams, NumParams
+from spectral_galerkin_heat.core.vector import Vec3
+from spectral_galerkin_heat.physics.spectral_state import SpectralGrid, precompute_K_KK
 
 
 def _geom(nx=8, ny=6, nz=4, Lx=4e-3, Ly=2e-3, Lz=1e-3):

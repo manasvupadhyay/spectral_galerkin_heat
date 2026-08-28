@@ -45,7 +45,7 @@ jobs:
         uses: peaceiris/actions-gh-pages@v4
         with:
           deploy_key: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          external_repository: TheoADX/hsg-docs
+          external_repository: theo-andrieux/hsg-docs
           publish_branch: gh-pages
           publish_dir: ./docs/_build/html
           # peaceiris writes .nojekyll automatically so Sphinx's _static/

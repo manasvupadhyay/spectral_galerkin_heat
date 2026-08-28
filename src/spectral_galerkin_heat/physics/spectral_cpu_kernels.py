@@ -30,9 +30,9 @@ import scipy.fft
 from numba import njit, prange
 from scipy.ndimage import shift as scipy_shift
 
-from fast_heat_solv.core.laser import super_gaussian_flux as _super_gaussian_flux
-from fast_heat_solv.physics import spectral_ops as _ops
-from fast_heat_solv.physics import spectral_state as _state
+from spectral_galerkin_heat.core.laser import super_gaussian_flux as _super_gaussian_flux
+from spectral_galerkin_heat.physics import spectral_ops as _ops
+from spectral_galerkin_heat.physics import spectral_state as _state
 
 __all__ = [
     "FineMeshState",
@@ -256,7 +256,7 @@ def compute_gaussian_laser_flux(x, y, laser_x, laser_y, laser_r, laser_coef):
     """Gaussian (order-2 super-Gaussian) flux on the 1-D grid ``(x, y)``.
 
     Thin backend wrapper over the shared, backend-agnostic
-    :func:`~fast_heat_solv.core.laser.super_gaussian_flux` so the CPU and GPU
+    :func:`~spectral_galerkin_heat.core.laser.super_gaussian_flux` so the CPU and GPU
     paths use one definition.
     """
     return _super_gaussian_flux(np, x, y, laser_x, laser_y, laser_r, laser_r, 2.0, laser_coef)

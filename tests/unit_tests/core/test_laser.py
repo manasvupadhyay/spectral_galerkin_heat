@@ -2,7 +2,7 @@
 
 import pytest
 
-from fast_heat_solv.core.laser import LaserPath, LaserState
+from spectral_galerkin_heat.core.laser import LaserPath, LaserState
 
 
 def test_laserpath_is_abstract():

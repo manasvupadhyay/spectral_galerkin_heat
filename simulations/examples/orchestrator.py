@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Using fastHeatSolv as a library.
+"""Using spectral_galerkin_heat as a library.
 
 Builds a SimulationContext from a Python dictionary and advances the solver step
 by step, without any disk I/O or IOManager involvement.
@@ -19,7 +19,7 @@ REPO_ROOT = os.path.abspath(os.path.join(EXAMPLE_DIR, "..", ".."))
 sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
 sys.path.insert(0, REPO_ROOT)
 
-from fast_heat_solv.core.parameters import SimulationContext
+from spectral_galerkin_heat.core.parameters import SimulationContext
 
 # ---------------------------------------------------------------------------
 # 1. Define the configuration as a plain Python dictionary. An external driver
@@ -82,7 +82,7 @@ context = SimulationContext.from_dict(config, config_dir=EXAMPLE_DIR)
 #     power 0.0) once the laser should stop depositing energy.
 # ---------------------------------------------------------------------------
 #
-# from fast_heat_solv.core.laser import LaserPath, LaserState
+# from spectral_galerkin_heat.core.laser import LaserPath, LaserState
 #
 # class RasterLaser(LaserPath):
 #     """Back-and-forth scan along x, stepping over in y each pass."""
@@ -109,8 +109,8 @@ context = SimulationContext.from_dict(config, config_dir=EXAMPLE_DIR)
 # ---------------------------------------------------------------------------
 # 3. Instantiate and initialize the solver
 # ---------------------------------------------------------------------------
-from fast_heat_solv.solvers.spectral import SpectralSolver
-from fast_heat_solv.backends import NumpyBackend
+from spectral_galerkin_heat.solvers.spectral import SpectralSolver
+from spectral_galerkin_heat.backends import NumpyBackend
 
 solver = SpectralSolver(NumpyBackend())  # use get_backend("cupy") for GPU
 state = solver.initialize(context)

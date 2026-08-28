@@ -3,14 +3,14 @@
 import numpy as np
 import pytest
 
-from fast_heat_solv.core.parameters import (
+from spectral_galerkin_heat.core.parameters import (
     GeomParams,
     MaterialParams,
     NumParams,
     SimulationContext,
     _get_value,
 )
-from fast_heat_solv.core.vector import Vec3
+from spectral_galerkin_heat.core.vector import Vec3
 
 # `cfg` here is a parsed-YAML config dict 
 # `_cfg()` builds a minimal valid one.

@@ -8,12 +8,12 @@ explicit modal / finite-difference reference.
 import numpy as np
 import pytest
 
-from fast_heat_solv.core.parameters import GeomParams, NumParams
-from fast_heat_solv.core.vector import Vec3
+from spectral_galerkin_heat.core.parameters import GeomParams, NumParams
+from spectral_galerkin_heat.core.vector import Vec3
 
 
 def _state(nx, ny, nz, Lx=1.0e-3, Ly=0.7e-3, Lz=0.4e-3):
-    from fast_heat_solv.physics.spectral_cpu_kernels import SpectralSolverState
+    from spectral_galerkin_heat.physics.spectral_cpu_kernels import SpectralSolverState
 
     class _Phys:  # minimal — only k/rho/Cp used by precompute_K_KK
         k, rho, Cp = 15.0, 7900.0, 500.0
@@ -22,7 +22,7 @@ def _state(nx, ny, nz, Lx=1.0e-3, Ly=0.7e-3, Lz=0.4e-3):
 
     geom = GeomParams(size=Vec3(Lx, Ly, Lz), n=Vec3(nx, ny, nz))
     num = NumParams(dt=1e-6, nx=nx, ny=ny, nz=nz)
-    from fast_heat_solv.core.parameters import FineMeshParams
+    from spectral_galerkin_heat.core.parameters import FineMeshParams
     return SpectralSolverState(_Phys(), geom, num, FineMeshParams())
 
 
@@ -36,7 +36,7 @@ def _grid_coords(SsState):
 # ---------------------------------------------------------------------------
 
 def test_volume_roundtrip_identity():
-    from fast_heat_solv.physics.spectral_ops import project_volume, reconstruct_volume
+    from spectral_galerkin_heat.physics.spectral_ops import project_volume, reconstruct_volume
 
     st = _state(12, 10, 8)
     rng = np.random.default_rng(0)
@@ -47,7 +47,7 @@ def test_volume_roundtrip_identity():
 
 def test_reconstruct_volume_matches_modal_sum():
     """reconstruct_volume(a) == sum_mnp a_mnp C_m C_n C_p cos(...) on the grid."""
-    from fast_heat_solv.physics.spectral_ops import reconstruct_volume
+    from spectral_galerkin_heat.physics.spectral_ops import reconstruct_volume
 
     st = _state(6, 5, 4)
     nz, ny, nx = 4, 5, 6
@@ -72,7 +72,7 @@ def test_reconstruct_volume_matches_modal_sum():
 # ---------------------------------------------------------------------------
 
 def _const_model(k=15.0, rho=7900.0, cp=500.0):
-    from fast_heat_solv.core.properties import MaterialModel
+    from spectral_galerkin_heat.core.properties import MaterialModel
     # Branch form (so is_constant flagging is exercised) with equal branches.
     return MaterialModel.from_config(
         {"k": {"solid": str(k), "liquid": str(k)},
@@ -84,7 +84,7 @@ def _const_model(k=15.0, rho=7900.0, cp=500.0):
 
 def test_correction_zero_when_fluctuations_vanish():
     """k'=a'=0 (reference equals the constant property) ⇒ C ≈ 0 (tex null test)."""
-    from fast_heat_solv.physics.spectral_ops import (
+    from spectral_galerkin_heat.physics.spectral_ops import (
         assemble_property_correction,
         reconstruct_volume,
     )
@@ -110,12 +110,12 @@ def test_capacity_correction_zero_for_steady_field():
     With ∂_t T = 0 the whole (divergence-form) correction reduces to the volume
     projection of the conductivity term ∇·(k' ∇T).
     """
-    from fast_heat_solv.physics.spectral_ops import (
+    from spectral_galerkin_heat.physics.spectral_ops import (
         assemble_property_correction,
         project_volume,
         reconstruct_volume,
     )
-    from fast_heat_solv.core.properties import MaterialModel
+    from spectral_galerkin_heat.core.properties import MaterialModel
 
     st = _state(10, 8, 6)
     model = MaterialModel.from_config(
@@ -150,7 +150,7 @@ def test_capacity_correction_zero_for_steady_field():
 # ---------------------------------------------------------------------------
 
 def _kdep_model():
-    from fast_heat_solv.core.properties import MaterialModel
+    from spectral_galerkin_heat.core.properties import MaterialModel
     return MaterialModel.from_config(
         {"k": {"solid": "9.248 + 0.01571 * T", "liquid": "12.41 + 0.003279 * T"},
          "rho": 7900.0, "Cp": 500.0},
@@ -160,7 +160,7 @@ def _kdep_model():
 
 def test_correction_null_is_exact():
     """k'=a'=0 ⇒ the correction (volume + faces) is exactly zero too."""
-    from fast_heat_solv.physics.spectral_ops import (
+    from spectral_galerkin_heat.physics.spectral_ops import (
         assemble_property_correction, reconstruct_volume)
 
     st = _state(10, 8, 6)
@@ -182,7 +182,7 @@ def test_correction_assembles_volume_only():
     (rescaled by ``k̄/k``) by the solver. So ``assemble_property_correction`` must
     return exactly the merged volume DCT, with no face contribution.
     """
-    from fast_heat_solv.physics.spectral_ops import (
+    from spectral_galerkin_heat.physics.spectral_ops import (
         assemble_property_correction, project_volume, reconstruct_volume)
 
     st = _state(40, 32, 24)

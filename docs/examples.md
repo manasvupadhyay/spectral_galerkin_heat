@@ -147,24 +147,24 @@ The solver can be driven directly from Python rather than the CLI. An external s
 `SimulationContext` and calls `solver.step(...)` in a loop, which is useful when embedding the
 solver in a larger codebase. Nothing is written to disk.
 
-**Installing as a library.** To import `fast_heat_solv` from a project outside this repository,
+**Installing as a library.** To import `spectral_galerkin_heat` from a project outside this repository,
 install it as an editable package into your environment:
 
 ```bash
-uv pip install -e /path/to/fastHeatSolv    # or: pip install -e /path/to/fastHeatSolv
+uv pip install -e /path/to/spectral_galerkin_heat    # or: pip install -e /path/to/spectral_galerkin_heat
 ```
 
 Or declare it as an editable source in another `uv` project's `pyproject.toml`:
 
 ```toml
 [project]
-dependencies = ["fastheatsolv"]
+dependencies = ["spectral_galerkin_heat"]
 
 [tool.uv.sources]
-fastheatsolv = { path = "/path/to/fastHeatSolv", editable = true }
+spectral_galerkin_heat = { path = "/path/to/spectral_galerkin_heat", editable = true }
 ```
 
-Either way the import name is `fast_heat_solv`, and edits to the source take effect without
+Either way the import name is `spectral_galerkin_heat`, and edits to the source take effect without
 reinstalling. The full runnable script is
 {download}`orchestrator.py <../simulations/examples/orchestrator.py>`:
 
@@ -173,9 +173,9 @@ uv run python simulations/examples/orchestrator.py
 ```
 
 ```python
-from fast_heat_solv.core.parameters import SimulationContext
-from fast_heat_solv.solvers.spectral import SpectralSolver
-from fast_heat_solv.backends import NumpyBackend
+from spectral_galerkin_heat.core.parameters import SimulationContext
+from spectral_galerkin_heat.solvers.spectral import SpectralSolver
+from spectral_galerkin_heat.backends import NumpyBackend
 
 # 1. Configuration as a plain dictionary
 config = {

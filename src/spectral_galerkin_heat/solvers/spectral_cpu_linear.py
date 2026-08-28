@@ -27,10 +27,10 @@ __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), Éc
 
 import numpy as np
 
-import fast_heat_solv.physics.spectral_cpu_kernels as kernels
-from fast_heat_solv.core.laser import LaserPath, LaserState
-from fast_heat_solv.core.parameters import SimulationContext
-from fast_heat_solv.solvers.base import HeatSolver
+import spectral_galerkin_heat.physics.spectral_cpu_kernels as kernels
+from spectral_galerkin_heat.core.laser import LaserPath, LaserState
+from spectral_galerkin_heat.core.parameters import SimulationContext
+from spectral_galerkin_heat.solvers.base import HeatSolver
 
 
 class SpectralSolverCPULinear(HeatSolver):
@@ -68,7 +68,7 @@ class SpectralSolverCPULinear(HeatSolver):
 
         Returns
         -------
-        fast_heat_solv.physics.spectral_cpu_kernels.SpectralSolverState
+        spectral_galerkin_heat.physics.spectral_cpu_kernels.SpectralSolverState
             The initialized solver state object containing grid buffers and spectra.
         
         Raises
@@ -111,7 +111,7 @@ class SpectralSolverCPULinear(HeatSolver):
         Returns
         -------
         tuple
-            SsState : fast_heat_solv.physics.spectral_cpu_kernels.SpectralSolverState
+            SsState : spectral_galerkin_heat.physics.spectral_cpu_kernels.SpectralSolverState
                  The updated linear solver state.
             metrics : dict
                  Metrics from the iteration, such as max temperature and number of evaporation steps.

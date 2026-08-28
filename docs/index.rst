@@ -1,20 +1,20 @@
-fastHeatSolv Documentation
-==========================
+spectral_galerkin_heat Documentation
+====================================
 
 **A fast spectral-Galerkin solver for the non-linear heat equation in metal additive manufacturing.**
 
-fastHeatSolv resolves the transient thermal field of a scanning laser — including phase change,
+spectral_galerkin_heat resolves the transient thermal field of a scanning laser — including phase change,
 evaporative cooling, and convection — on cuboid domains, driving the laser directly from G-code.
 By integrating the linear diffusion exactly in a spectral eigenbasis and confining the
 non-linear work to the boundary and the melt pool, it reaches finite-element fidelity while
 running on both CPU and GPU backends.
 
 .. figure:: _images/fig_lines_2.png
-   :alt: Simulation of a laser path with fastHeatSolv
+   :alt: Simulation of a laser path with spectral_galerkin_heat
    :width: 500px
    :align: center
 
-   *Simulation of a laser path with fastHeatSolv.*
+   *Simulation of a laser path with spectral_galerkin_heat.*
 
 .. admonition:: How to get started?
    :class: tip

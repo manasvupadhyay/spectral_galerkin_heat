@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from fast_heat_solv.core.vector import Vec3
+from spectral_galerkin_heat.core.vector import Vec3
 
 
 def test_getitem():

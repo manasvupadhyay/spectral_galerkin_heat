@@ -4,7 +4,7 @@ import h5py
 import numpy as np
 import pytest
 
-from fast_heat_solv.io_utils.loader import SimulationResult, list_runs, load_run
+from spectral_galerkin_heat.io_utils.loader import SimulationResult, list_runs, load_run
 
 
 def test_list_runs_empty_and_sorted(tmp_path):

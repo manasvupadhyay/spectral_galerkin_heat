@@ -9,7 +9,7 @@ import copy
 import numpy as np
 import pytest
 
-from fast_heat_solv.core.parameters import SimulationContext
+from spectral_galerkin_heat.core.parameters import SimulationContext
 
 _CONFIG = {
     "simulation": {"backend": "cpu", "duration": 3e-5, "dt": 6e-6},
@@ -28,8 +28,8 @@ _CONFIG = {
 @pytest.mark.slow
 def test_set_state_roundtrip(fixed_laser):
     """modes → cell field → set_state → modes must reconstruct the same field."""
-    from fast_heat_solv.physics.spectral_helpers import reconstruct_temperature_DCT
-    from fast_heat_solv.solvers import build_solver
+    from spectral_galerkin_heat.physics.spectral_helpers import reconstruct_temperature_DCT
+    from spectral_galerkin_heat.solvers import build_solver
 
     ctx = SimulationContext.from_dict(copy.deepcopy(_CONFIG))
     ctx.laser_path = fixed_laser(ctx.geom.size.x / 2, ctx.geom.size.y / 2, 200.0)

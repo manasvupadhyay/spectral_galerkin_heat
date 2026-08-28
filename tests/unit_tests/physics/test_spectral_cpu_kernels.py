@@ -8,9 +8,9 @@ oracle; the physical constants have been reviewed and signed off.
 import numpy as np
 import pytest
 
-from fast_heat_solv.core.parameters import GeomParams
-from fast_heat_solv.core.vector import Vec3
-from fast_heat_solv.physics import spectral_cpu_kernels as k
+from spectral_galerkin_heat.core.parameters import GeomParams
+from spectral_galerkin_heat.core.vector import Vec3
+from spectral_galerkin_heat.physics import spectral_cpu_kernels as k
 
 
 # --- Transforms -------------------------------------------------------------

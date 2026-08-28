@@ -25,7 +25,7 @@ __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), Éc
 from abc import ABC, abstractmethod
 from typing import Any
 
-from fast_heat_solv.core.parameters import SimulationContext
+from spectral_galerkin_heat.core.parameters import SimulationContext
 
 
 class HeatSolver(ABC):

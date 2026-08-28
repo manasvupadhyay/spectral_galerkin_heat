@@ -19,8 +19,8 @@ import copy
 import numpy as np
 import pytest
 
-from fast_heat_solv.core.parameters import SimulationContext
-from fast_heat_solv.io_utils.compute_L2_error import compute_L2_structured
+from spectral_galerkin_heat.core.parameters import SimulationContext
+from spectral_galerkin_heat.io_utils.compute_L2_error import compute_L2_structured
 
 # ---------------------------------------------------------------------------
 # Physical case — the convergence-study setup the Eagar-Tsai solution
@@ -64,8 +64,8 @@ def _context(cfg, laser):
 
 def _run_linear_field(ctx):
     """Step the linear solver to t_end; return the node-centred field [z, y, x]."""
-    from fast_heat_solv.physics.spectral_helpers import reconstruct_temperature_DCT
-    from fast_heat_solv.solvers import build_solver
+    from spectral_galerkin_heat.physics.spectral_helpers import reconstruct_temperature_DCT
+    from spectral_galerkin_heat.solvers import build_solver
 
     solver = build_solver(ctx)
     solver.initialize(ctx)
@@ -159,8 +159,8 @@ def test_nonlinear_sanity_bounds(constant_velocity_laser, assert_final_step_conv
     bounds only. The linear peak for this case is above T_liquidus = 1697 K), 
     so evaporation engages.
     """
-    from fast_heat_solv.physics.spectral_helpers import reconstruct_temperature_DCT
-    from fast_heat_solv.solvers import build_solver
+    from spectral_galerkin_heat.physics.spectral_helpers import reconstruct_temperature_DCT
+    from spectral_galerkin_heat.solvers import build_solver
 
     # Resolved enough that the source no longer rings below ambient: at this
     # mesh the surface undershoot is ~0.4 K (vs ~10 K on a coarse 64³ grid).

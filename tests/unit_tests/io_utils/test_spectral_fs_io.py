@@ -4,8 +4,8 @@ import h5py
 import numpy as np
 import pytest
 
-from fast_heat_solv.io_utils.spectral_fs_io import LocalFSIOManager, _save_field_to_hdf5
-from fast_heat_solv.solvers.spectral_cpu_linear import SpectralSolverCPULinear
+from spectral_galerkin_heat.io_utils.spectral_fs_io import LocalFSIOManager, _save_field_to_hdf5
+from spectral_galerkin_heat.solvers.spectral_cpu_linear import SpectralSolverCPULinear
 
 
 class _Ctx:
@@ -166,7 +166,7 @@ def test_save_slices_writes_png(tmp_path, monkeypatch, tiny_context, linear_stat
 
 def test_profiles_roundtrip_through_loader(tmp_path, monkeypatch, tiny_context, linear_state):
     # Pofiles written by the manager must be discoverable by SimulationResult.
-    from fast_heat_solv.io_utils.loader import SimulationResult
+    from spectral_galerkin_heat.io_utils.loader import SimulationResult
 
     monkeypatch.chdir(tmp_path)
     m = LocalFSIOManager()

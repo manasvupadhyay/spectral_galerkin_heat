@@ -29,9 +29,9 @@ import cupyx.scipy.ndimage as cupy_ndimage
 import numpy as np
 from numba import cuda
 
-from fast_heat_solv.core.laser import super_gaussian_flux as _super_gaussian_flux
-from fast_heat_solv.physics import spectral_ops as _ops
-from fast_heat_solv.physics import spectral_state as _state
+from spectral_galerkin_heat.core.laser import super_gaussian_flux as _super_gaussian_flux
+from spectral_galerkin_heat.physics import spectral_ops as _ops
+from spectral_galerkin_heat.physics import spectral_state as _state
 
 __all__ = [
     "FineMeshState",
@@ -188,7 +188,7 @@ def compute_gaussian_laser_flux(X, Y, laser_x, laser_y, laser_r, laser_coef):
     """Gaussian (order-2 super-Gaussian) flux on the 1-D CuPy grid ``(X, Y)``.
 
     Thin backend wrapper over the shared, backend-agnostic
-    :func:`~fast_heat_solv.core.laser.super_gaussian_flux` (precision-transparent:
+    :func:`~spectral_galerkin_heat.core.laser.super_gaussian_flux` (precision-transparent:
     it follows ``X.dtype``). The spectral solver calls the profile directly; this
     is kept for the linear solver's Gaussian-only path.
     """

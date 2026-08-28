@@ -475,7 +475,7 @@ if __name__ == "__main__":
 
     # If args.out is provided, it is a specific filename passed straight through
     # as specific_output_filename.
-    # Typical call: python -m fast_heat_solv.io_utils.slices field_step002000.xmf \
+    # Typical call: python -m spectral_galerkin_heat.io_utils.slices field_step002000.xmf \
     #   --normal=-y --center 0.0095 0.0025 0.002475 --width 3.5e-4 --height 5e-5 \
     #   --isotherm T_s 1674.15 --out slice.png
     generate_plots(

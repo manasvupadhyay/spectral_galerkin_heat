@@ -1,27 +1,27 @@
-# fastHeatSolv
+# spectral_galerkin_heat
 
 **A semi-analytical, uncoupled, modal solution for the fully nonlinear heat equation with support for CPU/GPU backends and G-code-driven laser paths.**
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-This README file contains only the essential information required to be operational with this code. A more comprehensive documentation is presented in the [**full Sphinx Documentation**](https://theoadx.github.io/hsg-docs/) (or build locally via `make -C docs html`)
+This README file contains only the essential information required to be operational with this code. A more comprehensive documentation is presented in the [**full Sphinx Documentation**](https://theo-andrieux.github.io/hsg-docs/) (or build locally via `make -C docs html`)
 
 ---
 
-fastHeatSolv is a modal solver designed for efficiently simulating the fully nonlinear heat transfer problem on cuboid domains. It uses semi-analytical spectral methods to achieve significantly higher performance than finite element models on both CPU and GPU hardware, without losing accuracy.
+spectral_galerkin_heat is a modal solver designed for efficiently simulating the fully nonlinear heat transfer problem on cuboid domains. It uses semi-analytical spectral methods to achieve significantly higher performance than finite element models on both CPU and GPU hardware, without losing accuracy.
 
 ## Quickstart
 
-fastHeatSolv is installed from source; it is not published on PyPI. The recommended path uses the package and project manager [`uv`](https://github.com/astral-sh/uv), which creates an isolated environment and installs the dependencies. If `uv` is not installed, you can install it with `curl -LsSf https://astral.sh/uv/install.sh | sh`; see the [uv documentation](https://docs.astral.sh/uv/getting-started/installation/) for other ways.
+spectral_galerkin_heat is installed from source; it is not published on PyPI. The recommended path uses the package and project manager [`uv`](https://github.com/astral-sh/uv), which creates an isolated environment and installs the dependencies. If `uv` is not installed, you can install it with `curl -LsSf https://astral.sh/uv/install.sh | sh`; see the [uv documentation](https://docs.astral.sh/uv/getting-started/installation/) for other ways.
 
 ```bash
 # 1. Go to the local directory of your choice and download the code.
-git clone https://github.com/TheoADX/fastHeatSolv.git
-# This creates a local directory fastHeatSolv
+git clone https://github.com/theo-andrieux/spectral_galerkin_heat.git
+# This creates a local directory spectral_galerkin_heat
 
 # Enter this directory
-cd fastHeatSolv
+cd spectral_galerkin_heat
 
-# 2. Install the virtual environment that contains all the libraries and dependencies needed to run the fastHeatSolv code (creates .venv/ and installs dependencies). The environment is also called "fastHeatSolv". Once this environment is installed, then the python compiler should recognize its existence. If it does not, then precede all your commands with 'uv' as shown below.
+# 2. Install the virtual environment that contains all the libraries and dependencies needed to run the spectral_galerkin_heat code (creates .venv/ and installs dependencies). The environment is also called "spectral_galerkin_heat". Once this environment is installed, then the python compiler should recognize its existence. If it does not, then precede all your commands with 'uv' as shown below.
 uv sync             # CPU only
 uv sync --group gpu # GPU, requires CUDA 13.x
 
@@ -29,13 +29,13 @@ uv sync --group gpu # GPU, requires CUDA 13.x
 uv run python simulations/main.py simulations/examples/01_quickstart.yaml
 ```
 
-`uv sync` makes `fast_heat_solv` importable and `uv run` executes inside the managed environment,
+`uv sync` makes `spectral_galerkin_heat` importable and `uv run` executes inside the managed environment,
 so no separate package-install step is required. Results are saved to `out/<timestamp>_<name>/` in
 HDF5/XDMF format.
 
 ## Usage
 
-`fastHeatSolv` can be used either as a standalone CLI runner (`simulations/main.py` driven by a
+`spectral_galerkin_heat` can be used either as a standalone CLI runner (`simulations/main.py` driven by a
 `.yaml` config) or as an imported Python library (building a `SimulationContext` and calling
 `solver.step(...)` directly). Both are covered by the examples, ordered from a short run to a full
 non-linear case and then library mode:
@@ -43,7 +43,7 @@ non-linear case and then library mode:
 - **Examples**: [`simulations/examples/`](simulations/examples/), runnable configurations and the
   library-mode `orchestrator.py`.
 - **Tutorial & configuration reference**: see the
-  [documentation](https://theoadx.github.io/hsg-docs/) (`examples` and `configuration` pages).
+  [documentation](https://theo-andrieux.github.io/hsg-docs/) (`examples` and `configuration` pages).
 
 
 ## Installation & Environments

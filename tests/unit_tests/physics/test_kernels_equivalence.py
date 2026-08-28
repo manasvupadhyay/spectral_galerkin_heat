@@ -13,7 +13,7 @@ import inspect
 import numpy as np
 import pytest
 
-from fast_heat_solv.physics import spectral_cpu_kernels as cpu
+from spectral_galerkin_heat.physics import spectral_cpu_kernels as cpu
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def gpu():
         cupy.cuda.Device(0).compute_capability
     except Exception:
         pytest.skip("No CUDA device")
-    from fast_heat_solv.physics import spectral_gpu_kernels as gpu_mod
+    from spectral_galerkin_heat.physics import spectral_gpu_kernels as gpu_mod
     return cupy, gpu_mod
 
 
@@ -31,13 +31,13 @@ def gpu():
 
 def test_public_api_matches():
     pytest.importorskip("cupy")  # importing the GPU module needs cupy + numba.cuda
-    from fast_heat_solv.physics import spectral_gpu_kernels as gpu_mod
+    from spectral_galerkin_heat.physics import spectral_gpu_kernels as gpu_mod
     assert cpu.__all__ == gpu_mod.__all__
 
 
 def test_evaporation_signature_matches():
     pytest.importorskip("cupy")
-    from fast_heat_solv.physics import spectral_gpu_kernels as gpu_mod
+    from spectral_galerkin_heat.physics import spectral_gpu_kernels as gpu_mod
     sig_cpu = inspect.signature(cpu.compute_evaporation_flux)
     sig_gpu = inspect.signature(gpu_mod.compute_evaporation_flux)
     assert list(sig_cpu.parameters) == list(sig_gpu.parameters)
