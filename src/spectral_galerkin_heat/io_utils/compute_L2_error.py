@@ -32,6 +32,8 @@ Numerical integration
 
 Usage
 -----
+::
+
     python compute_L2_error.py file_A.xdmf file_B.xdmf [options]
 
     # Compare spectral output vs FE validation:

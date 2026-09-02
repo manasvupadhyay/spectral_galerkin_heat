@@ -112,6 +112,7 @@ class TempProperty:
         """Build a :class:`TempProperty` from a config value.
 
         Accepts:
+
         - a plain number, or a ``{value, unit}`` mapping → constant property;
         - a ``{solid: "<expr of T>", liquid: "<expr of T>"}`` mapping → branch
           expressions (a missing branch falls back to the other).
