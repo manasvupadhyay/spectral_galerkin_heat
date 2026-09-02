@@ -12,7 +12,6 @@ from spectral_galerkin_heat.core.parameters import GeomParams
 from spectral_galerkin_heat.core.vector import Vec3
 from spectral_galerkin_heat.physics import spectral_cpu_kernels as k
 
-
 # --- Transforms -------------------------------------------------------------
 
 @pytest.mark.slow
@@ -74,7 +73,7 @@ def test_add_bottom_surface_source():
 def test_gaussian_laser_flux_peak_and_integral():
     # Plain NumPy. Peak at the beam centre == laser_coef; the discrete
     # integral matches the analytic Gaussian integral laser_coef * pi*r^2/2.
-    nx = ny = 200
+    nx = 200
     dx = 5e-6
     coords = (np.arange(nx) + 0.5) * dx
     cx = cy = coords[nx // 2]

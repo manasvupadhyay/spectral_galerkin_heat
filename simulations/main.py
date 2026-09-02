@@ -23,29 +23,28 @@ __author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
 __copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
 
 import argparse
-import yaml
 import logging
-import sys
 import os
 import shutil
-from typing import Dict, Any
+import sys
+from typing import Any
 
+import yaml
+
+from spectral_galerkin_heat.core.parameters import SimulationContext
+from spectral_galerkin_heat.io_utils.slices import generate_plots
 from spectral_galerkin_heat.runner import StandaloneHeatRunner
 from spectral_galerkin_heat.solvers import build_solver
-from spectral_galerkin_heat.core.parameters import (
-    SimulationContext
-)
-from spectral_galerkin_heat.io_utils.slices import generate_plots
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def load_config(path: str) -> Dict[str, Any]:
+def load_config(path: str) -> dict[str, Any]:
     """Load YAML configuration file."""
     if not os.path.exists(path):
         raise FileNotFoundError(f"Config file not found: {path}")
-    with open(path, "r") as f:
+    with open(path) as f:
         return yaml.safe_load(f)
 
 def main():
@@ -164,7 +163,7 @@ def main():
                      output_dir=run_dir
                  )
             except Exception as e:
-                 logger.error(f"Visualization failed: {str(e)}")
+                 logger.error(f"Visualization failed: {e!s}")
         else:
              logger.warning("Output directory not found or IOManager not active. Visualization skipped.")
 

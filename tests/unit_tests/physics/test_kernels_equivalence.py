@@ -20,7 +20,7 @@ from spectral_galerkin_heat.physics import spectral_cpu_kernels as cpu
 def gpu():
     cupy = pytest.importorskip("cupy")
     try:
-        cupy.cuda.Device(0).compute_capability
+        _ = cupy.cuda.Device(0).compute_capability
     except Exception:
         pytest.skip("No CUDA device")
     from spectral_galerkin_heat.physics import spectral_gpu_kernels as gpu_mod
@@ -75,7 +75,8 @@ def test_gaussian_laser_flux_parity(gpu):
 def test_evaporation_flux_parity(gpu):
     cupy, gpu_mod = gpu
     T_surf = np.linspace(1500.0, 3500.0, 32 * 32, dtype=np.float32).reshape(32, 32)
-    consts = dict(P0=101325.0, T_boil=3090.0, DeltaH_LV=7.41e6, R_v=150.774, T_liquidus=1800.0)
+    consts = {"P0": 101325.0, "T_boil": 3090.0, "DeltaH_LV": 7.41e6,
+              "R_v": 150.774, "T_liquidus": 1800.0}
     q_cpu = np.zeros_like(T_surf)
     cpu.compute_evaporation_flux(T_surf, q_cpu, *consts.values())
     q_gpu = cupy.zeros_like(cupy.asarray(T_surf))

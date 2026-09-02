@@ -94,8 +94,10 @@ def _build_and_solve_fe():
     V = fem.functionspace(domain, ("Lagrange", 1))
     dx = ufl.Measure("dx", domain=domain)
     ds = ufl.Measure("ds", domain=domain, subdomain_data=ft)
-    Tn = fem.Function(V); Tn.x.array[:] = _T0
-    Ts = fem.Function(V, name="Temperature"); Ts.x.array[:] = _T0
+    Tn = fem.Function(V)
+    Tn.x.array[:] = _T0
+    Ts = fem.Function(V, name="Temperature")
+    Ts.x.array[:] = _T0
     w, tr = ufl.TestFunction(V), ufl.TrialFunction(V)
 
     def liquid_fraction(T):
@@ -127,10 +129,14 @@ def _build_and_solve_fe():
     problem = NonlinearProblem(residual, Ts, bcs=[], J=ufl.derivative(residual, Ts, tr))
     solver = NewtonSolver(domain.comm, problem)
     ksp = solver.krylov_solver
-    ksp.setType("cg"); ksp.getPC().setType("ilu")
+    ksp.setType("cg")
+    ksp.getPC().setType("ilu")
     ksp.setTolerances(rtol=1e-6, atol=1e-8, max_it=1000)
     ksp.setInitialGuessNonzero(True)
-    solver.atol = 1e-8; solver.rtol = 1e-6; solver.max_it = 200; solver.report = False
+    solver.atol = 1e-8
+    solver.rtol = 1e-6
+    solver.max_it = 200
+    solver.report = False
 
     for n in range(_N_STEPS):
         set_laser(n * _DT)

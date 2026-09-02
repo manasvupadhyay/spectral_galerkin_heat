@@ -185,12 +185,12 @@ def eagar_tsai_field(
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Parameters from config/fast_test.yaml.
-_PARAMS = dict(
-    rho=7850.0, k=15.0, Cp=500.0, T0=293.0,
-    A=0.30, P=200.0, r_b=60.0e-6,
-    Lx=0.005, Ly=0.0025, Lz=0.00125,
-    nx=512, ny=256, nz=50,
-)
+_PARAMS = {
+    "rho": 7850.0, "k": 15.0, "Cp": 500.0, "T0": 293.0,
+    "A": 0.30, "P": 200.0, "r_b": 60.0e-6,
+    "Lx": 0.005, "Ly": 0.0025, "Lz": 0.00125,
+    "nx": 512, "ny": 256, "nz": 50,
+}
 # Laser goes x_start → x_end = domain centre; y fixed at Ly/2; v from F48000.
 _V_MAG = 0.8
 _X_START = 0.0
@@ -262,7 +262,8 @@ def main() -> None:
     z = np.linspace(0.0, p["Lz"], p["nz"] + 1)
     out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "validation_results")
     os.makedirs(out_dir, exist_ok=True)
-    save_kw = dict(x=x, y=y, z=z, t_total=t_total, v=v, x_laser=x_end, y_laser=y_laser, out_dir=out_dir)
+    save_kw = {"x": x, "y": y, "z": z, "t_total": t_total, "v": v,
+               "x_laser": x_end, "y_laser": y_laser, "out_dir": out_dir}
     _save_field(T_uncorrected, "eagar_tsai", **save_kw)
     _save_field(T_corrected, "eagar_tsai_corrected", **save_kw)
 

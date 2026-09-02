@@ -1,6 +1,5 @@
 """Tests for the G-code parser / interpolation (io_utils/gcode_path.py)."""
 
-import numpy as np
 import pytest
 
 from spectral_galerkin_heat.io_utils.gcode_path import GCodeLaserPath

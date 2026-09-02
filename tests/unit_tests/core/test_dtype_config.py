@@ -11,7 +11,6 @@ import pytest
 
 from spectral_galerkin_heat.core.parameters import SimulationContext, _resolve_dtype
 
-
 _BASE_CFG = {
     "simulation": {"backend": "cpu",
                    "duration": 6e-5, "dt": 6e-6},

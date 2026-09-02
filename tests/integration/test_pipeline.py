@@ -117,7 +117,7 @@ def test_gpu_simulation_e2e(tmp_path, monkeypatch, fixed_laser,
     """
     try:
         import cupy
-        cupy.cuda.Device(0).compute_capability
+        _ = cupy.cuda.Device(0).compute_capability
     except Exception:
         pytest.skip("CuPy not available or no CUDA device found")
 
@@ -151,7 +151,7 @@ def test_cpu_gpu_equivalence_e2e(tmp_path, monkeypatch, fixed_laser):
     """CPU and GPU backends must produce the same final temperature field."""
     try:
         import cupy
-        cupy.cuda.Device(0).compute_capability
+        _ = cupy.cuda.Device(0).compute_capability
     except Exception:
         pytest.skip("CuPy not available or no CUDA device found")
 

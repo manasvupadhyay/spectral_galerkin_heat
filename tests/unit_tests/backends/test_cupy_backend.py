@@ -13,7 +13,7 @@ import pytest
 def cupy_backend():
     cupy = pytest.importorskip("cupy")
     try:
-        cupy.cuda.Device(0).compute_capability
+        _ = cupy.cuda.Device(0).compute_capability
     except Exception:
         pytest.skip("No CUDA device")
     from spectral_galerkin_heat.backends import get_backend

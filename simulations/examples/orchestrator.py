@@ -8,8 +8,8 @@ Usage:
     uv run python simulations/examples/orchestrator.py
 """
 
-import sys
 import os
+import sys
 
 # This file lives in simulations/examples/; the repo root is two levels up.
 EXAMPLE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -109,8 +109,8 @@ context = SimulationContext.from_dict(config, config_dir=EXAMPLE_DIR)
 # ---------------------------------------------------------------------------
 # 3. Instantiate and initialize the solver
 # ---------------------------------------------------------------------------
-from spectral_galerkin_heat.solvers.spectral import SpectralSolver
 from spectral_galerkin_heat.backends import NumpyBackend
+from spectral_galerkin_heat.solvers.spectral import SpectralSolver
 
 solver = SpectralSolver(NumpyBackend())  # use get_backend("cupy") for GPU
 state = solver.initialize(context)

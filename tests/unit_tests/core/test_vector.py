@@ -15,7 +15,7 @@ def test_getitem():
 def test_iter_pairs_with_zip():
     # zip(n, d) over two Vec3 is what the state constructors use.
     n, d = Vec3(8, 4, 2), Vec3(0.5, 0.5, 0.5)
-    assert list(zip(n, d)) == [(8, 0.5), (4, 0.5), (2, 0.5)]
+    assert list(zip(n, d, strict=True)) == [(8, 0.5), (4, 0.5), (2, 0.5)]
 
 
 def test_zyx_reverses_axis_order():

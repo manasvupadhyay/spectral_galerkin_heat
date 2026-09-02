@@ -154,6 +154,10 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Tests bind fixtures and build configs in ways these rules mis-flag.
 "tests/**" = ["F811", "B011"]
+# The example orchestrator is didactic: it puts the repo root on sys.path
+# before importing the package, and keeps each numbered step's imports next to
+# the step that uses them. Both are deliberate, so E402 does not apply.
+"simulations/examples/orchestrator.py" = ["E402"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["spectral_galerkin_heat"]

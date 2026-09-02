@@ -16,6 +16,7 @@ Heavy solver imports are deferred into the test bodies.
 """
 
 import copy
+from itertools import pairwise
 
 import numpy as np
 import pytest
@@ -163,7 +164,7 @@ def test_temperature_dependent_run_is_physical(constant_velocity_laser):
     # resummation).
     assert picard[-1] < solver.max_picard_iter
     rms = [h["rms_diff"] for h in history]
-    assert all(b <= a for a, b in zip(rms, rms[1:])), "residual not monotone"
+    assert all(b <= a for a, b in pairwise(rms)), "residual not monotone"
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +214,7 @@ def _tdep_run(backend, dtype, laser, n_steps=6, cap=80):
     """
     cfg = _cfg(_base_material(k=_K_BR, rho=_RHO_BR, Cp=_CP_BR),
                n_steps=n_steps, backend=backend, fine=_TDEP_FINE, dtype=dtype)
-    solver, T, surf_max, picard = _run(_context(cfg, laser), max_picard_iter=cap)
+    solver, T, _surf_max, picard = _run(_context(cfg, laser), max_picard_iter=cap)
     assert solver._property_correction is True
     return solver, T, picard
 
@@ -277,7 +278,7 @@ def test_tdep_gpu_honours_dtype(constant_velocity_laser, dtype_name, np_dtype):
     """
     try:
         import cupy
-        cupy.cuda.Device(0).compute_capability
+        _ = cupy.cuda.Device(0).compute_capability
     except Exception:
         pytest.skip("CuPy not available or no CUDA device found")
 
@@ -302,7 +303,7 @@ def test_tdep_cpu_gpu_float64_equivalence(constant_velocity_laser):
     """
     try:
         import cupy
-        cupy.cuda.Device(0).compute_capability
+        _ = cupy.cuda.Device(0).compute_capability
     except Exception:
         pytest.skip("CuPy not available or no CUDA device found")
 

@@ -8,22 +8,17 @@ in a few seconds with no external dependencies beyond numpy + scipy.
 
 from __future__ import annotations
 
-import os
-import sys
-
 import numpy as np
 import pytest
 
 # Import data classes from io_utils
 from spectral_galerkin_heat.io_utils import StructuredField, UnstructuredField
-
 from spectral_galerkin_heat.io_utils.compute_L2_error import (
+    _compute_vertex_volumes,
     _evaluate_on_grid,
     compute_L2_structured,
     compute_L2_unstructured,
-    _compute_vertex_volumes,
 )
-
 
 # ---------------------------------------------------------------------------
 #  Helpers

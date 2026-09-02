@@ -57,7 +57,8 @@ def test_get_slice_returns_labels_for_normal():
 def test_get_slice_reverse_axis_flips_horizontally():
     from spectral_galerkin_heat.io_utils.slices import _get_slice
 
-    data, kw = _ramp_grid(), dict(center=(0.5, 0.5, 0.25), width=0.4, height=0.4, resolution=20)
+    data = _ramp_grid()
+    kw = {"center": (0.5, 0.5, 0.25), "width": 0.4, "height": 0.4, "resolution": 20}
     _, _, base, *_ = _get_slice(data, "z", **kw)
     _, _, rev, *_ = _get_slice(data, "z", reverse_axes=("x",), **kw)
     np.testing.assert_allclose(rev, np.fliplr(base), atol=1e-6)

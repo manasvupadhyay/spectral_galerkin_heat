@@ -6,7 +6,6 @@ explicit modal / finite-difference reference.
 """
 
 import numpy as np
-import pytest
 
 from spectral_galerkin_heat.core.parameters import GeomParams, NumParams
 from spectral_galerkin_heat.core.vector import Vec3
@@ -110,12 +109,12 @@ def test_capacity_correction_zero_for_steady_field():
     With ∂_t T = 0 the whole (divergence-form) correction reduces to the volume
     projection of the conductivity term ∇·(k' ∇T).
     """
+    from spectral_galerkin_heat.core.properties import MaterialModel
     from spectral_galerkin_heat.physics.spectral_ops import (
         assemble_property_correction,
         project_volume,
         reconstruct_volume,
     )
-    from spectral_galerkin_heat.core.properties import MaterialModel
 
     st = _state(10, 8, 6)
     model = MaterialModel.from_config(
@@ -161,7 +160,9 @@ def _kdep_model():
 def test_correction_null_is_exact():
     """k'=a'=0 ⇒ the correction (volume + faces) is exactly zero too."""
     from spectral_galerkin_heat.physics.spectral_ops import (
-        assemble_property_correction, reconstruct_volume)
+        assemble_property_correction,
+        reconstruct_volume,
+    )
 
     st = _state(10, 8, 6)
     model = _const_model()
@@ -183,7 +184,10 @@ def test_correction_assembles_volume_only():
     return exactly the merged volume DCT, with no face contribution.
     """
     from spectral_galerkin_heat.physics.spectral_ops import (
-        assemble_property_correction, project_volume, reconstruct_volume)
+        assemble_property_correction,
+        project_volume,
+        reconstruct_volume,
+    )
 
     st = _state(40, 32, 24)
     model = _kdep_model()

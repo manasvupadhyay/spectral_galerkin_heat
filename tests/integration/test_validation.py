@@ -117,7 +117,7 @@ def test_linear_matches_eagar_tsai(constant_velocity_laser):
 
     pk_solver = np.unravel_index(int(np.argmax(T)), T.shape)
     pk_ref = np.unravel_index(int(np.argmax(T_ref)), T_ref.shape)
-    assert max(abs(a - b) for a, b in zip(pk_solver, pk_ref)) <= 2
+    assert max(abs(a - b) for a, b in zip(pk_solver, pk_ref, strict=True)) <= 2
 
 
 @pytest.mark.integration
