@@ -19,3 +19,9 @@ docs/api/
 .coverage
 .coverage.*
 htmlcov/
+
+# Editor directories
+.vscode/
+
+# Virtual environment
+.venv/

@@ -13,4 +13,6 @@ authors:
 title: "spectral_galerkin_heat"
 version: 0.1.0
 date-released: 2026-04-20
-url: "https://github.com/theo-andrieux/spectral_galerkin_heat"
+url: "https://theo-andrieux.github.io/sgh-docs/"
+repository-code: "https://github.com/theo-andrieux/spectral_galerkin_heat"
+license: Apache-2.0
