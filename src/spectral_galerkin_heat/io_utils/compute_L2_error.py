@@ -1,0 +1,874 @@
+#!/usr/bin/env python3
+"""
+compute_L2_error.py
+===================
+Compute the L2 norm error between two XDMF solution files at their last
+time step, and optionally output an ``error.xdmf`` / ``error.h5`` file
+for ParaView visualisation.
+
+Supported grid combinations
+----------------------------
+1. **Both structured** (``3DRectMesh`` / ``VXVYVZ``):
+   If the grids match exactly (same dimensions AND same coordinate
+   vectors up to tolerance), a **direct pointwise** comparison is done.
+   Otherwise the finer grid is interpolated onto the coarser one using
+   ``RegularGridInterpolator`` (trilinear).
+
+2. **One structured + one unstructured** (``Tetrahedron`` / ``XYZ``):
+   The **structured** field is interpolated at the **unstructured mesh
+   vertices** using ``RegularGridInterpolator`` (fast trilinear).
+   This avoids the slow Delaunay triangulation entirely.
+   L2 integration uses vertex volumes computed from the tetrahedral
+   connectivity (lumped mass approach).
+
+3. **Both unstructured**: requires ``--resolution`` to create a common
+   structured grid and uses ``LinearNDInterpolator`` for both fields.
+
+Numerical integration
+---------------------
+- **Structured grids**: composite trapezoidal rule (second-order accurate)
+- **Unstructured evaluation**: lumped mass integration using vertex
+  volumes computed from the tetrahedral mesh connectivity
+
+Usage
+-----
+::
+
+    python compute_L2_error.py file_A.xdmf file_B.xdmf [options]
+
+    # Compare spectral output vs FE validation:
+    python compute_L2_error.py \\
+        ../out/sim/fields/field_step000200.xmf \\
+        validation.xdmf \\
+        --attr-a temperature --attr-b Temperature
+
+    # Fast convergence study (skip error output):
+    python compute_L2_error.py spectral.xmf fe.xdmf --no-error-output
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+
+# Import IO utilities from the main package
+# Import from the sibling module, not the package root: this module is itself
+# imported by io_utils/__init__, so going through the package would be a
+# circular import during initialisation.
+from spectral_galerkin_heat.io_utils.xdmf_io import (
+    FieldData,
+    StructuredField,
+    UnstructuredField,
+    load_xdmf,
+    write_structured_fields,
+    write_unstructured_fields,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+#  Grid alignment check
+# ---------------------------------------------------------------------------
+
+def _grids_aligned(a: StructuredField, b: StructuredField, tol: float = 1e-10) -> bool:
+    """Check whether two structured grids have identical coordinates."""
+    if a.T.shape != b.T.shape:
+        return False
+    for ca, cb in [(a.x, b.x), (a.y, b.y), (a.z, b.z)]:
+        if len(ca) != len(cb):
+            return False
+        if not np.allclose(ca, cb, atol=tol, rtol=tol):
+            return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+#  Interpolation helpers
+# ---------------------------------------------------------------------------
+
+def _build_structured_interpolator(sf: StructuredField):
+    """Return a ``RegularGridInterpolator`` for a StructuredField.
+
+    The interpolator accepts points of shape (N, 3) where columns are
+    (z, y, x) - matching the array dimension order - and returns
+    interpolated temperature values.
+
+    ``RegularGridInterpolator`` performs **trilinear** interpolation
+    on a rectilinear grid.  It is exact at the original grid nodes and
+    is O(N log M) for N query points on a grid with M nodes per axis
+    (binary search along each axis).
+    """
+    from scipy.interpolate import RegularGridInterpolator
+
+    # RegularGridInterpolator expects axes in the order of array dims,
+    # i.e. (z, y, x) for T of shape (nz, ny, nx).
+    return RegularGridInterpolator(
+        (sf.z, sf.y, sf.x),
+        sf.T,
+        method="linear",
+        bounds_error=False,
+        fill_value=np.nan,
+    )
+
+
+def _clamp_query_points(query_pts: np.ndarray, sf: StructuredField) -> np.ndarray:
+    """Clamp query points to structured grid bounds to handle floating-point precision.
+
+    Points exactly at domain boundaries (Lx, Ly, Lz) can appear slightly outside
+    due to floating-point rounding. This clamps them to the valid range.
+
+    Parameters
+    ----------
+    query_pts : ndarray, shape (N, 3)
+        Query points in (z, y, x) order (RegularGridInterpolator convention).
+    sf : StructuredField
+        The structured field defining the grid bounds.
+
+    Returns
+    -------
+    ndarray, shape (N, 3)
+        Clamped query points.
+    """
+    clamped = query_pts.copy()
+    # Clamp z (column 0)
+    clamped[:, 0] = np.clip(clamped[:, 0], sf.z.min(), sf.z.max())
+    # Clamp y (column 1)
+    clamped[:, 1] = np.clip(clamped[:, 1], sf.y.min(), sf.y.max())
+    # Clamp x (column 2)
+    clamped[:, 2] = np.clip(clamped[:, 2], sf.x.min(), sf.x.max())
+    return clamped
+
+
+class VTKUnstructuredInterpolator:
+    def __init__(self, xyz: np.ndarray, values: np.ndarray, connectivity: np.ndarray | None):
+        import vtk
+        from vtk.util.numpy_support import numpy_to_vtk, numpy_to_vtkIdTypeArray
+        
+        # Build vtkPoints
+        pts = vtk.vtkPoints()
+        pts.SetData(numpy_to_vtk(xyz, deep=0))
+        
+        # Build vtkUnstructuredGrid
+        grid = vtk.vtkUnstructuredGrid()
+        grid.SetPoints(pts)
+        
+        if connectivity is not None and connectivity.shape[1] == 4:
+            cells = np.empty((connectivity.shape[0], 5), dtype=np.int64)
+            cells[:, 0] = 4
+            cells[:, 1:] = connectivity
+            cell_array = vtk.vtkCellArray()
+            # VTK < 9.0 compatibility
+            if hasattr(cell_array, "ImportLegacyFormat"):
+                cell_array.ImportLegacyFormat(numpy_to_vtkIdTypeArray(cells.ravel(), deep=0))
+            else:
+                cell_array.SetCells(connectivity.shape[0], numpy_to_vtkIdTypeArray(cells.ravel(), deep=0))
+            grid.SetCells(vtk.VTK_TETRA, cell_array)
+        else:
+            # Fallback to Delaunay3D if no valid connectivity provided
+            logger.info("   No connectivity found, using vtkDelaunay3D (might still be slow)...")
+            poly = vtk.vtkPolyData()
+            poly.SetPoints(pts)
+            del3d = vtk.vtkDelaunay3D()
+            del3d.SetInputData(poly)
+            del3d.Update()
+            grid = del3d.GetOutput()
+            
+        arr = numpy_to_vtk(values, deep=0)
+        arr.SetName("values")
+        grid.GetPointData().SetScalars(arr)
+        
+        self.grid = grid
+        
+    def __call__(self, xyz_query: np.ndarray) -> np.ndarray:
+        import vtk
+        from vtk.util.numpy_support import numpy_to_vtk, vtk_to_numpy
+        
+        q_pts = vtk.vtkPoints()
+        q_pts.SetData(numpy_to_vtk(xyz_query, deep=0))
+        poly = vtk.vtkPolyData()
+        poly.SetPoints(q_pts)
+        
+        probe = vtk.vtkProbeFilter()
+        probe.SetInputData(poly)
+        probe.SetSourceData(self.grid)
+        probe.SetComputeTolerance(False)
+        probe.Update()
+        
+        out = probe.GetOutput()
+        out_scalars = out.GetPointData().GetScalars("values")
+        if out_scalars is None:
+            return np.full(len(xyz_query), np.nan)
+        
+        res = vtk_to_numpy(out_scalars).copy()
+        valid_array = out.GetPointData().GetArray("vtkValidPointMask")
+        if valid_array is not None:
+             valid = vtk_to_numpy(valid_array).astype(bool)
+             res[~valid] = np.nan
+        return res
+
+def _build_unstructured_interpolator(uf: UnstructuredField):
+    """Return an interpolator for an UnstructuredField.
+
+    Uses VTK for rapidly evaluating values in the P1 tetrahedral finite 
+    elements using exact element geometry instead of creating a huge
+    Delaunay triangulation with SciPy which takes hours.
+    """
+    try:
+        import vtk  # noqa: F401
+        return VTKUnstructuredInterpolator(uf.xyz, uf.T, uf.connectivity)
+    except ImportError:
+        logger.warning("VTK not found, falling back to extremely slow LinearNDInterpolator...")
+        from scipy.interpolate import LinearNDInterpolator
+        return LinearNDInterpolator(uf.xyz, uf.T)
+
+
+# ---------------------------------------------------------------------------
+#  Common evaluation grid
+# ---------------------------------------------------------------------------
+
+def _bounding_box(fd: FieldData) -> tuple[np.ndarray, np.ndarray]:
+    """Return (min_xyz, max_xyz) arrays of shape (3,)."""
+    if isinstance(fd, StructuredField):
+        lo = np.array([fd.x.min(), fd.y.min(), fd.z.min()])
+        hi = np.array([fd.x.max(), fd.y.max(), fd.z.max()])
+    else:
+        lo = fd.xyz.min(axis=0)
+        hi = fd.xyz.max(axis=0)
+    return lo, hi
+
+
+def _make_common_grid(
+    a: FieldData,
+    b: FieldData,
+    resolution: tuple[int, int, int] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build a common structured evaluation grid (intersection of domains).
+
+    If one of the inputs is structured, its axes are reused (clipped to
+    the intersection) to avoid unnecessary re-interpolation.  Otherwise
+    a uniform grid with *resolution* points per axis is created.
+    """
+    lo_a, hi_a = _bounding_box(a)
+    lo_b, hi_b = _bounding_box(b)
+
+    lo = np.maximum(lo_a, lo_b)
+    hi = np.minimum(hi_a, hi_b)
+    if np.any(hi <= lo):
+        raise ValueError(
+            f"Domains do not overlap.\n  A: {lo_a} -> {hi_a}\n  B: {lo_b} -> {hi_b}"
+        )
+
+    # Prefer reusing the structured axes of one input (fewer interp errors).
+    # Pick the coarser grid to keep the evaluation tractable.
+    def _clip_axis(coords, lo_val, hi_val):
+        mask = (coords >= lo_val - 1e-12) & (coords <= hi_val + 1e-12)
+        return coords[mask]
+
+    if isinstance(a, StructuredField) and isinstance(b, StructuredField):
+        # Use the coarser grid (fewer points on each axis)
+        def _pick_axis(ax_a, ax_b, lo_v, hi_v):
+            ca = _clip_axis(ax_a, lo_v, hi_v)
+            cb = _clip_axis(ax_b, lo_v, hi_v)
+            return ca if len(ca) <= len(cb) else cb
+
+        x = _pick_axis(a.x, b.x, lo[0], hi[0])
+        y = _pick_axis(a.y, b.y, lo[1], hi[1])
+        z = _pick_axis(a.z, b.z, lo[2], hi[2])
+        return x, y, z
+
+    # One structured, one unstructured -> use the structured axes
+    for fd in (a, b):
+        if isinstance(fd, StructuredField):
+            x = _clip_axis(fd.x, lo[0], hi[0])
+            y = _clip_axis(fd.y, lo[1], hi[1])
+            z = _clip_axis(fd.z, lo[2], hi[2])
+            return x, y, z
+
+    # Both unstructured -> create a uniform grid
+    if resolution is None:
+        raise ValueError("Resolution must be specified when both inputs are unstructured.")
+    nx, ny, nz = resolution
+    x = np.linspace(lo[0], hi[0], nx)
+    y = np.linspace(lo[1], hi[1], ny)
+    z = np.linspace(lo[2], hi[2], nz)
+    return x, y, z
+
+
+# ---------------------------------------------------------------------------
+#  Evaluate a field on a structured grid
+# ---------------------------------------------------------------------------
+
+def _evaluate_on_grid(
+    fd: FieldData,
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+    slab_max_points: int = 500_000,
+) -> np.ndarray:
+    """Evaluate *fd* at every node of a rectilinear (x, y, z) grid.
+
+    Returns an array of shape ``(nz, ny, nx)``.
+
+    For large grids the evaluation is done in z-slabs to limit peak
+    memory usage (each slab holds at most ``slab_max_points`` query
+    points).
+    """
+    nz, ny, nx = len(z), len(y), len(x)
+
+    if isinstance(fd, StructuredField):
+        # Check if the evaluation grid matches exactly
+        if (
+            fd.T.shape == (nz, ny, nx)
+            and np.allclose(fd.x, x, atol=1e-12)
+            and np.allclose(fd.y, y, atol=1e-12)
+            and np.allclose(fd.z, z, atol=1e-12)
+        ):
+            logger.info("  Grid matches exactly - no interpolation needed")
+            return fd.T.copy()
+
+        logger.info("  Building RegularGridInterpolator...")
+        interp = _build_structured_interpolator(fd)
+        return _eval_structured_chunked(interp, x, y, z, slab_max_points)
+
+    # Unstructured
+    logger.info(f"  Building VTK Unstructured Grid from ({len(fd.T)} vertices)...")
+    interp = _build_unstructured_interpolator(fd)
+    logger.info("  Interpolator ready")
+    return _eval_unstructured_chunked(interp, x, y, z, slab_max_points)
+
+
+def _eval_structured_chunked(
+    interp,
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+    slab_max_points: int = 500_000,
+) -> np.ndarray:
+    """Evaluate a RegularGridInterpolator in z-slabs with progress logging.
+
+    The interpolator expects query points in (z, y, x) order.
+    """
+    nz, ny, nx = len(z), len(y), len(x)
+    slab_nz = max(1, slab_max_points // (ny * nx))
+    result = np.empty((nz, ny, nx), dtype=np.float64)
+
+    n_slabs = (nz + slab_nz - 1) // slab_nz
+    logger.info(f"  RegularGrid interpolation: {n_slabs} slabs, grid={nx}x{ny}x{nz}")
+
+    start_time = time.time()
+    completed = 0
+
+    for z0 in range(0, nz, slab_nz):
+        z1 = min(z0 + slab_nz, nz)
+        z_chunk = z[z0:z1]
+        Zg, Yg, Xg = np.meshgrid(z_chunk, y, x, indexing="ij")
+        pts = np.column_stack([Zg.ravel(), Yg.ravel(), Xg.ravel()])
+        result[z0:z1] = interp(pts).reshape(z1 - z0, ny, nx)
+
+        completed += 1
+        elapsed = time.time() - start_time
+        pct = 100 * completed / n_slabs
+        if completed < n_slabs:
+            eta = elapsed * (n_slabs - completed) / completed
+            logger.info(f"    Progress: {completed}/{n_slabs} slabs ({pct:.1f}%) - ETA: {eta:.1f}s")
+
+    elapsed = time.time() - start_time
+    logger.info(f"  RegularGrid interpolation complete in {elapsed:.1f}s")
+
+    return result
+
+
+def _eval_unstructured_chunked(
+    interp,
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+    slab_max_points: int = 500_000,
+) -> np.ndarray:
+    """Evaluate a LinearNDInterpolator in z-slabs with progress logging.
+
+    The interpolator expects query points in (x, y, z) order.
+    Result is returned in (nz, ny, nx) convention.
+    """
+    nz, ny, nx = len(z), len(y), len(x)
+    slab_nz = max(1, slab_max_points // (ny * nx))
+    result = np.empty((nz, ny, nx), dtype=np.float64)
+
+    n_slabs = (nz + slab_nz - 1) // slab_nz
+    logger.info(f"  LinearNDInterpolator: {n_slabs} slabs, grid={nx}x{ny}x{nz}")
+
+    start_time = time.time()
+    completed = 0
+
+    for z0 in range(0, nz, slab_nz):
+        z1 = min(z0 + slab_nz, nz)
+        z_chunk = z[z0:z1]
+        # meshgrid with (x, y, z_chunk): shape (nx, ny, chunk_nz)
+        Xg, Yg, Zg = np.meshgrid(x, y, z_chunk, indexing="ij")
+        pts = np.column_stack([Xg.ravel(), Yg.ravel(), Zg.ravel()])
+        vals = interp(pts).reshape(nx, ny, z1 - z0)
+        # Transpose (nx, ny, chunk_nz) -> (chunk_nz, ny, nx)
+        result[z0:z1] = vals.transpose(2, 1, 0)
+
+        completed += 1
+        elapsed = time.time() - start_time
+        pct = 100 * completed / n_slabs
+        if completed < n_slabs:
+            eta = elapsed * (n_slabs - completed) / completed
+            logger.info(f"    Progress: {completed}/{n_slabs} slabs ({pct:.1f}%) - ETA: {eta:.1f}s")
+
+    elapsed = time.time() - start_time
+    logger.info(f"  LinearNDInterpolator complete in {elapsed:.1f}s")
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+#  L2 norm via composite trapezoidal rule (structured grids)
+# ---------------------------------------------------------------------------
+
+def _trapezoidal_weights(coords: np.ndarray) -> np.ndarray:
+    """Composite trapezoidal quadrature weights for non-uniform spacing."""
+    w = np.zeros_like(coords)
+    dx = np.diff(coords)
+    w[:-1] += dx * 0.5
+    w[1:] += dx * 0.5
+    return w
+
+
+def _compute_vertex_volumes(xyz: np.ndarray, connectivity: np.ndarray) -> np.ndarray:
+    """Compute lumped vertex volumes from tetrahedral connectivity.
+
+    Each vertex receives 1/4 of the volume of each tetrahedron it belongs to.
+    This is the standard "lumped mass" approach for P1 finite elements.
+
+    Parameters
+    ----------
+    xyz : (N, 3) array
+        Vertex coordinates
+    connectivity : (M, 4) array
+        Tetrahedral connectivity (vertex indices)
+
+    Returns
+    -------
+    vertex_volumes : (N,) array
+        Volume associated with each vertex
+    """
+    n_vertices = len(xyz)
+    vertex_volumes = np.zeros(n_vertices, dtype=np.float64)
+
+    # Vectorized tetrahedron volume computation
+    # Volume = |det([v1-v0, v2-v0, v3-v0])| / 6
+    v0 = xyz[connectivity[:, 0]]
+    v1 = xyz[connectivity[:, 1]]
+    v2 = xyz[connectivity[:, 2]]
+    v3 = xyz[connectivity[:, 3]]
+
+    # Edge vectors
+    e1 = v1 - v0
+    e2 = v2 - v0
+    e3 = v3 - v0
+
+    # Determinant via scalar triple product: e1 . (e2 x e3)
+    cross = np.cross(e2, e3)
+    det = np.einsum('ij,ij->i', e1, cross)
+    tet_volumes = np.abs(det) / 6.0
+
+    # Distribute 1/4 of each tet volume to its 4 vertices
+    quarter_vol = tet_volumes / 4.0
+    for i in range(4):
+        np.add.at(vertex_volumes, connectivity[:, i], quarter_vol)
+
+    return vertex_volumes
+
+
+def compute_L2_structured(
+    T_a: np.ndarray,
+    T_b: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+) -> dict[str, float]:
+    """Compute error norms on a structured grid using trapezoidal rule."""
+    err = T_a - T_b
+
+    valid = np.isfinite(err)
+    if not valid.all():
+        raise ValueError("Error fields contain NaN values, indicating a severe issue (e.g. out of bounds interpolation).")
+
+    wx = _trapezoidal_weights(x)
+    wy = _trapezoidal_weights(y)
+    wz = _trapezoidal_weights(z)
+    W = wz[:, None, None] * wy[None, :, None] * wx[None, None, :]
+
+    volume = W.sum()
+    L2_sq = np.sum(W * err**2)
+    ref_sq = np.sum(W * T_a**2)
+
+    L2_abs = np.sqrt(L2_sq)
+    L2_rel = L2_abs / np.sqrt(ref_sq) if ref_sq > 0 else np.inf
+    Linf = np.max(np.abs(err))
+
+    n_nan = 0
+    n_total = err.size
+    pct_valid = 100.0
+
+    return {
+        "L2_abs": float(L2_abs),
+        "L2_rel": float(L2_rel),
+        "Linf": float(Linf),
+        "volume": float(volume),
+        "n_valid": int(valid.sum()),
+        "n_total": int(n_total),
+        "pct_valid": float(pct_valid),
+        "n_nan": int(n_nan),
+    }
+
+
+
+def compute_L2_unstructured(
+    T_a: np.ndarray,
+    T_b: np.ndarray,
+    vertex_volumes: np.ndarray,
+) -> dict[str, float]:
+    """Compute error norms on unstructured vertices using lumped mass."""
+    err = T_a - T_b
+
+    valid = np.isfinite(err) & np.isfinite(T_a) & np.isfinite(T_b)
+    if not valid.all():
+        raise ValueError("Error fields contain NaN values, indicating a severe issue.")
+
+    W = vertex_volumes
+
+    volume = W.sum()
+    L2_sq = np.sum(W * err**2)
+    ref_sq = np.sum(W * T_a**2)
+
+    L2_abs = np.sqrt(L2_sq)
+    L2_rel = L2_abs / np.sqrt(ref_sq) if ref_sq > 0 else np.inf
+    Linf = np.max(np.abs(err))
+
+    n_nan = 0
+    n_total = err.size
+    pct_valid = 100.0
+
+    return {
+        "L2_abs": float(L2_abs),
+        "L2_rel": float(L2_rel),
+        "Linf": float(Linf),
+        "volume": float(volume),
+        "n_valid": int(valid.sum()),
+        "n_total": int(n_total),
+        "pct_valid": float(pct_valid),
+        "n_nan": int(n_nan),
+    }
+
+
+# ---------------------------------------------------------------------------
+#  Main comparison pipeline
+# ---------------------------------------------------------------------------
+
+def _describe_grid(label: str, fd: FieldData) -> str:
+    """One-line summary of a loaded field, for the comparison report."""
+    if isinstance(fd, StructuredField):
+        shape = f"({len(fd.x)}x{len(fd.y)}x{len(fd.z)})"
+    else:
+        shape = f"({len(fd.T)} vertices)"
+    return f"  Grid {label} : {fd.grid_type}  {shape}  t = {fd.time}"
+
+
+def compare(
+    path_a: Path,
+    path_b: Path,
+    attr_a: str | None = None,
+    attr_b: str | None = None,
+    output_base: Path = Path("research/error"),
+    resolution: tuple[int, int, int] | None = None,
+    write_error: bool = True,
+) -> dict[str, float]:
+    """Full comparison pipeline: load -> align/interpolate -> L2 -> write.
+
+    Parameters
+    ----------
+    path_a, path_b : str
+        Paths to XDMF files. File A is treated as the reference.
+    attr_a, attr_b : str, optional
+        Attribute names to load from each file.
+    output_base : str
+        Base name for error output files.
+    resolution : tuple, optional
+        Grid resolution for both-unstructured case.
+    write_error : bool
+        If False, skip writing error XDMF/H5 files (faster).
+    """
+    rule = "=" * 70
+    logger.info(
+        "\n%s\n  L2 Error Comparison\n%s\n  File A : %s  (reference)\n  File B : %s",
+        rule, rule, path_a, path_b,
+    )
+
+    # 1. Load both fields
+    logger.info("Loading files...")
+    field_a = load_xdmf(path_a, attr_name=attr_a)
+    field_b = load_xdmf(path_b, attr_name=attr_b)
+
+    logger.info("\n%s\n%s", _describe_grid("A", field_a), _describe_grid("B", field_b))
+
+    # Determine comparison mode
+    a_is_struct = isinstance(field_a, StructuredField)
+    b_is_struct = isinstance(field_b, StructuredField)
+
+    # -------------------------------------------------------------------------
+    # Case 1: Both structured
+    # -------------------------------------------------------------------------
+    if a_is_struct and b_is_struct:
+        aligned = _grids_aligned(field_a, field_b)
+
+        if aligned:
+            logger.info("  Mode: ALIGNED - direct pointwise comparison")
+            x, y, z = field_a.x, field_a.y, field_a.z
+            T_a = field_a.T
+            T_b = field_b.T
+            interp_info = "None (grids match)"
+        else:
+            logger.info("  Mode: STRUCTURED interpolation onto coarser grid")
+            x, y, z = _make_common_grid(field_a, field_b)
+            logger.info("  Common grid: %dx%dx%d", len(x), len(y), len(z))
+
+            logger.info("Interpolating field A...")
+            T_a = _evaluate_on_grid(field_a, x, y, z)
+            logger.info("Interpolating field B...")
+            T_b = _evaluate_on_grid(field_b, x, y, z)
+            interp_info = "RegularGridInterpolator (trilinear)"
+
+        norms = compute_L2_structured(T_a, T_b, x, y, z)
+
+        if write_error:
+            out_path = Path(output_base).resolve()
+            error = T_a - T_b
+            write_structured_fields(
+                out_path,
+                fields={
+                    "error": error,
+                    "abs_error": np.abs(error),
+                    "T_a": T_a,
+                    "T_b": T_b,
+                },
+                x=x, y=y, z=z,
+                time=field_a.time,
+            )
+
+    # -------------------------------------------------------------------------
+    # Case 2: One structured + one unstructured (FAST PATH - no Delaunay!)
+    # -------------------------------------------------------------------------
+    elif a_is_struct != b_is_struct:
+        # Identify which is which
+        if a_is_struct:
+            struct_field, unstruct_field = field_a, field_b
+            struct_label, unstruct_label = "A", "B"
+        else:
+            struct_field, unstruct_field = field_b, field_a
+            struct_label, unstruct_label = "B", "A"
+
+        logger.info(
+            "  Mode: HYBRID - interpolate structured (%s) at unstructured vertices (%s);"
+            " no Delaunay triangulation needed",
+            struct_label, unstruct_label,
+        )
+
+        # Check connectivity is available
+        if unstruct_field.connectivity is None:
+            raise ValueError(
+                f"Unstructured field {unstruct_label} has no connectivity. "
+                "Cannot compute vertex volumes for L2 integration."
+            )
+
+        # Build interpolator from structured field (very fast)
+        logger.info("Building RegularGridInterpolator from structured field...")
+        interp = _build_structured_interpolator(struct_field)
+
+        # Query at unstructured vertices
+        xyz = unstruct_field.xyz
+        n_pts = len(xyz)
+        logger.info(f"Evaluating at {n_pts} unstructured vertices...")
+
+        start_time = time.time()
+        # RegularGridInterpolator expects (z, y, x) order
+        query_pts = np.column_stack([xyz[:, 2], xyz[:, 1], xyz[:, 0]])
+        # Clamp to grid bounds to handle floating-point precision at boundaries
+        query_pts = _clamp_query_points(query_pts, struct_field)
+        T_struct_at_unstruct = interp(query_pts)
+        elapsed = time.time() - start_time
+        logger.info(f"Interpolation complete in {elapsed:.2f}s")
+
+        # Get unstructured T values directly
+        T_unstruct = unstruct_field.T
+
+        # Compute vertex volumes
+        logger.info("Computing vertex volumes from connectivity...")
+        vertex_volumes = _compute_vertex_volumes(xyz, unstruct_field.connectivity)
+        total_vol = vertex_volumes.sum()
+        logger.info(f"Total mesh volume: {total_vol:.6e} m^3")
+
+        # Assign T_a and T_b based on which is reference
+        if a_is_struct:
+            T_a = T_struct_at_unstruct  # A (structured) evaluated at B's vertices
+            T_b = T_unstruct            # B (unstructured) native values
+        else:
+            T_a = T_unstruct            # A (unstructured) native values
+            T_b = T_struct_at_unstruct  # B (structured) evaluated at A's vertices
+
+        norms = compute_L2_unstructured(T_a, T_b, vertex_volumes)
+        interp_info = f"RegularGridInterpolator on {struct_label}, evaluated at {unstruct_label} vertices"
+
+        if write_error:
+            out_path = Path(output_base).resolve()
+            error = T_a - T_b
+            write_unstructured_fields(
+                out_path,
+                fields={
+                    "error": error,
+                    "abs_error": np.abs(error),
+                    "T_a": T_a,
+                    "T_b": T_b,
+                },
+                xyz=xyz,
+                connectivity=unstruct_field.connectivity,
+                time=unstruct_field.time,
+            )
+
+    # -------------------------------------------------------------------------
+    # Case 3: Both unstructured (requires Delaunay - slow)
+    # -------------------------------------------------------------------------
+    else:
+        if resolution is None:
+            raise ValueError(
+                "Both fields are unstructured. "
+                "Use --resolution NX,NY,NZ to specify common grid."
+            )
+
+        logger.info("  Mode: BOTH UNSTRUCTURED - common grid %s", resolution)
+        logger.warning("Projecting unstructured meshes onto a uniform grid.")
+
+        x, y, z = _make_common_grid(field_a, field_b, resolution=resolution)
+        logger.info("  Common grid: %dx%dx%d", len(x), len(y), len(z))
+
+        logger.info("Interpolating field A...")
+        T_a = _evaluate_on_grid(field_a, x, y, z)
+        logger.info("Interpolating field B...")
+        T_b = _evaluate_on_grid(field_b, x, y, z)
+        interp_info = "LinearNDInterpolator (Delaunay)"
+
+        norms = compute_L2_structured(T_a, T_b, x, y, z)
+
+        if write_error:
+            out_path = Path(output_base).resolve()
+            error = T_a - T_b
+            write_structured_fields(
+                out_path,
+                fields={
+                    "error": error,
+                    "abs_error": np.abs(error),
+                    "T_a": T_a,
+                    "T_b": T_b,
+                },
+                x=x, y=y, z=z,
+                time=field_a.time,
+            )
+
+    # Report the results as one block so the layout survives the log formatter.
+    report = [
+        "-" * 70,
+        f"  L2 absolute error  : {norms['L2_abs']:.6e}",
+        f"  L2 relative error  : {norms['L2_rel']:.6e}  ({norms['L2_rel'] * 100:.4f}%)",
+        f"  L_inf (max |err|)  : {norms['Linf']:.6e}",
+        f"  Integration volume : {norms['volume']:.6e} m^3",
+        f"  Valid points       : {norms['n_valid']}/{norms['n_total']}"
+        f" ({norms['pct_valid']:.1f}%)",
+    ]
+    if norms["n_nan"] > 0:
+        report.append(f"  WARNING: {norms['n_nan']} NaN points (outside domain)")
+    report.append("-" * 70)
+    if write_error:
+        report.append(f"  Error written to: {output_base}.xdmf / .h5")
+    report.append(f"  Method: {interp_info}")
+    report.append(rule)
+    logger.info("\n%s", "\n".join(report))
+
+    if norms["n_nan"] > 0:
+        logger.warning("%d NaN points fell outside the domain.", norms["n_nan"])
+
+    return norms
+
+
+# ---------------------------------------------------------------------------
+#  CLI
+# ---------------------------------------------------------------------------
+
+def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    parser = argparse.ArgumentParser(
+        description="Compute L2 norm error between two XDMF solution files."
+    )
+    parser.add_argument("file_a", help="Path to XDMF file A (reference)")
+    parser.add_argument("file_b", help="Path to XDMF file B")
+    parser.add_argument(
+        "--attr-a",
+        default=None,
+        help="Attribute name in file A (default: first found)",
+    )
+    parser.add_argument(
+        "--attr-b",
+        default=None,
+        help="Attribute name in file B (default: first found)",
+    )
+    parser.add_argument(
+        "--output",
+        default="error",
+        help="Base name for error output files (default: 'error')",
+    )
+    parser.add_argument(
+        "--resolution",
+        default=None,
+        help="Grid resolution for two-unstructured case, e.g. '128,128,128'",
+    )
+    parser.add_argument(
+        "--no-error-output",
+        action="store_true",
+        help="Skip writing error XDMF/H5 files (faster for convergence studies)",
+    )
+
+    args = parser.parse_args()
+
+    res = None
+    if args.resolution:
+        parts = [int(x) for x in args.resolution.split(",")]
+        res = tuple(parts[:3])
+
+    norms = compare(
+        path_a=Path(args.file_a),
+        path_b=Path(args.file_b),
+        attr_a=args.attr_a,
+        attr_b=args.attr_b,
+        output_base=Path(args.output),
+        resolution=res,
+        write_error=not args.no_error_output,
+    )
+
+    # Exit with non-zero if there were NaN issues
+    if norms["pct_valid"] < 50.0:
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

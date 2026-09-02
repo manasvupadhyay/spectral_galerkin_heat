@@ -1,0 +1,34 @@
+"""Concrete solver implementations."""
+
+from .base import HeatSolver
+from .spectral import SpectralSolver
+
+__all__ = [
+    "HeatSolver",
+    "SpectralSolver",
+    "build_solver",
+]
+
+
+def build_solver(context) -> HeatSolver:
+    """Select and construct the spectral heat solver for *context* from its
+    ``backend``.
+
+    Backends are imported lazily to keep CuPy/Numba off the import path until
+    needed.
+    """
+    match context.backend:
+        case "cpu":
+            from spectral_galerkin_heat.backends import NumpyBackend
+            return SpectralSolver(backend=NumpyBackend())
+        case "gpu":
+            from spectral_galerkin_heat.backends import get_backend
+            return SpectralSolver(backend=get_backend("cupy"))
+        case "cpu_linear":
+            from .spectral_cpu_linear import SpectralSolverCPULinear
+            return SpectralSolverCPULinear()
+        case _:
+            raise ValueError(
+                f"Unknown backend: {context.backend!r}. "
+                "Choose 'cpu', 'gpu', or 'cpu_linear'."
+            )

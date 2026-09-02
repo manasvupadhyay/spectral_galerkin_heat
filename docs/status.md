@@ -1,9 +1,11 @@
 # Status & Access
 
-**Version:** 0.1.0
+**Version:** {{ version }}
 
 ## Code availability
 
-The source code is not yet public. A public release is coming soon. 
+The source code is available under the Apache-2.0 licence at
+[github.com/theo-andrieux/spectral_galerkin_heat](https://github.com/theo-andrieux/spectral_galerkin_heat).
 
-The {doc}`installation` instructions apply once you have access.
+See {doc}`installation` to get set up, and {doc}`citing` if you use it in
+published work.

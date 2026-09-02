@@ -1,25 +1,9 @@
 out/
-.validation/
-validation_results/
-
 
 # Python bytecode
 __pycache__/
 *.py[cod]
 *.pyc
-
-# Explicitly ignore compiled python cache directories
-__pycache__/
-
-# Output artifacts
-*.log
-*.txt
-*.png
-!docs/_images/*.png
-*.h5
-*.xmf
-*.xdmf
-
 
 # Sphinx documentation temporaries
 docs/_build/
@@ -28,3 +12,20 @@ docs/api/
 # Files from packaging/build metadata
 *.egg-info/_build/
 *.egg-info
+
+# Test and tooling caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Editor directories
+.vscode/
+
+# Virtual environment
+.venv/
+
+# Build artifacts
+build/
+dist/

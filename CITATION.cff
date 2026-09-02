@@ -10,7 +10,9 @@ authors:
   - family-names: "Upadhyay"
     given-names: "Manas V."
     affiliation: "LMS, École Polytechnique"
-title: "fastHeatSolv"
-version: 1.0.0
+title: "spectral_galerkin_heat"
+version: 0.1.0
 date-released: 2026-04-20
-url: "https://github.com/TheoADX/fastHeatSolv"
+url: "https://theo-andrieux.github.io/sgh-docs/"
+repository-code: "https://github.com/theo-andrieux/spectral_galerkin_heat"
+license: Apache-2.0

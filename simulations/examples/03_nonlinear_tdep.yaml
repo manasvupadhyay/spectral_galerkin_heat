@@ -1,0 +1,125 @@
+# Example 03: Non-linear run with temperature-dependent properties
+#
+# Thermal conductivity, density and specific heat vary with temperature
+# (solid and liquid polynomial branches blended by the liquid fraction), making
+# the diffusion problem non-linear. Each time step is solved with a Picard
+# iteration and a global property correction (Green's first identity).
+#
+# The domain is small with a fine z-grid so the thin mushy zone is resolved. 
+# Runtime is on the order of minutes.
+#
+# Run: uv run python simulations/main.py simulations/examples/03_nonlinear_tdep.yaml
+
+simulation:
+  name: "nonlinear_tdep"
+  backend: "cpu"              
+  duration:
+    value: 2.0e-4
+    unit: "s"
+  dt:
+    value: 4.0e-6
+    unit: "s"
+  update_interval: 1
+
+  # Non-linear solve controls.
+  max_picard_iter: 80         # Picard iteration cap per step. 
+  picard_omega: 0.31          # relaxation factor; 0.31 converges here, higher does not.
+                              # This value has to be tuned for each case as it is problem dependent.
+
+  # picard_tol: 1.0e-4        # convergence tolerance (optional; default 1e-4).
+
+domain:
+  size:
+    value: [0.5e-3, 0.3e-3, 0.12e-3]  # [Lx, Ly, Lz] in m (0.5 x 0.3 x 0.12 mm) — small box.
+    unit: "m"
+  mesh:
+    value: [100, 60, 96]              # dz ~ 1.25 um resolves the mushy zone.
+    unit: ""
+
+# OPTIONAL moving fine-mesh that resolves the sharp mushy-zone gradients
+# under the beam. Omit the whole `fine_mesh` parameters to evaluate latent heat on
+# the coarse main grid (the default: lower memory, faster, coarser mushy zone).
+fine_mesh:
+  refinement: 2                          # Fine cells per coarse cell, per axis.
+  box_size: [0.2e-3, 0.15e-3, 0.04e-3]   # [Lx_box, Ly_box, Lz_box] in m.
+
+material:
+  name: "316L"
+  # Temperature-dependent reference 316L properties. Each branch is an expression
+  # of T in standard Python. The solid and liquid branches are blended across
+  # the mushy zone by the liquid fraction f_l(T). 
+  #
+  # `reference` (REQUIRED for each T-dependent property) is the constant reference
+  # property k_bar, rho_bar, Cp_bar, determines the fluctuation k'=k(T)-k̄.
+  # Recommendation:
+  # the average of the property's two extrema over [T0, T_boil] — centering it
+  # matters for convergence. Omitting will raise an error.
+  k:
+    solid: "9.248 + 0.01571 * T"
+    liquid: "12.41 + 0.003279 * T"
+    reference: 24.5075              # ½(min k + max k) over [T0, T_boil]
+    unit: "W/(m.K)"
+  rho:
+    solid: "8084.2 - 0.42086 * T - 3.8942e-5 * T**2"
+    liquid: "7432.7 + 0.039338 * T - 1.8007e-4 * T**2"
+    reference: 6896.2365           # ½(min rho + max rho) over [T0, T_boil]
+    unit: "kg/m^3"
+  Cp:
+    solid: "458.98 + 0.1328 * T"
+    liquid: "769.86"                # constant branch (a bare-number string)
+    reference: 633.8752            # ½(min Cp + max Cp) over [T0, T_boil]
+    unit: "J/(kg.K)"
+  L_f:
+    value: 2.677e5
+    unit: "J/kg"
+  T_solidus:
+    value: 1674.15
+    unit: "K"
+  T_liquidus:
+    value: 1697.15
+    unit: "K"
+  T0:
+    value: 293.0
+    unit: "K"
+  h_conv_bottom:
+    value: 3000.0
+    unit: "W/(m2.K)"
+  DeltaH_LV:
+    value: 7.416e6
+    unit: "J/kg"
+  R_v:
+    value: 150.774
+    unit: "J/(kg.K)"
+  Pa:
+    value: 101325.0
+    unit: "Pa"
+  T_boil:
+    value: 3090.0
+    unit: "K"
+
+laser:
+  radius:
+    value: 30.0e-6
+    unit: "m"
+  absorptivity: 0.30
+  power_nominal:
+    value: 24.0
+    unit: "W"
+  path:
+    type: "gcode"
+    file: "example03_track.gcode"   # v_scan = 0.15 m/s, starts mid-domain (x = 0.3 mm).
+
+io:
+  run_tag: "nonlinear_tdep"
+  output_interval: null
+  outputs: [full_volume]
+  at_end: [full_volume, slices, profiles]
+  profiles_locations:
+    - 'laser'
+  slice_planes:
+    - name: "longitudinal_section"
+      normal: "y"              # plane x-z: longitudinal melt-pool section.
+      width: 0.16e-3
+      height: 0.035e-3
+      isotherms:
+        - ["T_s", 1674.15]

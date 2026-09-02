@@ -1,8 +1,10 @@
-"""Main entry point for running fastHeatSolv simulations."""
+"""Main entry point for running spectral_galerkin_heat simulations."""
 
-# Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
+# Route de Saclay, Palaiseau, 91128, France.
 #
-# Author: Théo Andrieux
+# Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,38 +19,37 @@
 # limitations under the License.
 
 
-__author__ = "Théo Andrieux"
-__copyright__ = "Copyright 2026, LMS, École Polytechnique"
+__author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
+__copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
 
 import argparse
-import yaml
 import logging
-import sys
 import os
 import shutil
-from typing import Dict, Any
+import sys
+from typing import Any
 
-from fast_heat_solv.runner import StandaloneHeatRunner
-from fast_heat_solv.solvers import build_solver
-from fast_heat_solv.core.parameters import (
-    SimulationContext
-)
-from fast_heat_solv.io_utils.cut_views import generate_plots
+import yaml
+
+from spectral_galerkin_heat.core.parameters import SimulationContext
+from spectral_galerkin_heat.io_utils.slices import generate_plots
+from spectral_galerkin_heat.runner import StandaloneHeatRunner
+from spectral_galerkin_heat.solvers import build_solver
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def load_config(path: str) -> Dict[str, Any]:
+def load_config(path: str) -> dict[str, Any]:
     """Load YAML configuration file."""
     if not os.path.exists(path):
         raise FileNotFoundError(f"Config file not found: {path}")
-    with open(path, "r") as f:
+    with open(path) as f:
         return yaml.safe_load(f)
 
 def main():
-    parser = argparse.ArgumentParser(description="FastHeatSolv: Spectral Heat Equation Solver")
-    parser.add_argument("config",default='config/standard_test.yaml', help="Path to YAML configuration file")
+    parser = argparse.ArgumentParser(description="spectral_galerkin_heat: Spectral Heat Equation Solver")
+    parser.add_argument("config",default='examples/01_quickstart.yaml', help="Path to YAML configuration file")
     parser.add_argument("--backend", default=None, choices=["cpu", "gpu", "cpu_linear"], help="Override backend (cpu/gpu/cpu_linear)")
     parser.add_argument("--viz", action="store_true", help="Force visualization after simulation")
     parser.add_argument("--no-viz", action="store_true", help="Disable automatic visualization")
@@ -102,7 +103,7 @@ def main():
 
     # 3. Build solver & workflow
     try:
-        logger.info(f"Solver selector: method='{context.method}', backend='{context.backend}'")
+        logger.info(f"Solver selector: backend='{context.backend}'")
         solver = build_solver(context)
         workflow = StandaloneHeatRunner(context, solver, config=config, yaml_path=yaml_path)
 
@@ -136,7 +137,9 @@ def main():
     viz_cfg = config.get('post_processing', {})
     
     
-    # Determine if we should visualize TODO : The function save_step already exports profiles and cut view, this is redundant (in workflow)
+    # Note: with the default IO settings, save_step already writes profiles and
+    # slices during the run, so this pass re-renders data that is already on
+    # disk. It is kept because it also works on a run whose IO was disabled.
     should_visualize = viz_cfg.get('auto_visualize', False)
     if args.viz:
         should_visualize = True
@@ -160,7 +163,7 @@ def main():
                      output_dir=run_dir
                  )
             except Exception as e:
-                 logger.error(f"Visualization failed: {str(e)}")
+                 logger.error(f"Visualization failed: {e!s}")
         else:
              logger.warning("Output directory not found or IOManager not active. Visualization skipped.")
 

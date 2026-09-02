@@ -1,0 +1,109 @@
+# Example 02: Single track with latent heat and convection
+#
+# Same single-track setup as example 01, but with two effects switched on that
+# example 01 disabled:
+#   - latent heat of fusion (L_f > 0): energy absorbed/released on melting,
+#   - surface convection (h_conv_bottom > 0): convective heat loss at the z=0
+#     bottom face (h_conv_top would set it on the laser-facing z=Lz face).
+# Material properties are still CONSTANT (reference 316L evaluated at T0 = 293 K);
+# example 03 makes them temperature-dependent. Runs on CPU in a few minutes.
+# 
+# Run:
+#   uv run python simulations/main.py simulations/examples/02_single_track.yaml
+
+simulation:
+  name: "single_track"
+  backend: "cpu"
+  duration:
+    value: 7.0e-4             # 0.7 ms; beam travels ~0.28 mm at 0.4 m/s.
+    unit: "s"
+  dt:
+    value: 5.0e-6             # => 140 steps.
+    unit: "s"
+  update_interval: 10
+
+domain:
+  size:
+    value: [0.6e-3, 0.4e-3, 0.15e-3]  # [Lx, Ly, Lz] in m (0.6 x 0.4 x 0.15 mm) — small box.
+    unit: "m"
+  mesh:
+    value: [80, 48, 120]              # dz ~ 1.25 um resolves the mushy zone.
+    unit: ""
+
+# OPTIONAL. Laser-following refined sub-box; latent heat is resolved on this
+# finer grid to sharpen the mushy-zone gradients. Omit the whole `fine_mesh`
+# section to evaluate latent heat on the coarse main grid instead (the default:
+# lower memory and faster, at coarser mushy-zone resolution). The box is centred
+# on the laser path; refinement is the number of fine cells per coarse cell per
+# axis, and box_size must enclose the melt pool.
+fine_mesh:
+  refinement: 2                          # fine cells per coarse cell, per axis.
+  box_size: [0.6e-3, 0.6e-3, 0.07e-3]   # [Lx, Ly, Lz] of the box, in metres.
+
+material:
+  name: "316L"
+  # Constant reference 316L properties at T0 = 293 K (same as example 01).
+  rho:
+    value: 7957.5
+    unit: "kg/m3"
+  k:
+    value: 13.851
+    unit: "W/(m.K)"
+  Cp:
+    value: 497.89
+    unit: "J/(kg.K)"
+  L_f:                        # Latent heat of fusion — ON in this example.
+    value: 2.677e5
+    unit: "J/kg"
+  T_solidus:
+    value: 1674.15
+    unit: "K"
+  T_liquidus:
+    value: 1697.15
+    unit: "K"
+  T0:
+    value: 293.0
+    unit: "K"
+  h_conv_bottom:              # Bottom-face convection — ON in this example.
+    value: 3000.0
+    unit: "W/(m2.K)"
+  DeltaH_LV:                  # Evaporative cooling (as in example 01).
+    value: 7.416e6
+    unit: "J/kg"
+  R_v:
+    value: 150.774
+    unit: "J/(kg.K)"
+  Pa:
+    value: 101325.0
+    unit: "Pa"
+  T_boil:
+    value: 3090.0
+    unit: "K"
+
+laser:
+  radius:
+    value: 60.0e-6
+    unit: "m"
+  absorptivity: 0.30
+  power_nominal:
+    value: 120.0
+    unit: "W"
+  path:
+    type: "gcode"
+    file: "example02_track.gcode"  
+
+io:
+  run_tag: "single_track"
+  output_interval: null
+  outputs: [full_volume]
+  at_end: [full_volume, slices, profiles]
+  profiles_locations:
+    - 'laser'
+  slice_planes:
+    - name: "longitudinal_section"
+      normal: "y"              # plane x-z: longitudinal melt-pool section.
+      width: 0.5e-3
+      height: 0.06e-3
+      
+      isotherms:
+        - ["T_s", 1674.15]

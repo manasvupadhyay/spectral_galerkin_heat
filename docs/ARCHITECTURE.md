@@ -8,11 +8,11 @@ avoided.
 ## Directory Structure
 
 ```text
-fastHeatSolv/
+spectral_galerkin_heat/
 ├── pyproject.toml                  # Package definition and dependencies
 ├── README.md
 ├── src/
-│   └── fast_heat_solv/
+│   └── spectral_galerkin_heat/
 │       ├── __init__.py             # Package version + public API
 │       ├── runner.py               # StandaloneHeatRunner: simulation loop orchestrator
 │       ├── core/
@@ -42,8 +42,8 @@ fastHeatSolv/
 |           ...
 ├── simulations/
 │   ├── main.py                     # CLI entry point: parses YAML, builds solver, runs simulation
-│   ├── example_orchestrator.py     # Library usage example (no I/O, frame-by-frame)
-│   └── config/                     # YAML configuration files + G-code paths
+│   └── examples/                   # Example YAML configs (increasing complexity) + orchestrator.py
+│       └── paths/                  # G-code laser paths for the examples
 └── docs/
     └── ARCHITECTURE.md
 ```
@@ -59,7 +59,7 @@ fastHeatSolv/
   all physics to the former and all I/O to the latter.
 
 - **Solver selector (`solvers/__init__.py`)**: `build_solver(context)` — a single
-  dispatch on `(method, backend)` that returns the configured `HeatSolver`. It
+  dispatch on `backend` that returns the configured `HeatSolver`. It
   replaces the former `SimulationFactory` hierarchy, which only ever differed in
   this one choice.
 
@@ -92,7 +92,7 @@ fastHeatSolv/
 The solver doesn't need a specific array library to run on. It only uses
 `backend.xp` (the array module) and `backend.kernels` (the math functions), and
 almost all the physics code already works with any NumPy-like `xp`. So a new
-backend is mostly plumbing — if needed an different backend, you need to supply four things:
+backend is mostly plumbing — supplying four things:
 
 **1. An array module `xp`.** It needs to behave like NumPy: `zeros`, `arange`,
 `exp`, `sum`, in-place writes (`multiply(..., out=)`, `a[0,0,0] = v`),
@@ -117,7 +117,7 @@ truly depend on the library:
 
 Keep the kernels working for both float32 and float64, and check your backend
 against the CPU one with `test_cpu_gpu_equivalence_e2e` in
-`tests/test_integration.py`.
+`tests/integration/test_pipeline.py`.
 
 ## Architecture Diagram
 

@@ -1,0 +1,123 @@
+# Example 01: Quickstart
+#
+# The simplest case: a single laser track on a small 316L cuboid at coarse
+# resolution with CONSTANT material properties. Latent heat of fusion and
+# surface convection are switched off (L_f = 0, h_conv_bottom = 0); only evaporative
+# losses are active. The laser path is a straight line along the x-axis.
+#
+# Run:    uv run python simulations/main.py simulations/examples/01_quickstart.yaml
+# Output: out/<timestamp>_quickstart/ (final volume field, slices and profiles)
+
+simulation:
+  name: "quickstart"          # Free-form label for the run.
+  backend: "cpu"              # "cpu" (default), "gpu" (needs CUDA + `uv sync --group gpu`),
+                              #   or "cpu_linear" (constant-property path).
+  # dtype: "float32"          # Working precision: "float32" (default) or "float64".
+  duration:                   # Total simulated physical time.
+    value: 4.0e-4             
+    unit: "s"
+  dt:                         # Fixed time step.
+    value: 5.0e-6             
+    unit: "s"
+  update_interval: 5          # Steps between progress/ETA log lines.
+
+domain:
+  size:
+    value: [0.003, 0.0025, 0.0005]  # [Lx, Ly, Lz] in metres (3 x 2.5 x 0.5 mm).
+    unit: "m"
+  mesh:
+    value: [64, 48, 24]             # [nx, ny, nz], coarse resolution.
+    unit: ""
+
+material:
+  name: "316L"
+  # Constant thermophysical properties: the reference 316L solid-branch
+  # polynomials evaluated at T0 = 293 K. Example 03 instead supplies the full
+  # temperature-dependent polynomial branches.
+  rho:                        # rho(293) = 8084.2 - 0.42086*293 - 3.8942e-5*293^2
+    value: 7957.5
+    unit: "kg/m3"
+  k:                          # k(293)   = 9.248 + 0.01571*293
+    value: 13.851
+    unit: "W/(m.K)"
+  Cp:                         # Cp(293)  = 458.98 + 0.1328*293
+    value: 497.89
+    unit: "J/(kg.K)"
+  L_f:                        # Latent heat of fusion. 0 here: no phase-change
+    value: 0.0
+    unit: "J/kg"
+  T_solidus:                  # Solidus / liquidus. Used for the melt
+    value: 1674.15            #   contour and, when L_f > 0, the latent-heat band.
+    unit: "K"
+  T_liquidus:
+    value: 1697.15
+    unit: "K"
+  T0:                         # Initial / ambient temperature.
+    value: 293.0
+    unit: "K"
+  h_conv_bottom:              # Convective loss at the z=0 face. 0 here: off.
+    value: 0.0
+    unit: "W/(m2.K)"
+# Evaporation constants
+  DeltaH_LV:                  # Latent heat of vaporization.
+    value: 7.416e6
+    unit: "J/kg"
+  R_v:                        # Specific gas constant of the vapour.
+    value: 150.774
+    unit: "J/(kg.K)"
+  Pa:                         # Ambient pressure.
+    value: 101325.0
+    unit: "Pa"
+  T_boil:                     # Boiling temperature.
+    value: 3090.0
+    unit: "K"
+
+laser:
+  radius:                     # Gaussian beam 1/e^2 radius.
+    value: 60.0e-6
+    unit: "m"
+  absorptivity: 0.30          # Absorbed power fraction (0-1, dimensionless scalar).
+  power_nominal:              # Nominal beam power (G-code S-values scale this).
+    value: 200.0
+    unit: "W"
+  # profile: "gaussian"       # Beam shape: "gaussian" (default) or "super_gaussian".
+  # r_x: 0.0                  # Elliptical beam radii [m]; 0 => circular using `radius`.
+  # r_y: 0.0
+  # super_gaussian_order: 2.0 # Super-Gaussian exponent (2.0 == Gaussian).
+  path:
+    type: "gcode"             # Path source. 
+    file: "linear_track.gcode"  # Resolved from simulations/examples/paths/.
+    # initial_position: [0.0, 0.0]  # Beam position before the path starts [m].
+
+io:
+  run_tag: "quickstart"       # Run dir is out/<timestamp>_<run_tag>/.
+  # output_root: "out"        # Base directory for run folders (default "out").
+  output_interval: null       # Steps between periodic volume dumps; null disables them.
+  outputs: [full_volume]      # Periodic output types: full_volume, modes, profiles, slices.
+  at_end: [full_volume, slices, profiles]  # Output types saved once, at the end.
+  profiles_locations:         # Where 1-D profiles are sampled.
+    - 'laser'                 #   'laser', 'hotspot', or an explicit [x, y] in metres.
+  slice_planes:               # Cut planes for the 2-D slice images.
+    - name: "longitudinal_section"    # `normal` is required;  all other keys default.
+      normal: "y"           #   normal    signed axis (x,-x,y,-y,z,-z). The plane
+      width: 0.5e-3         #   width     in-plane horizontal (h) extent [m].
+      height: 0.08e-3       #   height    in-plane vertical (v) extent [m].
+      offset_h: 0.0         #   offset_h  shift the cut centre along h [m].
+      offset_v: 0.0         #   offset_v  shift the cut centre along v [m].
+      isotherms:            #   isotherms named [name, temperature K] contours to draw.
+        - ["T_s", 1674.15]
+        - ["T_l", 1697.15]
+    - name: "surface_topview"
+      normal: "z"             # plane x-y, at the surface.
+      width: 0.5e-3
+      height: 0.3e-3
+      offset_h: -0.05e-3
+      offset_v: 0.0
+      isotherms:
+        - ["T_s", 1674.15]
+    - name: "transverse_section"
+      normal: "x"             # plane y-z.
+      width: 0.3e-3
+      height: 0.08e-3
+      isotherms:
+        - ["T_s", 1674.15]

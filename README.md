@@ -1,103 +1,89 @@
-# fastHeatSolv
+# spectral_galerkin_heat
 
-**A semi-analytical, modular solution for the heat equation with support for CPU/GPU backends and G-code-driven laser paths.**
+**A semi-analytical, modal solver for the fully nonlinear heat equation on cuboid domains, with CPU/GPU backends and G-code-driven laser paths.**
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-[**Read the full Sphinx Documentation**](https://theoadx.github.io/hsg-docs/) (or build locally via `make -C docs html`)
+This README file contains only the essential information required to be operational with this code. A more comprehensive documentation is presented in the [**full Sphinx Documentation**](https://theo-andrieux.github.io/sgh-docs/) (or build locally via `make -C docs html`)
 
 ---
 
-fastHeatSolv is a modular framework designed for efficiently simulating fully non-linear heat transfer in laser scanning based processing conditions such as laser surface treatments, additive manufacturing, etc. It uses semi-analytical spectral methods to achieve high performance on both CPU and GPU hardware, and fully supports complex laser trajectories.
+spectral_galerkin_heat solves the fully nonlinear heat transfer problem on cuboid domains, for laser-scanning processing conditions such as laser surface treatments and additive manufacturing. The heat equation is split into a linear constant-coefficient reference operator, integrated analytically in a spectral eigenbasis, and a nonlinear forcing term — temperature-dependent properties, latent heat, and the surface fluxes — resolved by a fixed-point iteration. This avoids the global algebraic solve of an implicit finite-element step.
+
+On the single-pass laser-scan benchmark it agrees with a high-fidelity finite-element reference to within 0.67% (relative $L^2$), running 6.2x faster on the same single CPU core despite using about an order of magnitude more degrees of freedom, and 227x faster on a GPU. See the [validation page](https://theo-andrieux.github.io/sgh-docs/validation.html) for the full comparison.
+
+## Quickstart
+
+spectral_galerkin_heat is installed from source; it is not published on PyPI. The recommended path uses the package and project manager [`uv`](https://github.com/astral-sh/uv), which creates an isolated environment and installs the dependencies. If `uv` is not installed, you can install it with `curl -LsSf https://astral.sh/uv/install.sh | sh`; see the [uv documentation](https://docs.astral.sh/uv/getting-started/installation/) for other ways.
+
+```bash
+# 1. Go to the local directory of your choice and download the code.
+git clone https://github.com/theo-andrieux/spectral_galerkin_heat.git
+# This creates a local directory spectral_galerkin_heat
+
+# Enter this directory
+cd spectral_galerkin_heat
+
+# 2. Install the virtual environment that contains all the libraries and dependencies needed to run the spectral_galerkin_heat code (creates .venv/ and installs dependencies). The environment is also called "spectral_galerkin_heat". Once this environment is installed, then the python compiler should recognize its existence. If it does not, then precede all your commands with 'uv' as shown below.
+uv sync             # CPU only
+uv sync --group gpu # GPU, requires CUDA 13.x
+
+# 3. Run the test example
+uv run python simulations/main.py simulations/examples/01_quickstart.yaml
+```
+
+`uv sync` makes `spectral_galerkin_heat` importable and `uv run` executes inside the managed environment,
+so no separate package-install step is required. Results are saved to `out/<timestamp>_<name>/` in
+HDF5/XDMF format.
 
 ## Usage
 
-`fastHeatSolv` can be used in two main ways: as a standalone simulation runner via CLI, or as an imported Python library.
+`spectral_galerkin_heat` can be used either as a standalone CLI runner (`simulations/main.py` driven by a
+`.yaml` config) or as an imported Python library (building a `SimulationContext` and calling
+`solver.step(...)` directly). Both are covered by the examples, ordered from a short run to a full
+non-linear case and then library mode:
 
-### 1. CLI Pipeline (Standalone)
+- **Examples**: [`simulations/examples/`](simulations/examples/), runnable configurations and the
+  library-mode `orchestrator.py`.
+- **Tutorial & configuration reference**: see the
+  [documentation](https://theo-andrieux.github.io/sgh-docs/) (`examples` and `configuration` pages).
 
-When interacting via the CLI, the solver uses `simulations/main.py` and is fully driven by a `.yaml` configuration file.
-
-This project uses [`uv`](https://uv.io) for fast environment management.
-
-```yaml
-# Example snippet: standard_test.yaml
-geom: {Lx: 0.01, Ly: 0.01, Lz: 0.005}
-num: {dt: 1.0e-4, nx: 32, ny: 32, nz: 16, t_end: 0.01}
-mat: {name: "Ti6Al4V", rho: 4420.0, k: 25.0, Cp: 650.0}
-laser: {radius: 60.0e-6, absorptivity: 0.30, power_nominal: 200.0, path: {type: "gcode", file: "track.gcode"}}
-io: {interval: 0.001, outputs: [full_volume]}
-```
-
-```bash
-# Clone the repository
-git clone https://github.com/TheoADX/fastHeatSolv.git
-cd fastHeatSolv
-
-# Install the standard CPU environment
-uv sync
-
-# Run the standard test simulation
-uv run python simulations/main.py simulations/config/standard_test.yaml
-```
-
-*Results are automatically saved to `out/<timestamp>_<tag>/` with HDF5/XDMF formats.*
-
-### 2. Library Integration
-
-You can import `fastHeatSolv` as a library. 
-
-In this mode, you pass a dictionary into `SimulationContext.from_dict(...)` and drive the steps directly.
-
-Here is a brief demonstration (see `simulations/example_orchestrator.py` for the full script):
-
-```python
-from fast_heat_solv.core.parameters import SimulationContext
-from fast_heat_solv.solvers.spectral import SpectralSolver
-from fast_heat_solv.backends import NumpyBackend
-
-config = {
-    "simulation": { "method": "spectral", "backend": "cpu", "dt": 6e-6, "duration": 6e-5 },
-    "domain": { "size": [0.01, 0.005, 0.0025], "mesh": [64, 32, 16] },
-    "material": { "rho": 7850.0, "k": 15.0, "Cp": 500.0, "name": "316L" },
-    "laser": { "radius": 60.0e-6, "absorptivity": 0.30, "power_nominal": 200.0, 
-               "path": { "type": "gcode", "file": "linear_track.gcode" } },
-    "io": {}, # Empty: No I/O involvement
-}
-
-# 1. Build the context
-context = SimulationContext.from_dict(config)
-
-# 2. Instantiate and initialize the solver
-solver = SpectralSolver(NumpyBackend())   # use get_backend("cupy") for GPU
-state = solver.initialize(context)
-
-# 3. Time loop
-t, dt = 0.0, context.num.dt
-while t < context.num.t_end:
-    state, metrics = solver.step(t, dt)
-    t += dt
-```
 
 ## Installation & Environments
 
-Depending on your hardware, you can request `uv` to install different dependency groups:
+### Prerequisites
 
-- **CPU Core (Recommended)**: `uv sync`
-- **GPU Backend**: `uv sync --group gpu` *(Requires CUDA 12.x)*
-- **Visualization**: `uv sync --group viz`
-- **Docs**: `uv sync --group docs`
-- **Everything**: `uv sync --all-groups`
+- **Python 3.12 or newer.**
+- **[`uv`](https://github.com/astral-sh/uv)** (recommended): manages the virtual environment and
+  dependencies. Plain `pip` also works (see below).
+- **For the GPU backend only:** an NVIDIA GPU with the **CUDA 13.x** toolkit installed
+  system-wide (the CPU backend needs nothing extra).
 
-To build the documentation locally:
+### Optional dependency groups
+
+`uv sync` installs the CPU core. Add hardware- or task-specific extras with `--group`:
+
+| Command | Adds |
+| --- | --- |
+| `uv sync` | CPU core (default; sufficient to run the examples) |
+| `uv sync --group gpu` | CuPy GPU backend *(requires system CUDA 13.x)* |
+| `uv sync --group docs` | Sphinx toolchain to build the docs |
+| `uv sync --group dev` | Test + lint tooling (`pytest`, `ruff`) |
+| `uv sync --all-groups` | Everything above |
+
+Build the documentation locally:
 ```bash
-uv run make -C docs html
-# Output: docs/_build/html/index.html
+uv sync --group docs
+uv run make -C docs html      # Output: docs/_build/html/index.html
 ```
 
-Alternatively, you can install the package in editable mode using standard `pip`:
+### Installing with pip instead of uv
+
+If you prefer a manually managed environment, install the package in editable mode from the repo
+root:
 ```bash
-python -m pip install -e .
-python -m pip install -e ".[gpu]"  # With GPU support
+python -m pip install -e .            # CPU core
+python -m pip install -e ".[gpu]"     # + GPU backend (needs system CUDA 13.x)
+python -m pip install -e ".[docs]"    # + docs toolchain
 ```
 
 ## Citation
@@ -111,5 +97,5 @@ If you use this code in your research, please cite:
 This project is licensed under the Apache License, Version 2.0. 
 See the [LICENSE](LICENSE) file for the full text.
 
-Copyright © 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique.
+Copyright © 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, Route de Saclay, Palaiseau, 91128, France.
 

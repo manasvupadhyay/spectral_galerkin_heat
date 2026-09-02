@@ -1,9 +1,29 @@
 [project]
-name = "fastheatsolv"
-version = "0.1.0"
+name = "spectral_galerkin_heat"
+dynamic = ["version"]
 description = "A fast solver for the heat equation using spectral methods and GPU acceleration."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Théo Andrieux", email = "theo.andrieux@polytechnique.edu" },
+    { name = "Jules Dichamp" },
+    { name = "Manas V. Upadhyay" },
+]
+keywords = [
+    "heat-equation", "spectral-method", "additive-manufacturing",
+    "laser-processing", "gpu", "thermal-simulation",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
 dependencies = [
     "h5py>=3.16.0",
     "matplotlib>=3.10.8",
@@ -12,7 +32,14 @@ dependencies = [
     "pyfftw>=0.15.1",
     "pyyaml>=6.0.3",
     "scipy>=1.17.1",
+    "pint>=0.23",
 ]
+
+[project.urls]
+Homepage = "https://github.com/theo-andrieux/spectral_galerkin_heat"
+Repository = "https://github.com/theo-andrieux/spectral_galerkin_heat"
+Documentation = "https://theo-andrieux.github.io/sgh-docs/"
+Issues = "https://github.com/theo-andrieux/spectral_galerkin_heat/issues"
 
 
 #Install with:
@@ -27,32 +54,17 @@ dependencies = [
 gpu = [
     "cupy-cuda13x>=14.1.1",
 ]
-viz = [
-    "matplotlib>=3.10.8",
-]
-docs = [
-    "sphinx>=8.1.3",
-    "sphinx-rtd-theme>=3.0.1",
-    "myst-parser>=4.0.0",
-    "sphinx-design>=0.6.1",
-]
-dev = [
-    "black>=26.3.1",
-    "isort>=8.0.1",
-    "pre-commit>=4.5.1",
-    "pytest>=9.0.2",
-]
-
-
-#Required for `uv` install:
-#uv sync --group gpu --group viz --group dev
-[dependency-groups]
-# See note above: CUDA 13.x math libs / NVRTC / NVVM come from system CUDA 13.2.
-gpu = [
-    "cupy-cuda13x>=14.1.1",
-]
-viz = [
-    "matplotlib>=3.10.8",
+# FE cross-validation (tests/integration/test_fenics.py). FEniCSx/dolfinx and the
+# gmsh Python API are conda-only (no usable PyPI wheels for dolfinx) — install via
+# conda-forge, NOT pip.
+#   conda install -c conda-forge fenics-dolfinx=0.9.0 fenics-basix=0.9.0 \
+#       fenics-ffcx=0.9.0 fenics-ufl=2024.2.0 mpi4py petsc4py
+#   pip install gmsh   # (pure-python wheel; pulls the gmsh SDK)
+# The listing here documents the requirement; `pip install .[fenics]` only covers
+# the pip-installable pieces (gmsh).
+fenics = [
+    "gmsh>=4.13",
+    "fenics-ufl>=2024.2.0",
 ]
 docs = [
     "sphinx>=8.1.3",
@@ -63,10 +75,33 @@ docs = [
     "sphinx-design>=0.6.1",
 ]
 dev = [
-    "black>=26.3.1",
-    "isort>=8.0.1",
-    "pre-commit>=4.5.1",
+    # ruff is the configured linter and import sorter: see [tool.ruff] below.
+    "ruff>=0.9",
     "pytest>=9.0.2",
+    "pytest-cov>=7.1.0",
+]
+
+
+#Required for `uv` install, different than the pip part:
+#uv sync --group gpu --group dev
+[dependency-groups]
+# See note above: CUDA 13.x math libs / NVRTC / NVVM come from system CUDA 13.2.
+gpu = [
+    "cupy-cuda13x>=14.1.1",
+]
+docs = [
+    "sphinx>=8.1.3",
+    "sphinx-rtd-theme>=3.0.1",
+    "myst-parser>=4.0.0",
+    "sphinxcontrib-mermaid>=2.0.1",
+    "sphinx-autoapi>=3.8.0",
+    "sphinx-design>=0.6.1",
+]
+dev = [
+    # ruff is the configured linter and import sorter: see [tool.ruff] below.
+    "ruff>=0.9",
+    "pytest>=9.0.2",
+    "pytest-cov>=7.1.0",
 ]
 
 
@@ -74,14 +109,69 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Single source of truth for the version: src/spectral_galerkin_heat/__init__.py.
+# setuptools reads the literal statically (no import, so no build-time numpy),
+# and everything else -- the docs, CITATION.cff -- derives from the installed
+# metadata. Bump it in that one place only.
+[tool.setuptools.dynamic]
+version = {attr = "spectral_galerkin_heat.__version__"}
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["docs/_build"]
+
+[tool.ruff.lint]
+# Deliberately not the full default set. These are the rules whose violations
+# are real in this codebase; style rules that would fight the numerics notation
+# (single-letter names for tensors and modes, unicode in docstrings) stay off.
+select = [
+    "F",      # pyflakes: unused imports/variables, undefined names
+    "E4", "E7", "E9",  # pycodestyle errors, minus line-length (E501)
+    "I",      # import sorting
+    "UP",     # pyupgrade: the project is >=3.12, so use modern syntax
+    "B",      # bugbear
+    "C4",     # comprehensions
+    "PIE",
+    "RUF",
+]
+ignore = [
+    # Blind `except Exception` is deliberate in the runner's environment probes
+    # and the IO fallbacks: each assigns a documented fallback or logs, and a
+    # telemetry failure must never abort a solve.
+    "BLE001",
+    # Loop variables shadowing is idiomatic in the kernel index math here.
+    "B007",
+    # Physics notation in docstrings and comments is intentional: nabla, rho,
+    # bar, times, micro, subscripts. Flagging it as "ambiguous unicode" would
+    # mean writing the maths in ASCII.
+    "RUF001", "RUF002", "RUF003",
+    # __all__ is grouped by category with section comments; sorting it
+    # alphabetically would lose that structure.
+    "RUF022",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests bind fixtures and build configs in ways these rules mis-flag.
+"tests/**" = ["F811", "B011"]
+# The example orchestrator is didactic: it puts the repo root on sys.path
+# before importing the package, and keeps each numbered step's imports next to
+# the step that uses them. Both are deliberate, so E402 does not apply.
+"simulations/examples/orchestrator.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["spectral_galerkin_heat"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--import-mode=importlib", "-m", "not integration"]
 markers = [
-    "integration: full simulation pipeline tests (slow — run with pytest -m integration)",
+    "integration: full simulation pipeline tests (slow, run with pytest -m integration)",
+    "gpu: requires CuPy and a CUDA device (auto-skipped otherwise)",
+    "fenics: requires FEniCS/dolfinx for FE cross-validation (importorskip otherwise)",
+    "slow: heavy unit tests (e.g. numba JIT warm-up) kept in the default suite but flagged",
 ]
-#have to be decided if skipping integreation default
 
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"

@@ -1,12 +1,6 @@
 # Installation
 
-```{admonition} The code is not yet public
-:class: important
-
-A public release is coming soon — see {doc}`status`. The steps below apply once you have access.
-```
-
-fastHeatSolv uses [uv](https://github.com/astral-sh/uv) to manage its environment.
+spectral_galerkin_heat uses [uv](https://github.com/astral-sh/uv) to manage its environment.
 
 ## Prerequisites
 
@@ -19,15 +13,11 @@ fastHeatSolv uses [uv](https://github.com/astral-sh/uv) to manage its environmen
 
 ## Installing the Project
 
-<!-- TODO: restore the clone step once the repository is public.
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/Andrieux-LMS/spectral-galerkin-AM.git
-   cd spectral-galerkin-AM
+   git clone https://github.com/theo-andrieux/spectral_galerkin_heat.git
+   cd spectral_galerkin_heat
    ```
--->
-
-1. **Enter the project directory.**
 
 2. **Sync the environment (CPU):**
    ```bash
@@ -49,9 +39,11 @@ The project is driven by YAML configuration files.
 # General invocation
 uv run python simulations/main.py <path_to_config.yaml>
 
-# Run the standard test simulation
-uv run python simulations/main.py simulations/config/standard_test.yaml
+# Run the quickstart example (finishes in seconds)
+uv run python simulations/main.py simulations/examples/01_quickstart.yaml
 ```
+
+See {doc}`examples` for the full walkthrough of the examples.
 
 ## Building the Documentation
 

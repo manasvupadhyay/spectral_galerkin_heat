@@ -1,0 +1,109 @@
+"""Backend registry: map names to backend factories and resolve them.
+
+The registry keeps the *catalog* of available backends separate from the
+solver code that uses them. New backends register themselves with the
+:func:`register_backend` decorator (or by inserting a factory directly), so
+adding one never requires editing :func:`get_backend`.
+"""
+
+# Copyright 2026 Laboratoire de Mécanique des Solides (LMS),
+# École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris,
+# Route de Saclay, Palaiseau, 91128, France.
+#
+# Author: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+__author__ = "Théo Andrieux, Jules Dichamp, Manas V. Upadhyay"
+__copyright__ = "Copyright 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris"
+
+from collections.abc import Callable
+from typing import TypeVar
+
+from .base import MathBackend
+
+# Maps a backend name to a zero-argument factory returning a fresh instance.
+# A *factory* (rather than a class) is stored so that optional backends can
+# defer their imports until requested (see the lazy CuPy registration in
+# ``backends/__init__.py``).
+_BACKEND_FACTORIES: dict[str, Callable[[], MathBackend]] = {}
+
+F = TypeVar("F", bound=Callable[[], MathBackend])
+
+
+def register_backend(name: str) -> Callable[[F], F]:
+    """Register a backend factory under *name*.
+
+    Decorates a :class:`MathBackend` subclass (the class is itself a
+    zero-argument factory) or a plain factory function::
+
+        @register_backend("numpy")
+        class NumpyBackend(MathBackend):
+            ...
+
+    Parameters
+    ----------
+    name : str
+        Key :func:`get_backend` looks the backend up by.
+
+    Returns
+    -------
+    Callable
+        A decorator that registers its argument and returns it unchanged.
+
+    Raises
+    ------
+    ValueError
+        If *name* is already registered.
+    """
+
+    def decorator(factory: F) -> F:
+        if name in _BACKEND_FACTORIES:
+            raise ValueError(
+                f"Backend {name!r} is already registered "
+                f"({_BACKEND_FACTORIES[name]!r}); cannot overwrite it."
+            )
+        _BACKEND_FACTORIES[name] = factory
+        return factory
+
+    return decorator
+
+
+def get_backend(name: str = "numpy") -> MathBackend:
+    """Return a fresh backend instance by registered name.
+
+    Parameters
+    ----------
+    name : str, optional
+        ``"numpy"`` for CPU, ``"cupy"`` for GPU. Defaults to ``"numpy"``.
+
+    Returns
+    -------
+    MathBackend
+        A new instance of the requested backend.
+
+    Raises
+    ------
+    ValueError
+        If no backend is registered under *name*.
+    ImportError
+        If the backend is registered but its optional dependency is missing.
+    """
+    factory = _BACKEND_FACTORIES.get(name)
+    if factory is None:
+        available = ", ".join(sorted(_BACKEND_FACTORIES)) or "(none)"
+        raise ValueError(
+            f"Unknown backend: {name!r}. Registered backends: {available}."
+        )
+    return factory()
