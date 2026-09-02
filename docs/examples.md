@@ -1,8 +1,8 @@
 # Examples
 
 The examples are YAML configurations run through `simulations/main.py`. They are ordered by
-increasing complexity — constant properties, then latent heat, then temperature-dependent
-properties — and close with library-mode usage. Reading them in order is recommended.
+increasing complexity: constant properties, then latent heat, then temperature-dependent
+properties. This page close with library-mode usage. Reading them in order is recommended.
 
 All commands are issued from the repository root with [`uv`](https://github.com/astral-sh/uv):
 
@@ -96,11 +96,15 @@ contour marks the solidus/liquidus.
 {download}`02_single_track.yaml <../simulations/examples/02_single_track.yaml>` adds the two
 effects that example 1 omits: latent heat of fusion (`L_f`) and bottom-face convection
 (`h_conv_bottom`).
-Properties remain constant (the reference 316L values used by the spectral-Galerkin solver).
-The domain is small with a fine $z$-grid ($\Delta z \approx 1.25\ \mu\text{m}$) so the narrow 316L
-mushy zone is resolved. The run takes a few minutes on one CPU core.
+Properties remain constant, obtained by evaluating the temperature-dependent 316L polynomials at
+$T_0 = 293$ K. The domain is small with a fine $z$-grid ($\Delta z \approx 1.25\ \mu\text{m}$) so
+the narrow 316L mushy zone is resolved. The run takes a few minutes on one CPU core.
 
-<!-- TODO: cite the spectral-Galerkin solver paper for the 316L property values once published -->
+```{note}
+The 316L thermophysical properties used in these examples ($\rho$, $k$, $c_p$, with separate
+solid and liquid branches) are taken from Chadwick et al., *Acta Materialia* **282** (2025) 120482,
+[doi:10.1016/j.actamat.2024.120482](https://doi.org/10.1016/j.actamat.2024.120482).
+```
 
 
 

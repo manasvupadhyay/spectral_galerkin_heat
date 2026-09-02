@@ -1,13 +1,14 @@
 spectral_galerkin_heat Documentation
 ====================================
 
-**A fast spectral-Galerkin solver for the non-linear heat equation in metal additive manufacturing.**
+**A semi-analytical Spectral Galerkin model for efficiently solving the nonlinear heat equation on a fixed cuboid domain.**
 
-spectral_galerkin_heat resolves the transient thermal field of a scanning laser — including phase change,
-evaporative cooling, and convection — on cuboid domains, driving the laser directly from G-code.
-By integrating the linear diffusion exactly in a spectral eigenbasis and confining the
-non-linear work to the boundary and the melt pool, it reaches finite-element fidelity while
-running on both CPU and GPU backends.
+spectral_galerkin_heat resolves the transient thermal field of a scanning laser including phase change,
+evaporative cooling, and convection on cuboid domains. It drives the laser heat source directly from G-code.
+Linear diffusion is integrated analytically in a spectral eigenbasis, which removes the global
+algebraic solve of an implicit finite-element step and is implemented for CPU and GPU. On a 
+single-pass laser scan it agrees with a high-fidelity finite-element reference
+to within 0.67% in relative :math:`L^2` error (see :doc:`validation`).
 
 .. figure:: _images/fig_lines_2.png
    :alt: Simulation of a laser path with spectral_galerkin_heat
@@ -20,8 +21,8 @@ running on both CPU and GPU backends.
    :class: tip
 
    Start with the :doc:`theory` (how the method works) and the :doc:`validation`
-   (how it compares against analytical, finite-element, and published references). The
-   :doc:`examples` then proceed from a short quickstart to a full non-linear run. See
+   (how it compares against analytical, finite-element, and existing work). The
+   :doc:`examples` then proceed from a short tutorial to a full non-linear run. See
    :doc:`installation` to get the code.
 
 .. toctree::

@@ -1,13 +1,15 @@
 # spectral_galerkin_heat
 
-**A semi-analytical, uncoupled, modal solution for the fully nonlinear heat equation with support for CPU/GPU backends and G-code-driven laser paths.**
+**A semi-analytical, modal solver for the fully nonlinear heat equation on cuboid domains, with CPU/GPU backends and G-code-driven laser paths.**
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 This README file contains only the essential information required to be operational with this code. A more comprehensive documentation is presented in the [**full Sphinx Documentation**](https://theo-andrieux.github.io/sgh-docs/) (or build locally via `make -C docs html`)
 
 ---
 
-spectral_galerkin_heat is a modal solver designed for efficiently simulating the fully nonlinear heat transfer problem on cuboid domains. It uses semi-analytical spectral methods to achieve significantly higher performance than finite element models on both CPU and GPU hardware, without losing accuracy.
+spectral_galerkin_heat solves the fully nonlinear heat transfer problem on cuboid domains. The heat equation is split into a linear constant-coefficient reference operator, integrated analytically in a spectral eigenbasis, and a nonlinear forcing term — temperature-dependent properties, latent heat, and the surface fluxes — resolved by a fixed-point iteration. This avoids the global algebraic solve of an implicit finite-element step.
+
+On the single-pass laser-scan benchmark it agrees with a high-fidelity finite-element reference to within 0.67% (relative $L^2$), running 6.2x faster on the same single CPU core despite using about an order of magnitude more degrees of freedom, and 227x faster on a GPU. See the [validation page](https://theo-andrieux.github.io/sgh-docs/validation.html) for the full comparison.
 
 ## Quickstart
 

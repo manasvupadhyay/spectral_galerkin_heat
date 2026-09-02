@@ -13,4 +13,4 @@ Authors: Théo Andrieux, Jules Dichamp, Manas V. Upadhyay.
 
 ## License
 
-The code will be released under the Apache License 2.0. See {doc}`status` for availability.
+The code is released under the Apache License 2.0. See {doc}`status` for availability.
