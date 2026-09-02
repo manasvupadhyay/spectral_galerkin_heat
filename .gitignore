@@ -25,3 +25,7 @@ htmlcov/
 
 # Virtual environment
 .venv/
+
+# Build artifacts
+build/
+dist/

@@ -7,7 +7,7 @@ This README file contains only the essential information required to be operatio
 
 ---
 
-spectral_galerkin_heat solves the fully nonlinear heat transfer problem on cuboid domains. The heat equation is split into a linear constant-coefficient reference operator, integrated analytically in a spectral eigenbasis, and a nonlinear forcing term — temperature-dependent properties, latent heat, and the surface fluxes — resolved by a fixed-point iteration. This avoids the global algebraic solve of an implicit finite-element step.
+spectral_galerkin_heat solves the fully nonlinear heat transfer problem on cuboid domains, for laser-scanning processing conditions such as laser surface treatments and additive manufacturing. The heat equation is split into a linear constant-coefficient reference operator, integrated analytically in a spectral eigenbasis, and a nonlinear forcing term — temperature-dependent properties, latent heat, and the surface fluxes — resolved by a fixed-point iteration. This avoids the global algebraic solve of an implicit finite-element step.
 
 On the single-pass laser-scan benchmark it agrees with a high-fidelity finite-element reference to within 0.67% (relative $L^2$), running 6.2x faster on the same single CPU core despite using about an order of magnitude more degrees of freedom, and 227x faster on a GPU. See the [validation page](https://theo-andrieux.github.io/sgh-docs/validation.html) for the full comparison.
 
