@@ -336,8 +336,7 @@ def _plot_meltpool(U, V, T_grid, xlabel, ylabel, isotherms, title, output_file):
         ax.quiver(U[skip], V[skip], dU_norm[skip], dV_norm[skip], 
                   color='black', alpha=0.5, scale=20, width=0.002)
     except Exception as e:
-        logger.warning("Could not plot gradients: %s", e)
-        print("Warning: Gradient plotting failed, skipping this step.")
+        logger.warning("Could not plot gradients, skipping this step: %s", e)
 
     # 4. Styling
     ax.set_aspect('equal')

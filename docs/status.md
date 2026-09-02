@@ -1,6 +1,6 @@
 # Status & Access
 
-**Version:** 0.1.0
+**Version:** {{ version }}
 
 ## Code availability
 

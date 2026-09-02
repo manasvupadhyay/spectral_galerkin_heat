@@ -508,8 +508,8 @@ def _save_field_to_hdf5(filename_base, field, grid_coords, value_name="Field", v
     builder.write(xmf_name)
 
     if verbose:
-        print(f"Saved debug files: {xmf_name} (Open this in Paraview)")
-        
+        logger.info("Saved debug files: %s (open this in ParaView)", xmf_name)
+
     return {
         'time': t,
         'step': step,

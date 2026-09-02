@@ -37,6 +37,9 @@ phase change and evaporation.
 - **Runner**: :class:`~spectral_galerkin_heat.runner.StandaloneHeatRunner`
 """
 
+# Canonical version for the whole project: pyproject.toml reads this attribute
+# via [tool.setuptools.dynamic], and the docs read it back from the installed
+# package metadata. Bump here and nowhere else.
 __version__ = "0.1.0"
 
 from .backends import (

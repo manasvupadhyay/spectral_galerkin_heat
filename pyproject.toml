@@ -1,6 +1,6 @@
 [project]
 name = "spectral_galerkin_heat"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A fast solver for the heat equation using spectral methods and GPU acceleration."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -38,7 +38,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/theo-andrieux/spectral_galerkin_heat"
 Repository = "https://github.com/theo-andrieux/spectral_galerkin_heat"
-Documentation = "https://theo-andrieux.github.io/hsg-docs/"
+Documentation = "https://theo-andrieux.github.io/sgh-docs/"
 Issues = "https://github.com/theo-andrieux/spectral_galerkin_heat/issues"
 
 
@@ -108,6 +108,13 @@ dev = [
 #Path to the library source code
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# Single source of truth for the version: src/spectral_galerkin_heat/__init__.py.
+# setuptools reads the literal statically (no import, so no build-time numpy),
+# and everything else -- the docs, CITATION.cff -- derives from the installed
+# metadata. Bump it in that one place only.
+[tool.setuptools.dynamic]
+version = {attr = "spectral_galerkin_heat.__version__"}
 
 [tool.ruff]
 line-length = 100

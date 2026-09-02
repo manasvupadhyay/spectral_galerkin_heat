@@ -3,7 +3,7 @@
 **A semi-analytical, uncoupled, modal solution for the fully nonlinear heat equation with support for CPU/GPU backends and G-code-driven laser paths.**
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-This README file contains only the essential information required to be operational with this code. A more comprehensive documentation is presented in the [**full Sphinx Documentation**](https://theo-andrieux.github.io/hsg-docs/) (or build locally via `make -C docs html`)
+This README file contains only the essential information required to be operational with this code. A more comprehensive documentation is presented in the [**full Sphinx Documentation**](https://theo-andrieux.github.io/sgh-docs/) (or build locally via `make -C docs html`)
 
 ---
 
@@ -43,7 +43,7 @@ non-linear case and then library mode:
 - **Examples**: [`simulations/examples/`](simulations/examples/), runnable configurations and the
   library-mode `orchestrator.py`.
 - **Tutorial & configuration reference**: see the
-  [documentation](https://theo-andrieux.github.io/hsg-docs/) (`examples` and `configuration` pages).
+  [documentation](https://theo-andrieux.github.io/sgh-docs/) (`examples` and `configuration` pages).
 
 
 ## Installation & Environments
