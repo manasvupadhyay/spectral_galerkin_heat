@@ -3,6 +3,13 @@
 **A semi-analytical, modal solver for the fully nonlinear heat equation on cuboid domains, with CPU/GPU backends and G-code-driven laser paths.**
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+## Developers
+
+Théo Andrieux (Ecole Polytechnique, France)
+Manas V. Upadhyay (Ecole Polytechnique, France)
+
+## Summary
+
 This README file contains only the essential information required to be operational with this code. A more comprehensive documentation is presented in the [**full Sphinx Documentation**](https://theo-andrieux.github.io/sgh-docs/) (or build locally via `make -C docs html`)
 
 ---
@@ -90,7 +97,7 @@ python -m pip install -e ".[docs]"    # + docs toolchain
 
 If you use this code in your research, please cite:
 
-*(Citation to be added)*
+*T. Andrieux, A. Ntinos, M. V. Upadhyay, Efficient spectral Galerkin framework for nonlinear transient heat transfer in finite domains, https://arxiv.org/abs/2609.22268*
 
 ## License
 
