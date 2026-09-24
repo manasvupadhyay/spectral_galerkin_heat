@@ -5,8 +5,13 @@
 
 ## Developers
 
-Théo Andrieux (Ecole Polytechnique, France)
-Manas V. Upadhyay (Ecole Polytechnique, France)
+*(Main developer)* Théo Andrieux
+
+Manas V. Upadhyay
+
+## Affiliation
+
+Laboratoire de Mécanique des Solides (LMS), École Polytechnique, Institut Polytechnique de Paris, CNRS UMR 7649, Route de Saclay, 91128 Palaiseau, France.
 
 ## Summary
 
@@ -106,3 +111,6 @@ See the [LICENSE](LICENSE) file for the full text.
 
 Copyright © 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, Route de Saclay, Palaiseau, 91128, France.
 
+## Acknowledgement
+
+This work was supported by the Agence de l’innovation de défense – AID – via Centre Interdisciplinaire d’Etudes pour la Défense et la Sécurité – CIEDS (project 2025 - LaserSurf)
