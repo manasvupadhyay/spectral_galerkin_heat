@@ -5,8 +5,7 @@
 
 ## Developers
 
-*(Main developer)* Théo Andrieux
-
+*(Main developer)* Théo Andrieux \
 Manas V. Upadhyay
 
 ## Affiliation
