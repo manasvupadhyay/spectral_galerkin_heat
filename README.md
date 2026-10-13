@@ -3,6 +3,16 @@
 **A semi-analytical, modal solver for the fully nonlinear heat equation on cuboid domains, with CPU/GPU backends and G-code-driven laser paths.**
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+## Citation
+
+If you use this code in your research, please cite:
+
+*T. Andrieux, A. Ntinos, M. V. Upadhyay, Efficient spectral Galerkin framework for nonlinear transient heat transfer in finite domains, https://arxiv.org/abs/2609.22268*
+
+## Zenodo DOI
+
+https://doi.org/10.5281/zenodo.23343133
+
 ## Developers
 
 *(Main developer)* Théo Andrieux \
@@ -96,12 +106,6 @@ python -m pip install -e .            # CPU core
 python -m pip install -e ".[gpu]"     # + GPU backend (needs system CUDA 13.x)
 python -m pip install -e ".[docs]"    # + docs toolchain
 ```
-
-## Citation
-
-If you use this code in your research, please cite:
-
-*T. Andrieux, A. Ntinos, M. V. Upadhyay, Efficient spectral Galerkin framework for nonlinear transient heat transfer in finite domains, https://arxiv.org/abs/2609.22268*
 
 ## License
 
