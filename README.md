@@ -1,123 +1,131 @@
 # spectral_galerkin_heat
 
 **A semi-analytical, modal solver for the fully nonlinear heat equation on cuboid domains, with CPU/GPU backends and G-code-driven laser paths.**
+
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23343134.svg)](https://doi.org/10.5281/zenodo.23343134)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23343133.svg)](https://doi.org/10.5281/zenodo.23343133)
 [![arXiv](https://img.shields.io/badge/arXiv-2609.22268-b31b1b.svg)](https://arxiv.org/abs/2609.22268)
 [![Docs](https://img.shields.io/badge/docs-sgh--docs-blue.svg)](https://theo-andrieux.github.io/sgh-docs/)
 
-## Citation
+<p align="center">
+  <img src="docs/_images/sg_track.gif" width="640" alt="Laser scan simulated with the spectral Galerkin solver: melt pool moving along the track, with the computation clock and temperature scale">
+  <br>
+  <em>A laser scan simulated with spectral_galerkin_heat; the clock shows the computation time on one GPU.</em>
+</p>
 
-If you use this code in your research, please cite:
+- **Accurate:** within 0.67% (relative $L^2$) of a high-fidelity finite element reference on a single-pass laser scan.
+- **Fast:** 6.2× faster than finite elements on the same single CPU core, with about ten times more degrees of freedom; **227× faster on a GPU**.
+- **Fully nonlinear:** temperature-dependent properties, latent heat, evaporation and surface fluxes.
 
-*T. Andrieux, A. Ntinos, M. V. Upadhyay, Efficient spectral Galerkin framework for nonlinear transient heat transfer in finite domains, https://arxiv.org/abs/2609.22268*
+## What it does
 
-## Zenodo DOI
+`spectral_galerkin_heat` solves transient heat transfer on cuboid domains under laser scanning, as in laser surface treatment and metal additive manufacturing. The heat equation is split into a linear, constant-coefficient reference operator, integrated analytically in a spectral eigenbasis, and a nonlinear forcing term (temperature-dependent properties, latent heat, surface fluxes) resolved by fixed-point iteration. This avoids the global algebraic solve of an implicit finite element step, and maps naturally onto GPUs.
 
-Version 1.0.0: https://doi.org/10.5281/zenodo.23343134 \
-All versions (always resolves to the latest): https://doi.org/10.5281/zenodo.23343133
+- Laser paths read directly from G-code
+- CPU (NumPy) and GPU (CuPy) backends
+- Results written as HDF5/XDMF, ready for ParaView
 
-## Developers
-
-*(Main developer)* Théo Andrieux ([theo-andrieux.com](https://theo-andrieux.com/pages/spectral-galerkin)) \
-Manas V. Upadhyay
-
-## Affiliation
-
-Laboratoire de Mécanique des Solides (LMS), École Polytechnique, Institut Polytechnique de Paris, CNRS UMR 7649, Route de Saclay, 91128 Palaiseau, France.
-
-## Summary
-
-This README file contains only the essential information required to be operational with this code. A more comprehensive documentation is presented in the [**full Sphinx Documentation**](https://theo-andrieux.github.io/sgh-docs/) (or build locally via `make -C docs html`)
-
----
-
-spectral_galerkin_heat solves the fully nonlinear heat transfer problem on cuboid domains, for laser-scanning processing conditions such as laser surface treatments and additive manufacturing. The heat equation is split into a linear constant-coefficient reference operator, integrated analytically in a spectral eigenbasis, and a nonlinear forcing term — temperature-dependent properties, latent heat, and the surface fluxes — resolved by a fixed-point iteration. This avoids the global algebraic solve of an implicit finite-element step.
-
-On the single-pass laser-scan benchmark it agrees with a high-fidelity finite-element reference to within 0.67% (relative $L^2$), running 6.2x faster on the same single CPU core despite using about an order of magnitude more degrees of freedom, and 227x faster on a GPU. See the [validation page](https://theo-andrieux.github.io/sgh-docs/validation.html) for the full comparison.
+The [validation page](https://theo-andrieux.github.io/sgh-docs/validation.html) has the full comparison with finite elements, and the [theory page](https://theo-andrieux.github.io/sgh-docs/theory.html) the derivation.
 
 ## Quickstart
 
-spectral_galerkin_heat is installed from source; it is not published on PyPI. The recommended path uses the package and project manager [`uv`](https://github.com/astral-sh/uv), which creates an isolated environment and installs the dependencies. If `uv` is not installed, you can install it with `curl -LsSf https://astral.sh/uv/install.sh | sh`; see the [uv documentation](https://docs.astral.sh/uv/getting-started/installation/) for other ways.
+The code is installed from source (it is not on PyPI). The recommended tool is [`uv`](https://github.com/astral-sh/uv), which creates an isolated environment with all dependencies; install it with `curl -LsSf https://astral.sh/uv/install.sh | sh` if needed.
 
 ```bash
-# 1. Go to the local directory of your choice and download the code.
 git clone https://github.com/theo-andrieux/spectral_galerkin_heat.git
-# This creates a local directory spectral_galerkin_heat
-
-# Enter this directory
 cd spectral_galerkin_heat
 
-# 2. Install the virtual environment that contains all the libraries and dependencies needed to run the spectral_galerkin_heat code (creates .venv/ and installs dependencies). The environment is also called "spectral_galerkin_heat". Once this environment is installed, then the python compiler should recognize its existence. If it does not, then precede all your commands with 'uv' as shown below.
-uv sync             # CPU only
-uv sync --group gpu # GPU, requires CUDA 13.x
+uv sync                 # CPU only
+# uv sync --group gpu   # GPU backend, requires CUDA 13.x
 
-# 3. Run the test example
 uv run python simulations/main.py simulations/examples/01_quickstart.yaml
 ```
 
-`uv sync` makes `spectral_galerkin_heat` importable and `uv run` executes inside the managed environment,
-so no separate package-install step is required. Results are saved to `out/<timestamp>_<name>/` in
-HDF5/XDMF format.
+Results are saved to `out/<timestamp>_<name>/` in HDF5/XDMF format. `uv run` executes inside the managed environment, so there is no separate install step. If your shell does not pick up the environment, prefix commands with `uv run` as above.
 
-## Usage
+## Examples
 
-`spectral_galerkin_heat` can be used either as a standalone CLI runner (`simulations/main.py` driven by a
-`.yaml` config) or as an imported Python library (building a `SimulationContext` and calling
-`solver.step(...)` directly). Both are covered by the examples, ordered from a short run to a full
-non-linear case and then library mode:
+The solver runs either from the command line (`simulations/main.py` with a `.yaml` configuration) or as a Python library. The examples in [`simulations/examples/`](simulations/examples/) go from the simplest case to the full nonlinear one:
 
-- **Examples**: [`simulations/examples/`](simulations/examples/), runnable configurations and the
-  library-mode `orchestrator.py`.
-- **Tutorial & configuration reference**: see the
-  [documentation](https://theo-andrieux.github.io/sgh-docs/) (`examples` and `configuration` pages).
+| Example | What it shows |
+| --- | --- |
+| [`01_quickstart.yaml`](simulations/examples/01_quickstart.yaml) | Single laser track on a 316L cuboid, constant properties, evaporation only. Runs in seconds. |
+| [`02_single_track.yaml`](simulations/examples/02_single_track.yaml) | Same track with latent heat of fusion and surface convection switched on. |
+| [`03_nonlinear_tdep.yaml`](simulations/examples/03_nonlinear_tdep.yaml) | Temperature-dependent properties: Picard iteration with a global property correction. |
+| [`orchestrator.py`](simulations/examples/orchestrator.py) | Library mode: build a `SimulationContext` from a Python dictionary and call `solver.step(...)` directly. |
 
+The [documentation](https://theo-andrieux.github.io/sgh-docs/) has a tutorial for each example and the full configuration reference.
 
-## Installation & Environments
+## Installation details
 
-### Prerequisites
+**Prerequisites:** Python 3.12 or newer, and [`uv`](https://github.com/astral-sh/uv) (recommended; plain `pip` also works). The GPU backend additionally needs an NVIDIA GPU with the CUDA 13.x toolkit installed system-wide; the CPU backend needs nothing extra.
 
-- **Python 3.12 or newer.**
-- **[`uv`](https://github.com/astral-sh/uv)** (recommended): manages the virtual environment and
-  dependencies. Plain `pip` also works (see below).
-- **For the GPU backend only:** an NVIDIA GPU with the **CUDA 13.x** toolkit installed
-  system-wide (the CPU backend needs nothing extra).
-
-### Optional dependency groups
-
-`uv sync` installs the CPU core. Add hardware- or task-specific extras with `--group`:
+`uv sync` installs the CPU core. Extras are added with `--group`:
 
 | Command | Adds |
 | --- | --- |
-| `uv sync` | CPU core (default; sufficient to run the examples) |
+| `uv sync` | CPU core (default; enough to run the examples) |
 | `uv sync --group gpu` | CuPy GPU backend *(requires system CUDA 13.x)* |
 | `uv sync --group docs` | Sphinx toolchain to build the docs |
-| `uv sync --group dev` | Test + lint tooling (`pytest`, `ruff`) |
+| `uv sync --group dev` | Test and lint tooling (`pytest`, `ruff`) |
 | `uv sync --all-groups` | Everything above |
 
-Build the documentation locally:
-```bash
-uv sync --group docs
-uv run make -C docs html      # Output: docs/_build/html/index.html
-```
+<details>
+<summary>Installing with pip instead of uv</summary>
 
-### Installing with pip instead of uv
+From the repository root, in an environment you manage yourself:
 
-If you prefer a manually managed environment, install the package in editable mode from the repo
-root:
 ```bash
 python -m pip install -e .            # CPU core
 python -m pip install -e ".[gpu]"     # + GPU backend (needs system CUDA 13.x)
 python -m pip install -e ".[docs]"    # + docs toolchain
 ```
+</details>
+
+<details>
+<summary>Building the documentation locally</summary>
+
+```bash
+uv sync --group docs
+uv run make -C docs html      # Output: docs/_build/html/index.html
+```
+</details>
+
+## Citation
+
+If you use this code in your research, please cite the paper:
+
+> T. Andrieux, A. Ntinos, M. V. Upadhyay, *Efficient spectral Galerkin framework for nonlinear transient heat transfer in finite domains*, arXiv:2609.22268 (2026). https://arxiv.org/abs/2609.22268
+
+```bibtex
+@misc{andrieux2026spectral,
+  title         = {Efficient spectral Galerkin framework for nonlinear transient heat transfer in finite domains},
+  author        = {Andrieux, Th{\'e}o and Ntinos, Andreas and Upadhyay, Manas V.},
+  year          = {2026},
+  eprint        = {2609.22268},
+  archivePrefix = {arXiv},
+  primaryClass  = {cond-mat.mtrl-sci},
+  doi           = {10.48550/arXiv.2609.22268},
+  url           = {https://arxiv.org/abs/2609.22268}
+}
+```
+
+To cite the software itself, cite the version you used: v1.0.0 is [10.5281/zenodo.23343134](https://doi.org/10.5281/zenodo.23343134). GitHub's "Cite this repository" button reads [`CITATION.cff`](CITATION.cff).
+
+## Developers
+
+Théo Andrieux *(main developer)*, [theo-andrieux.com](https://theo-andrieux.com/pages/spectral-galerkin) \
+Jules Dichamp \
+Manas V. Upadhyay
+
+Laboratoire de Mécanique des Solides (LMS), École Polytechnique, Institut Polytechnique de Paris, CNRS UMR 7649, Route de Saclay, 91128 Palaiseau, France.
 
 ## License
 
-This project is licensed under the Apache License, Version 2.0. 
-See the [LICENSE](LICENSE) file for the full text.
+Licensed under the Apache License, Version 2.0; see [LICENSE](LICENSE).
 
 Copyright © 2026 Laboratoire de Mécanique des Solides (LMS), École Polytechnique, CNRS UMR 7649, Institut Polytechnique de Paris, Route de Saclay, Palaiseau, 91128, France.
 
-## Acknowledgement
+## Acknowledgements
 
-This work was supported by the Agence de l’innovation de défense – AID – via Centre Interdisciplinaire d’Etudes pour la Défense et la Sécurité – CIEDS (project 2025 - LaserSurf)
+This work was supported by the Agence de l'innovation de défense (AID) via the Centre Interdisciplinaire d'Études pour la Défense et la Sécurité (CIEDS), project 2025 - LaserSurf, and by the French Agence Nationale de la Recherche (ANR) under grant ANR-24-CE08-3737.
