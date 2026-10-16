@@ -11,8 +11,32 @@ authors:
     given-names: "Manas V."
     affiliation: "LMS, École Polytechnique"
 title: "spectral_galerkin_heat"
-version: 0.1.0
-date-released: 2026-04-20
+version: 1.0.0
+date-released: 2026-10-13
+doi: "10.5281/zenodo.23343134"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.23343133"
+    description: "Concept DOI, all versions"
 url: "https://theo-andrieux.github.io/sgh-docs/"
 repository-code: "https://github.com/theo-andrieux/spectral_galerkin_heat"
 license: Apache-2.0
+keywords:
+  - spectral methods
+  - heat transfer
+  - additive manufacturing
+  - GPU
+  - CuPy
+preferred-citation:
+  type: article
+  title: "Efficient spectral Galerkin framework for nonlinear transient heat transfer in finite domains"
+  authors:
+    - family-names: "Andrieux"
+      given-names: "Théo"
+    - family-names: "Ntinos"
+      given-names: "Andreas"
+    - family-names: "Upadhyay"
+      given-names: "Manas V."
+  year: 2026
+  doi: "10.48550/arXiv.2609.22268"
+  url: "https://arxiv.org/abs/2609.22268"

@@ -2,6 +2,9 @@
 
 **A semi-analytical, modal solver for the fully nonlinear heat equation on cuboid domains, with CPU/GPU backends and G-code-driven laser paths.**
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23343134.svg)](https://doi.org/10.5281/zenodo.23343134)
+[![arXiv](https://img.shields.io/badge/arXiv-2609.22268-b31b1b.svg)](https://arxiv.org/abs/2609.22268)
+[![Docs](https://img.shields.io/badge/docs-sgh--docs-blue.svg)](https://theo-andrieux.github.io/sgh-docs/)
 
 ## Citation
 
@@ -11,11 +14,12 @@ If you use this code in your research, please cite:
 
 ## Zenodo DOI
 
-https://doi.org/10.5281/zenodo.23343133
+Version 1.0.0: https://doi.org/10.5281/zenodo.23343134 \
+All versions (always resolves to the latest): https://doi.org/10.5281/zenodo.23343133
 
 ## Developers
 
-*(Main developer)* Théo Andrieux \
+*(Main developer)* Théo Andrieux ([theo-andrieux.com](https://theo-andrieux.com/pages/spectral-galerkin)) \
 Manas V. Upadhyay
 
 ## Affiliation
