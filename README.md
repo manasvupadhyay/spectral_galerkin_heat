@@ -13,9 +13,7 @@
   <em>A laser scan simulated with spectral_galerkin_heat; the clock shows the computation time on one GPU.</em>
 </p>
 
-- **Accurate:** within 0.67% (relative $L^2$) of a high-fidelity finite element reference on a single-pass laser scan.
-- **Fast:** 6.2× faster than finite elements on the same single CPU core, with about ten times more degrees of freedom; **227× faster on a GPU**.
-- **Fully nonlinear:** temperature-dependent properties, latent heat, evaporation and surface fluxes.
+On a single-pass laser scan, the solver stays within 0.67% (relative L² error) of a high-fidelity finite element reference. On one CPU core it runs 6.2 times faster than the finite element model while using about ten times more degrees of freedom, and 227 times faster on a GPU. Temperature-dependent properties, latent heat, evaporation and surface fluxes are all included.
 
 ## What it does
 
@@ -114,7 +112,7 @@ To cite the software itself, cite the version you used: v1.0.0 is [10.5281/zenod
 
 ## Developers
 
-Théo Andrieux *(main developer)*, [theo-andrieux.com](https://theo-andrieux.com/pages/spectral-galerkin) \
+Théo Andrieux *(main developer)* \
 Jules Dichamp \
 Manas V. Upadhyay
 
